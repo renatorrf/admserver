@@ -21,6 +21,21 @@ export const digits = (length: number, message: string) => z.string()
   .transform((value) => value.replace(/\D/g, ''))
   .pipe(z.string().length(length, message));
 
+function isValidCpf(value: string): boolean {
+  if (/^(\d)\1{10}$/.test(value)) return false;
+  const digit = (length: number): number => {
+    const sum = value.slice(0, length).split('').reduce((total, item, index) => total + Number(item) * (length + 1 - index), 0);
+    const remainder = (sum * 10) % 11;
+    return remainder === 10 ? 0 : remainder;
+  };
+  return digit(9) === Number(value[9]) && digit(10) === Number(value[10]);
+}
+
+export const cpf = z.string()
+  .transform((value) => value.replace(/\D/g, ''))
+  .pipe(z.string().length(11, 'O CPF deve conter 11 digitos validos.'))
+  .refine(isValidCpf, 'O CPF deve conter 11 digitos validos.');
+
 export function atLeastOneField<T extends z.ZodRawShape>(shape: T): z.ZodObject<T> {
   return z.object(shape).strict().refine(
     (value) => Object.values(value).some((item) => item !== undefined),

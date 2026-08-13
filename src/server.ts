@@ -34,7 +34,9 @@ const authService = new AuthService(
 );
 const realtime = new RealtimeBus();
 const adminRouter = createAdminRouter(pool, tokenService);
-const operationalRouter = createOperationalRouter(pool, tokenService, realtime);
+const operationalRouter = createOperationalRouter(
+  pool, tokenService, realtime, config.geoapifyApiKey, config.firebaseProjectId,
+);
 const provisioningRouter = config.provisioningSecret
   ? createProvisionamentoRouter(new ProvisionamentoService(pool), config.provisioningSecret)
   : undefined;

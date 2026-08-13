@@ -11,6 +11,7 @@ const secret = 'provisioning-secret-used-only-in-tests-123456';
 const input = {
   empresa: {
     codigoAcesso: 'ADM-BR', razaoSocial: 'ADM Brasil Ltda', nomeFantasia: 'ADM Brasil',
+    cidadePadrao: 'Uberlandia', estadoPadrao: 'MG', latitudePadrao: -18.9186, longitudePadrao: -48.2772,
     cnpj: '12345678000199', telefone: '(11) 3000-0000', email: 'contato@adm.example',
   },
   gestor: {

@@ -8,11 +8,17 @@ import { veiculoCreateSchema } from '../src/modules/veiculos/veiculo.catalog';
 describe('schemas dos cadastros', () => {
   it('normaliza CPF e rejeita empresa_id enviado pelo cliente', () => {
     const base = {
-      nome: 'Motorista Teste', cpf: '123.456.789-01', telefone: '11999999999',
+      nome: 'Motorista Teste', cpf: '529.982.247-25', telefone: '11999999999',
       numeroCnh: 'abc123', validadeCnh: '2030-12-31',
     };
-    expect(prestadorCreateSchema.parse(base).cpf).toBe('12345678901');
+    expect(prestadorCreateSchema.parse(base).cpf).toBe('52998224725');
     expect(prestadorCreateSchema.safeParse({ ...base, empresaId: '11111111-1111-4111-8111-111111111111' }).success).toBe(false);
+  });
+
+  it('rejeita CPF com digitos verificadores invalidos e CNH vencida', () => {
+    const base = { nome: 'Motorista Teste', cpf: '123.456.789-01', telefone: '11999999999', numeroCnh: 'abc123' };
+    expect(prestadorCreateSchema.safeParse({ ...base, validadeCnh: '2030-12-31' }).success).toBe(false);
+    expect(prestadorCreateSchema.safeParse({ ...base, cpf: '529.982.247-25', validadeCnh: '2020-01-01' }).success).toBe(false);
   });
 
   it('normaliza placas antigas e Mercosul', () => {

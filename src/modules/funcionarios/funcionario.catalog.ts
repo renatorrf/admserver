@@ -2,11 +2,11 @@ import { z } from 'zod';
 
 import { invalidReference } from '../../shared/errors/app-error';
 import { paginationSchema } from '../../shared/pagination/pagination';
-import { digits, optionalEmail, optionalText } from '../../shared/validation/common.schemas';
+import { cpf, optionalEmail, optionalText } from '../../shared/validation/common.schemas';
 import type { CatalogDefinition } from '../cadastros/catalog.types';
 
 const optionalCpf = z.union([
-  digits(11, 'Informe um CPF com 11 digitos.'),
+  cpf,
   z.literal('').transform(() => null),
   z.null(),
 ]).optional();

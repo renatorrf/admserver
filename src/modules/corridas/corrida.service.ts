@@ -18,6 +18,7 @@ import type {
 } from './corrida.schemas';
 import { assertTransition, isActiveRide } from './state-machine';
 import type { CorridaEventoRecord, CorridaRecord, PrestadorContext, StatusCorrida } from './corrida.types';
+import type { CorridaNotificationPublisher } from '../notificacoes/notificacao.service';
 
 export interface CorridaAuditWriter {
   record(executor: QueryExecutor, entry: AuditEntry): Promise<void>;
@@ -60,6 +61,7 @@ export class CorridaService {
     private readonly audit: CorridaAuditWriter,
     repository?: CorridaStore,
     private readonly realtime?: CorridaRealtimePublisher,
+    private readonly notifications?: CorridaNotificationPublisher,
   ) {
     this.repository = repository ?? new CorridaRepository(database);
   }
@@ -108,8 +110,11 @@ export class CorridaService {
 
   assign(auth: AuthContext, id: string, input: CorridaAssignInput, metadata: AuditMetadata): Promise<CorridaRecord> {
     this.requireManager(auth);
+    let notificationEvent: 'ATRIBUIDA' | 'ALTERADA' = 'ATRIBUIDA';
+    let previousProviderId: string | null = null;
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
+      previousProviderId = current.prestadorId;
       if (current.status !== 'SOLICITADA' && current.status !== 'OFERTADA') {
         throw conflict('Somente corridas solicitadas ou ofertadas podem receber prestador.');
       }
@@ -125,6 +130,7 @@ export class CorridaService {
           prestadorId: input.prestadorId, veiculoId: vehicleId,
         });
       } else {
+        notificationEvent = 'ALTERADA';
         updated = await this.repository.updateAssignment(client, auth.empresaId, id, input.prestadorId, vehicleId);
       }
       await this.repository.createEvent(
@@ -135,7 +141,12 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, updated, 'ATRIBUIR', current, updated);
       return updated;
-    }));
+    }), ride => {
+      this.notifications?.publishProviderRide(ride, notificationEvent);
+      if (previousProviderId && previousProviderId !== ride.prestadorId) {
+        this.notifications?.publishProviderRide({ ...ride, prestadorId: previousProviderId }, 'REMOVIDA');
+      }
+    });
   }
 
   reopen(auth: AuthContext, id: string, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -298,7 +309,7 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, cancelled, 'CANCELAR', current, cancelled);
       return cancelled;
-    }));
+    }), ride => this.notifications?.publishProviderRide(ride, 'CANCELADA'));
   }
 
   setAvailability(
@@ -352,9 +363,12 @@ export class CorridaService {
     }));
   }
 
-  private async withRealtime(operation: Promise<CorridaRecord>): Promise<CorridaRecord> {
+  private async withRealtime(
+    operation: Promise<CorridaRecord>, afterCommit?: (ride: CorridaRecord) => void,
+  ): Promise<CorridaRecord> {
     const ride = await operation;
     this.realtime?.publishRide(ride);
+    afterCommit?.(ride);
     return ride;
   }
 

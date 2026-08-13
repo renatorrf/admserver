@@ -80,7 +80,7 @@ export const openApiDocument = {
   openapi: '3.1.0',
   info: {
     title: 'ADM Taxi API',
-    version: '0.9.0',
+    version: '1.0.0',
     description: 'API multiempresa para gestao corporativa de corridas de taxi.',
   },
   servers: [{ url: '/api/v1' }],
@@ -95,7 +95,7 @@ export const openApiDocument = {
     { name: 'Prestadores' }, { name: 'Veiculos' }, { name: 'Centros de custo' },
     { name: 'Funcionarios' }, { name: 'Auditoria' }, { name: 'Operacao' },
     { name: 'Corridas' }, { name: 'Localizacoes' }, { name: 'Dashboard' }, { name: 'Relatorios' },
-    { name: 'Provisionamento' },
+    { name: 'Enderecos' }, { name: 'Notificacoes' }, { name: 'Provisionamento' },
     { name: 'Master' },
   ],
   paths: {
@@ -324,6 +324,13 @@ export const openApiDocument = {
         responses: { '200': { description: 'Funcionarios ativos no escopo do perfil' }, '403': { description: 'Perfil nao permitido' } },
       },
     },
+    '/operacao/funcionarios/pesquisa': {
+      get: {
+        tags: ['Operacao'], summary: 'Pesquisa funcionarios com paginacao', security: bearerSecurity,
+        description: 'Filtra pela empresa autenticada e, para GERENTE, pelos centros autorizados.',
+        responses: { '200': { description: 'Funcionarios paginados' }, '403': { description: 'Perfil nao permitido' } },
+      },
+    },
     '/operacao/meu-prestador': {
       get: {
         tags: ['Operacao'], summary: 'Consulta o prestador do usuario autenticado', security: bearerSecurity,
@@ -341,6 +348,39 @@ export const openApiDocument = {
         tags: ['Operacao'], summary: 'Lista prestadores para filtros operacionais', security: bearerSecurity,
         description: 'Perfis permitidos: GERENTE e GESTOR.',
         responses: { '200': { description: 'Prestadores ativos da empresa' }, '403': { description: 'Perfil nao permitido' } },
+      },
+    },
+    '/operacao/prestadores/pesquisa': {
+      get: {
+        tags: ['Operacao'], summary: 'Pesquisa prestadores com paginacao', security: bearerSecurity,
+        description: 'Pesquisa nome, CPF, telefone, CNH ou placa e permite filtrar ativos e disponiveis.',
+        responses: { '200': { description: 'Prestadores paginados da empresa autenticada' } },
+      },
+    },
+    '/enderecos/autocomplete': {
+      get: {
+        tags: ['Enderecos'], summary: 'Busca sugestoes de endereco no Geoapify', security: bearerSecurity,
+        description: 'Usa coordenadas informadas como vies; sem elas usa a regiao da empresa autenticada.',
+        responses: { '200': { description: 'Sugestoes com descricao e coordenadas' }, '503': { description: 'Geoapify indisponivel ou nao configurado' } },
+      },
+    },
+    '/enderecos/reverso': {
+      get: {
+        tags: ['Enderecos'], summary: 'Converte coordenadas em endereco', security: bearerSecurity,
+        responses: { '200': { description: 'Endereco identificado ou nulo' }, '503': { description: 'Geoapify indisponivel' } },
+      },
+    },
+    '/notificacoes/dispositivos': {
+      post: {
+        tags: ['Notificacoes'], summary: 'Registra token push do usuario e dispositivo', security: bearerSecurity,
+        responses: { '201': { description: 'Dispositivo registrado' }, '422': { description: 'Token invalido' } },
+      },
+    },
+    '/notificacoes/dispositivos/{id}': {
+      parameters: [idParameter],
+      delete: {
+        tags: ['Notificacoes'], summary: 'Inativa token push do dispositivo atual', security: bearerSecurity,
+        responses: { '204': { description: 'Dispositivo inativado' }, '404': { description: 'Dispositivo fora do usuario ou empresa' } },
       },
     },
     '/operacao/solicitantes': {

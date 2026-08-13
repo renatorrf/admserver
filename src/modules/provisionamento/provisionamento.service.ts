@@ -28,8 +28,9 @@ export class ProvisionamentoService {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('admtaxi_company_provisioning'))");
       const companyResult = await client.query<QueryResultRow>(`
         INSERT INTO admtaxi.empresas
-          (codigo_acesso, razao_social, nome_fantasia, cnpj, telefone, email)
-        VALUES ($1, $2, $3, $4, $5, $6)
+          (codigo_acesso, razao_social, nome_fantasia, cnpj, telefone, email,
+           cidade_padrao, estado_padrao, latitude_padrao, longitude_padrao)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING id, codigo_acesso::text, razao_social, nome_fantasia
       `, [
         input.empresa.codigoAcesso,
@@ -38,6 +39,10 @@ export class ProvisionamentoService {
         input.empresa.cnpj ?? null,
         input.empresa.telefone ?? null,
         input.empresa.email ?? null,
+        input.empresa.cidadePadrao,
+        input.empresa.estadoPadrao,
+        input.empresa.latitudePadrao,
+        input.empresa.longitudePadrao,
       ]);
       const company = companyResult.rows[0];
       if (!company) throw new Error('Falha ao criar empresa.');

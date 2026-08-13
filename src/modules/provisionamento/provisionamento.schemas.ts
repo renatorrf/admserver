@@ -12,6 +12,11 @@ export const provisionamentoSchema = z.object({
     cnpj: z.union([digits(14, 'Informe um CNPJ com 14 digitos.'), z.literal('').transform(() => null), z.null()]).optional(),
     telefone: optionalText(20),
     email: optionalEmail,
+    cidadePadrao: z.string().trim().min(2, 'Informe a cidade padrao.').max(120),
+    estadoPadrao: z.string().trim().length(2, 'Informe a sigla do estado com 2 letras.')
+      .regex(/^[A-Za-z]{2}$/, 'Estado invalido.').transform((value) => value.toUpperCase()),
+    latitudePadrao: z.coerce.number().min(-90, 'Latitude padrao invalida.').max(90, 'Latitude padrao invalida.'),
+    longitudePadrao: z.coerce.number().min(-180, 'Longitude padrao invalida.').max(180, 'Longitude padrao invalida.'),
   }).strict(),
   gestor: z.object({
     nome: z.string().trim().min(2).max(150),

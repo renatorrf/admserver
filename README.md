@@ -34,6 +34,18 @@ quando necessario. Ele tambem gera `PROVISIONING_SECRET` sem exibir o valor. Em 
 producao, injete todas as variaveis com o gerenciador de
 segredos do ambiente. Consulte `.env.example` para a lista completa.
 
+### Geoapify e Firebase
+
+- `GEOAPIFY_API_KEY`: chave privada usada pelo backend no autocomplete e na geocodificacao reversa.
+  Nao coloque essa chave no frontend.
+- `FIREBASE_PROJECT_ID`: projeto usado pelo Firebase Admin para enviar push. Em Cloud Run, conceda
+  a conta de servico permissao para Firebase Cloud Messaging e use Application Default Credentials.
+- Em desenvolvimento fora do Google Cloud, defina `GOOGLE_APPLICATION_CREDENTIALS` apontando para
+  um arquivo local de conta de servico, nunca versionado.
+
+Sem essas variaveis, a API continua iniciando. A busca de enderecos retorna erro controlado `503`
+e os envios push ficam registrados como ignorados, sem bloquear operacoes de corrida.
+
 ## Banco de dados
 
 ```powershell

@@ -22,10 +22,17 @@ import { DashboardService } from '../dashboard/dashboard.service';
 import { RelatorioRepository } from '../relatorios/relatorio.repository';
 import { createRelatorioRouter } from '../relatorios/relatorio.routes';
 import { RelatorioService } from '../relatorios/relatorio.service';
+import { createEnderecoRouter } from '../enderecos/endereco.routes';
+import { EnderecoService } from '../enderecos/endereco.service';
+import { createNotificacaoRouter } from '../notificacoes/notificacao.routes';
+import { NotificacaoService } from '../notificacoes/notificacao.service';
 
-export function createOperationalRouter(pool: Pool, tokens: TokenService, realtime?: RealtimeBus): Router {
+export function createOperationalRouter(
+  pool: Pool, tokens: TokenService, realtime?: RealtimeBus, geoapifyApiKey?: string, firebaseProjectId?: string,
+): Router {
   const router = Router();
-  const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime);
+  const notifications = new NotificacaoService(pool, firebaseProjectId);
+  const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications);
   const locations = new LocalizacaoService(pool, service, realtime);
   router.use('/dashboard', createAuthenticate(tokens), createDashboardRouter(new DashboardService(new DashboardRepository(pool))));
   router.use('/relatorios', createAuthenticate(tokens), createRelatorioRouter(new RelatorioService(new RelatorioRepository(pool))));
@@ -36,6 +43,8 @@ export function createOperationalRouter(pool: Pool, tokens: TokenService, realti
   );
   router.use('/corridas/:id/localizacoes', createAuthenticate(tokens), createLocalizacaoRouter(locations));
   router.use('/corridas', createAuthenticate(tokens), createCorridaRouter(service));
+  router.use('/enderecos', createAuthenticate(tokens), createEnderecoRouter(new EnderecoService(pool, geoapifyApiKey)));
+  router.use('/notificacoes', createAuthenticate(tokens), createNotificacaoRouter(notifications));
   router.patch(
     '/prestadores/minha-disponibilidade',
     createAuthenticate(tokens),

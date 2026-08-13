@@ -16,6 +16,10 @@ type EmpresaRecord = Record<string, unknown> & {
   telefone: string | null;
   email: string | null;
   timezone: string;
+  cidadePadrao: string | null;
+  estadoPadrao: string | null;
+  latitudePadrao: number | null;
+  longitudePadrao: number | null;
   ativo: boolean;
 };
 
@@ -27,6 +31,10 @@ const fieldColumns: Record<keyof EmpresaUpdateInput, string> = {
   telefone: 'telefone',
   email: 'email',
   timezone: 'timezone',
+  cidadePadrao: 'cidade_padrao',
+  estadoPadrao: 'estado_padrao',
+  latitudePadrao: 'latitude_padrao',
+  longitudePadrao: 'longitude_padrao',
 };
 
 function mapEmpresa(row: QueryResultRow): EmpresaRecord {
@@ -39,6 +47,10 @@ function mapEmpresa(row: QueryResultRow): EmpresaRecord {
     telefone: row.telefone as string | null,
     email: row.email as string | null,
     timezone: row.timezone as string,
+    cidadePadrao: row.cidade_padrao as string | null,
+    estadoPadrao: row.estado_padrao as string | null,
+    latitudePadrao: row.latitude_padrao === null ? null : Number(row.latitude_padrao),
+    longitudePadrao: row.longitude_padrao === null ? null : Number(row.longitude_padrao),
     ativo: row.ativo as boolean,
     criadoEm: row.criado_em as Date,
     atualizadoEm: row.atualizado_em as Date,

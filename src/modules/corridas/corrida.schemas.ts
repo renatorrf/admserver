@@ -35,6 +35,9 @@ export const corridaCreateSchema = z.object({
   if (value.tipo === 'AGENDADA' && !value.agendadaPara) {
     context.addIssue({ code: 'custom', path: ['agendadaPara'], message: 'Informe a data da corrida agendada.' });
   }
+  if (value.tipo === 'AGENDADA' && value.agendadaPara && value.agendadaPara.getTime() <= Date.now()) {
+    context.addIssue({ code: 'custom', path: ['agendadaPara'], message: 'O horario da corrida agendada deve ser posterior ao horario atual.' });
+  }
   if (value.tipo === 'IMEDIATA' && value.agendadaPara) {
     context.addIssue({ code: 'custom', path: ['agendadaPara'], message: 'Corrida imediata nao deve possuir agendamento.' });
   }

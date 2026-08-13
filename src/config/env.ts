@@ -22,6 +22,8 @@ const envSchema = z.object({
   PROVISIONING_SECRET: z.string().min(32, 'PROVISIONING_SECRET deve ter ao menos 32 caracteres').optional(),
   MASTER_BOOTSTRAP_USERNAME: z.string().min(3).max(50).optional(),
   MASTER_BOOTSTRAP_PASSWORD_HASH: z.string().min(20).optional(),
+  GEOAPIFY_API_KEY: z.string().min(20, 'GEOAPIFY_API_KEY invalida').optional(),
+  FIREBASE_PROJECT_ID: z.string().trim().min(4).optional(),
 });
 
 export type AppConfig = {
@@ -38,6 +40,8 @@ export type AppConfig = {
   provisioningSecret?: string;
   masterBootstrapUsername?: string;
   masterBootstrapPasswordHash?: string;
+  geoapifyApiKey?: string;
+  firebaseProjectId?: string;
 };
 
 let cachedConfig: AppConfig | undefined;
@@ -67,6 +71,8 @@ export function getConfig(): AppConfig {
     provisioningSecret: parsed.data.PROVISIONING_SECRET,
     masterBootstrapUsername: parsed.data.MASTER_BOOTSTRAP_USERNAME,
     masterBootstrapPasswordHash: parsed.data.MASTER_BOOTSTRAP_PASSWORD_HASH,
+    geoapifyApiKey: parsed.data.GEOAPIFY_API_KEY,
+    firebaseProjectId: parsed.data.FIREBASE_PROJECT_ID,
   };
 
   return cachedConfig;

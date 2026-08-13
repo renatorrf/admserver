@@ -31,7 +31,11 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
         erro: {
           codigo: 'DADOS_INVALIDOS',
           mensagem: 'Revise os dados informados.',
-          detalhes: error.flatten().fieldErrors,
+          detalhes: {
+            campos: error.issues.map((issue) => ({
+              campo: issue.path.join('.') || 'formulario', mensagem: issue.message,
+            })),
+          },
         },
         requisicaoId: request.id,
       });
@@ -48,8 +52,23 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
 
     if (typeof error === 'object' && error !== null && 'code' in error) {
       if (error.code === '23505') {
+        const constraint = 'constraint' in error && typeof error.constraint === 'string' ? error.constraint : '';
+        const duplicateFields: Record<string, { campo: string; mensagem: string }> = {
+          usuarios_empresa_email_unico: { campo: 'email', mensagem: 'Este e-mail ja esta cadastrado.' },
+          prestadores_empresa_cpf_unico: { campo: 'cpf', mensagem: 'Este CPF ja esta cadastrado.' },
+          prestadores_empresa_cnh_unico: { campo: 'numeroCnh', mensagem: 'Esta CNH ja esta cadastrada.' },
+          veiculos_empresa_placa_unico: { campo: 'placa', mensagem: 'Esta placa ja esta cadastrada.' },
+          funcionarios_empresa_matricula_unico: { campo: 'matricula', mensagem: 'Esta matricula ja esta cadastrada.' },
+          funcionarios_empresa_cpf_unico: { campo: 'cpf', mensagem: 'Este CPF ja esta cadastrado.' },
+          centros_custo_empresa_codigo_unico: { campo: 'codigo', mensagem: 'Este codigo ja esta cadastrado.' },
+          empresas_codigo_acesso_key: { campo: 'codigoAcesso', mensagem: 'Este codigo de acesso ja esta cadastrado.' },
+        };
+        const detail = duplicateFields[constraint];
         response.status(409).json({
-          erro: { codigo: 'REGISTRO_DUPLICADO', mensagem: 'Ja existe um registro com os dados informados.' },
+          erro: {
+            codigo: 'REGISTRO_DUPLICADO', mensagem: detail?.mensagem ?? 'Ja existe um registro com os dados informados.',
+            ...(detail ? { detalhes: { campos: [detail] } } : {}),
+          },
           requisicaoId: request.id,
         });
         return;
