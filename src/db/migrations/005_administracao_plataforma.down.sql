@@ -1,0 +1,3 @@
+DROP TRIGGER administradores_plataforma_definir_atualizado_em ON admtaxi.administradores_plataforma;
+DROP TABLE admtaxi.auditoria_plataforma;
+DROP TABLE admtaxi.administradores_plataforma;
