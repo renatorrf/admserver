@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.build.json",
+    "gcp-build": "npm run build",
     "start": "node dist/server.js",
     "lint": "eslint .",
     "test": "vitest run",
