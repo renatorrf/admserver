@@ -30,10 +30,11 @@ describe('schemas dos cadastros', () => {
   it('exige latitude e longitude em conjunto', () => {
     const employee = {
       centroCustoId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-      nome: 'Funcionario Teste', matricula: '123', latitudePadrao: -23.5,
+      nome: 'Funcionario Teste', matricula: '123', enderecoPadrao: 'Avenida Teste, 100', latitudePadrao: -23.5,
     };
     expect(funcionarioCreateSchema.safeParse(employee).success).toBe(false);
     expect(funcionarioCreateSchema.safeParse({ ...employee, longitudePadrao: -46.6 }).success).toBe(true);
+    expect(funcionarioCreateSchema.safeParse({ ...employee, enderecoPadrao: null, longitudePadrao: -46.6 }).success).toBe(false);
   });
 
   it('rejeita atualizacao sem campos', () => {

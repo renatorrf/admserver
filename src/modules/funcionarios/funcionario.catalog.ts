@@ -32,8 +32,22 @@ const coordinatesTogether = (value: { latitudePadrao?: number | null; longitudeP
   return latitudeEmpty === longitudeEmpty;
 };
 
+const addressCoordinatesConsistent = (value: {
+  enderecoPadrao?: string | null; latitudePadrao?: number | null; longitudePadrao?: number | null;
+}): boolean => {
+  const addressWasSent = value.enderecoPadrao !== undefined;
+  const coordinatesWereSent = value.latitudePadrao !== undefined || value.longitudePadrao !== undefined;
+  if (!addressWasSent && !coordinatesWereSent) return true;
+  const hasAddress = !!value.enderecoPadrao?.trim();
+  const hasCoordinates = value.latitudePadrao !== undefined && value.latitudePadrao !== null
+    && value.longitudePadrao !== undefined && value.longitudePadrao !== null;
+  return hasAddress === hasCoordinates;
+};
+
 export const funcionarioCreateSchema = z.object(fields).strict().refine(coordinatesTogether, {
   message: 'Informe latitude e longitude juntas.',
+}).refine(addressCoordinatesConsistent, {
+  message: 'Selecione um endereco valido entre as sugestoes apresentadas.',
 });
 export const funcionarioUpdateSchema = z.object({
   centroCustoId: fields.centroCustoId.optional(),
@@ -49,6 +63,8 @@ export const funcionarioUpdateSchema = z.object({
   message: 'Informe ao menos um campo para atualizar.',
 }).refine(coordinatesTogether, {
   message: 'Ao limpar coordenadas, informe latitude e longitude como nulas.',
+}).refine(addressCoordinatesConsistent, {
+  message: 'Selecione um endereco valido entre as sugestoes apresentadas.',
 });
 export const funcionarioListSchema = paginationSchema.extend({
   centroCustoId: z.string().uuid('Centro de custo invalido.').optional(),

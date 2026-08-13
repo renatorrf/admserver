@@ -9,6 +9,7 @@ import type { CorridaCreateInput, CorridaListQuery, EventoListQuery } from '../s
 import { CorridaService, type CorridaAuditWriter, type CorridaStore } from '../src/modules/corridas/corrida.service';
 import type { CorridaEventoRecord, CorridaRecord, PrestadorContext, StatusCorrida } from '../src/modules/corridas/corrida.types';
 import type { PaginatedResult } from '../src/shared/pagination/pagination';
+import type { CorridaNotificationPublisher } from '../src/modules/notificacoes/notificacao.service';
 
 const EMPRESA = '11111111-1111-4111-8111-111111111111';
 const GESTOR = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -136,6 +137,37 @@ describe('CorridaService', () => {
     expect(store.events.map((event) => event.type)).toEqual(['CORRIDA_REIVINDICADA', 'CORRIDA_ACEITA']);
     expect(store.provider.disponivel).toBe(false);
     expect(audit.entries[0]?.acao).toBe('ACEITAR');
+  });
+
+  it('notifica o solicitante apos aceite e transicoes posteriores', async () => {
+    const store = new RideStore();
+    const notifications: CorridaNotificationPublisher = {
+      publishRideCreated: vi.fn(), publishProviderRide: vi.fn(), publishRideUpdate: vi.fn(),
+    };
+    const service = new CorridaService(fakeDatabase(), new RideAudit(), store, undefined, notifications);
+
+    await service.accept(prestador, CORRIDA, { veiculoId: VEICULO }, {});
+    await service.startDisplacement(prestador, CORRIDA, {});
+    await service.arrive(prestador, CORRIDA, {});
+    await service.board(prestador, CORRIDA, {});
+    await service.disembark(prestador, CORRIDA, {});
+    await service.finish(prestador, CORRIDA, { valorFinal: '95.00' }, {});
+
+    expect(notifications.publishRideUpdate).toHaveBeenCalledTimes(5);
+    expect(notifications.publishRideUpdate).toHaveBeenCalledWith(expect.anything(), 'ACEITA');
+    expect(notifications.publishRideUpdate).toHaveBeenCalledWith(expect.anything(), 'DESLOCAMENTO_INICIADO');
+    expect(notifications.publishRideUpdate).toHaveBeenCalledWith(expect.anything(), 'CHEGADA_AO_EMBARQUE');
+    expect(notifications.publishRideUpdate).toHaveBeenCalledWith(expect.anything(), 'CORRIDA_INICIADA');
+    expect(notifications.publishRideUpdate).toHaveBeenCalledWith(expect.anything(), 'FINALIZADA');
+  });
+
+  it('retorna mensagem amigavel quando a corrida ja foi aceita', async () => {
+    const store = new RideStore();
+    store.current = { ...ride('ACEITA'), prestadorId: '99999999-9999-4999-8999-999999999999' };
+    const service = new CorridaService(fakeDatabase(), new RideAudit(), store);
+
+    await expect(service.accept(prestador, CORRIDA, { veiculoId: VEICULO }, {}))
+      .rejects.toMatchObject({ statusCode: 409, message: 'Esta corrida já foi aceita por outro prestador.' });
   });
 
   it('bloqueia aceite de corrida ofertada a outro prestador', async () => {

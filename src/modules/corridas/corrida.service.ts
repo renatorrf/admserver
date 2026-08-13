@@ -105,7 +105,7 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, created, 'CRIAR', null, created);
       return created;
-    }));
+    }), ride => this.notifications?.publishRideCreated(ride));
   }
 
   assign(auth: AuthContext, id: string, input: CorridaAssignInput, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -143,6 +143,7 @@ export class CorridaService {
       return updated;
     }), ride => {
       this.notifications?.publishProviderRide(ride, notificationEvent);
+      this.notifications?.publishRideUpdate(ride, 'ATRIBUICAO_ALTERADA');
       if (previousProviderId && previousProviderId !== ride.prestadorId) {
         this.notifications?.publishProviderRide({ ...ride, prestadorId: previousProviderId }, 'REMOVIDA');
       }
@@ -163,19 +164,19 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, updated, 'REABRIR', current, updated);
       return updated;
-    }));
+    }), ride => this.notifications?.publishRideCreated(ride));
   }
 
   accept(auth: AuthContext, id: string, input: CorridaAcceptInput, metadata: AuditMetadata): Promise<CorridaRecord> {
     this.requireProvider(auth);
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
+      if (current.status !== 'SOLICITADA' && current.status !== 'OFERTADA') {
+        throw conflict('Esta corrida já foi aceita por outro prestador.');
+      }
       const provider = await this.requireProviderContext(client, auth, true);
       if (!provider.disponivel || await this.repository.hasActiveRide(client, auth.empresaId, provider.id)) {
         throw conflict('O prestador nao esta disponivel para aceitar outra corrida.');
-      }
-      if (current.status !== 'SOLICITADA' && current.status !== 'OFERTADA') {
-        throw conflict('Esta corrida nao esta disponivel para aceite.');
       }
       if (current.status === 'OFERTADA' && current.prestadorId !== provider.id) throw forbidden();
       if (current.status === 'SOLICITADA' && current.prestadorId !== null) throw conflict('A corrida ja possui prestador.');
@@ -210,7 +211,7 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, accepted, 'ACEITAR', current, accepted);
       return accepted;
-    }));
+    }), ride => this.notifications?.publishRideUpdate(ride, 'ACEITA'));
   }
 
   refuse(auth: AuthContext, id: string, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -279,7 +280,7 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, finished, 'FINALIZAR', current, finished);
       return finished;
-    }));
+    }), ride => this.notifications?.publishRideUpdate(ride, 'FINALIZADA'));
   }
 
   cancel(auth: AuthContext, id: string, input: CorridaCancelInput, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -309,7 +310,10 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, cancelled, 'CANCELAR', current, cancelled);
       return cancelled;
-    }), ride => this.notifications?.publishProviderRide(ride, 'CANCELADA'));
+    }), ride => {
+      this.notifications?.publishProviderRide(ride, 'CANCELADA');
+      this.notifications?.publishRideUpdate(ride, 'CANCELADA');
+    });
   }
 
   setAvailability(
@@ -360,7 +364,15 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, updated, eventType, current, updated);
       return updated;
-    }));
+    }), ride => {
+      const notificationEvents = {
+        DESLOCAMENTO_INICIADO: 'DESLOCAMENTO_INICIADO',
+        CHEGADA_AO_EMBARQUE: 'CHEGADA_AO_EMBARQUE',
+        PASSAGEIRO_EMBARCOU: 'CORRIDA_INICIADA',
+      } as const;
+      const event = notificationEvents[eventType as keyof typeof notificationEvents];
+      if (event) this.notifications?.publishRideUpdate(ride, event);
+    });
   }
 
   private async withRealtime(

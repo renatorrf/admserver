@@ -1,23 +1,57 @@
+import { randomUUID } from 'node:crypto';
 import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
 import { getMessaging, type MulticastMessage } from 'firebase-admin/messaging';
+
 import type { Database } from '../../db/pool';
-import { notFound } from '../../shared/errors/app-error';
+import { forbidden, notFound } from '../../shared/errors/app-error';
 import type { AuthContext } from '../auth/auth.types';
 import type { CorridaRecord } from '../corridas/corrida.types';
 import type { DispositivoPushInput } from './notificacao.schemas';
 
 type DeviceRow = { id: string; token: string };
+type UserRow = { usuario_id: string };
+
+export type RideNotificationEvent =
+  | 'ACEITA'
+  | 'DESLOCAMENTO_INICIADO'
+  | 'CHEGADA_AO_EMBARQUE'
+  | 'CORRIDA_INICIADA'
+  | 'FINALIZADA'
+  | 'CANCELADA'
+  | 'ATRIBUICAO_ALTERADA';
+
+export type PushDevice = {
+  id: string;
+  plataforma: string;
+  nomeDispositivo: string | null;
+  ativo: boolean;
+  ultimoUsoEm: Date;
+  criadoEm: Date;
+  atualizadoEm: Date;
+};
+
+export interface EmployeeUserResolver {
+  resolveEmployeeUser(empresaId: string, funcionarioId: string): Promise<string | null>;
+}
 
 export interface CorridaNotificationPublisher {
+  publishRideCreated(ride: CorridaRecord): void;
+  publishRideUpdate(ride: CorridaRecord, event: RideNotificationEvent): void;
   publishProviderRide(ride: CorridaRecord, event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA'): void;
 }
 
 export class NotificacaoService implements CorridaNotificationPublisher {
-  constructor(private readonly database: Database, private readonly firebaseProjectId?: string) {}
+  constructor(
+    private readonly database: Database,
+    private readonly firebaseProjectId?: string,
+    private readonly allowDevelopmentTest = false,
+    private readonly employeeUsers?: EmployeeUserResolver,
+  ) {}
 
-  async register(auth: AuthContext, input: DispositivoPushInput): Promise<Record<string, unknown>> {
+  async register(auth: AuthContext, input: DispositivoPushInput): Promise<PushDevice> {
     const result = await this.database.query<{
-      id: string; plataforma: string; nome_dispositivo: string | null; ativo: boolean; atualizado_em: Date;
+      id: string; plataforma: string; nome_dispositivo: string | null; ativo: boolean;
+      ultimo_uso_em: Date; criado_em: Date; atualizado_em: Date;
     }>(
       `INSERT INTO admtaxi.dispositivos_push
          (empresa_id, usuario_id, token, plataforma, nome_dispositivo)
@@ -26,11 +60,24 @@ export class NotificacaoService implements CorridaNotificationPublisher {
          empresa_id = EXCLUDED.empresa_id, usuario_id = EXCLUDED.usuario_id,
          plataforma = EXCLUDED.plataforma, nome_dispositivo = EXCLUDED.nome_dispositivo,
          ativo = TRUE, ultimo_uso_em = CURRENT_TIMESTAMP
-       RETURNING id, plataforma, nome_dispositivo, ativo, atualizado_em`,
+       RETURNING id, plataforma, nome_dispositivo, ativo, ultimo_uso_em, criado_em, atualizado_em`,
       [auth.empresaId, auth.usuarioId, input.token, input.plataforma, input.nomeDispositivo ?? null],
     );
-    const row = result.rows[0]!;
-    return { id: row.id, plataforma: row.plataforma, nomeDispositivo: row.nome_dispositivo, ativo: row.ativo, atualizadoEm: row.atualizado_em };
+    return this.mapDevice(result.rows[0]!);
+  }
+
+  async listDevices(auth: AuthContext): Promise<PushDevice[]> {
+    const result = await this.database.query<{
+      id: string; plataforma: string; nome_dispositivo: string | null; ativo: boolean;
+      ultimo_uso_em: Date; criado_em: Date; atualizado_em: Date;
+    }>(
+      `SELECT id, plataforma, nome_dispositivo, ativo, ultimo_uso_em, criado_em, atualizado_em
+         FROM admtaxi.dispositivos_push
+        WHERE empresa_id = $1 AND usuario_id = $2
+        ORDER BY ativo DESC, ultimo_uso_em DESC`,
+      [auth.empresaId, auth.usuarioId],
+    );
+    return result.rows.map((row) => this.mapDevice(row));
   }
 
   async revoke(auth: AuthContext, id: string): Promise<void> {
@@ -42,51 +89,152 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     if (result.rowCount !== 1) throw notFound('Dispositivo');
   }
 
+  async sendTest(auth: AuthContext): Promise<void> {
+    if (auth.perfil !== 'GESTOR' && !this.allowDevelopmentTest) throw forbidden();
+    await this.sendRecipient({
+      empresaId: auth.empresaId,
+      usuarioId: auth.usuarioId,
+      corridaId: null,
+      event: 'TESTE',
+      title: 'Notificação de teste',
+      body: 'As notificações deste dispositivo estão funcionando.',
+      destination: '/app/perfil',
+      dedupeKey: `${auth.empresaId}:TESTE:${auth.usuarioId}:${randomUUID()}`,
+    });
+  }
+
+  publishRideCreated(ride: CorridaRecord): void {
+    void Promise.all([this.sendAvailableRide(ride), this.sendEmployeeRide(ride, 'SOLICITADA')]).catch(() => undefined);
+  }
+
+  publishRideUpdate(ride: CorridaRecord, event: RideNotificationEvent): void {
+    void Promise.all([
+      this.sendRequesterRide(ride, event),
+      this.sendEmployeeRide(ride, event),
+    ]).catch(() => undefined);
+  }
+
   publishProviderRide(ride: CorridaRecord, event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA'): void {
     void this.sendProviderRide(ride, event).catch(() => undefined);
   }
 
-  private async sendProviderRide(ride: CorridaRecord, event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA'): Promise<void> {
+  private async sendAvailableRide(ride: CorridaRecord): Promise<void> {
+    const recipients = await this.database.query<UserRow>(
+      `SELECT DISTINCT p.usuario_id
+         FROM admtaxi.prestadores p
+         JOIN admtaxi.usuarios u ON u.empresa_id = p.empresa_id AND u.id = p.usuario_id
+        WHERE p.empresa_id = $1 AND p.ativo = TRUE AND p.disponivel = TRUE
+          AND p.usuario_id IS NOT NULL AND u.ativo = TRUE AND u.perfil = 'PRESTADOR'`,
+      [ride.empresaId],
+    );
+    await Promise.all(recipients.rows.map((recipient) => this.sendRecipient({
+      empresaId: ride.empresaId,
+      usuarioId: recipient.usuario_id,
+      corridaId: ride.id,
+      event: 'CORRIDA_DISPONIVEL',
+      title: 'Nova corrida disponível',
+      body: 'Nova corrida disponível para atendimento.',
+      destination: `/app/corridas/${ride.id}`,
+      dedupeKey: `${ride.empresaId}:${ride.id}:CORRIDA_DISPONIVEL:${recipient.usuario_id}`,
+    })));
+  }
+
+  private async sendRequesterRide(ride: CorridaRecord, event: RideNotificationEvent): Promise<void> {
+    const message = this.rideMessage(event);
+    await this.sendRecipient({
+      empresaId: ride.empresaId,
+      usuarioId: ride.solicitanteUsuarioId,
+      corridaId: ride.id,
+      event,
+      title: message.title,
+      body: message.body,
+      destination: `/app/corridas/${ride.id}`,
+      dedupeKey: `${ride.empresaId}:${ride.id}:${event}:${ride.solicitanteUsuarioId}`,
+    });
+  }
+
+  private async sendEmployeeRide(ride: CorridaRecord, event: RideNotificationEvent | 'SOLICITADA'): Promise<void> {
+    if (!this.employeeUsers) return;
+    const userId = await this.employeeUsers.resolveEmployeeUser(ride.empresaId, ride.funcionarioId);
+    if (!userId) return;
+    const message = event === 'SOLICITADA'
+      ? { title: 'Nova corrida solicitada', body: 'Uma nova corrida foi solicitada para você.' }
+      : this.rideMessage(event);
+    await this.sendRecipient({
+      empresaId: ride.empresaId,
+      usuarioId: userId,
+      corridaId: ride.id,
+      event: `FUNCIONARIO_${event}`,
+      title: message.title,
+      body: message.body,
+      destination: `/app/corridas/${ride.id}`,
+      dedupeKey: `${ride.empresaId}:${ride.id}:FUNCIONARIO_${event}:${userId}`,
+    });
+  }
+
+  private async sendProviderRide(
+    ride: CorridaRecord,
+    event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA',
+  ): Promise<void> {
     if (!ride.prestadorId) return;
-    const recipient = await this.database.query<{ usuario_id: string }>(
-      `SELECT usuario_id FROM admtaxi.prestadores
-        WHERE empresa_id = $1 AND id = $2 AND ativo = TRUE AND usuario_id IS NOT NULL`,
+    const recipient = await this.database.query<UserRow>(
+      `SELECT p.usuario_id FROM admtaxi.prestadores p
+         JOIN admtaxi.usuarios u ON u.empresa_id = p.empresa_id AND u.id = p.usuario_id
+        WHERE p.empresa_id = $1 AND p.id = $2 AND p.ativo = TRUE
+          AND p.usuario_id IS NOT NULL AND u.ativo = TRUE`,
       [ride.empresaId, ride.prestadorId],
     );
     const usuarioId = recipient.rows[0]?.usuario_id;
     if (!usuarioId) return;
-    const dedupeKey = `${ride.empresaId}:${ride.id}:${event}:${ride.status}:${ride.prestadorId}`;
     const title = event === 'CANCELADA' ? 'Corrida cancelada'
-      : event === 'REMOVIDA' ? 'Atribuicao de corrida alterada'
-        : event === 'ALTERADA' ? 'Corrida atualizada' : 'Nova corrida atribuida';
-    const body = event === 'CANCELADA' ? 'A corrida atribuida a voce foi cancelada.'
-      : event === 'REMOVIDA' ? 'Esta corrida nao esta mais atribuida a voce.'
+      : event === 'REMOVIDA' ? 'Atribuição de corrida alterada'
+        : event === 'ALTERADA' ? 'Corrida atualizada' : 'Nova corrida atribuída';
+    const body = event === 'CANCELADA' ? 'A corrida atribuída a você foi cancelada.'
+      : event === 'REMOVIDA' ? 'Esta corrida não está mais atribuída a você.'
         : 'Abra o aplicativo para consultar os detalhes da corrida.';
-    const destination = event === 'REMOVIDA' ? '/app/corridas' : `/app/corridas/${ride.id}`;
+    await this.sendRecipient({
+      empresaId: ride.empresaId,
+      usuarioId,
+      corridaId: ride.id,
+      event,
+      title,
+      body,
+      destination: event === 'REMOVIDA' ? '/app/corridas' : `/app/corridas/${ride.id}`,
+      dedupeKey: `${ride.empresaId}:${ride.id}:${event}:${ride.status}:${ride.prestadorId}`,
+    });
+  }
+
+  private async sendRecipient(input: {
+    empresaId: string; usuarioId: string; corridaId: string | null; event: string;
+    title: string; body: string; destination: string; dedupeKey: string;
+  }): Promise<void> {
     const inserted = await this.database.query<{ id: string }>(
       `INSERT INTO admtaxi.notificacoes_push
          (empresa_id, usuario_id, corrida_id, evento, titulo, corpo, chave_deduplicacao)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (chave_deduplicacao) DO NOTHING RETURNING id`,
-      [ride.empresaId, usuarioId, ride.id, event, title, body, dedupeKey],
+      [input.empresaId, input.usuarioId, input.corridaId, input.event, input.title, input.body, input.dedupeKey],
     );
     const notificationId = inserted.rows[0]?.id;
     if (!notificationId) return;
     const devices = await this.database.query<DeviceRow>(
       `SELECT id, token FROM admtaxi.dispositivos_push
         WHERE empresa_id = $1 AND usuario_id = $2 AND ativo = TRUE`,
-      [ride.empresaId, usuarioId],
+      [input.empresaId, input.usuarioId],
     );
     if (!this.firebaseProjectId || devices.rows.length === 0) {
       await this.finishLog(notificationId, 'IGNORADA', { dispositivos: devices.rows.length },
-        this.firebaseProjectId ? null : 'Firebase nao configurado.');
+        this.firebaseProjectId ? null : 'Firebase não configurado.');
       return;
     }
     try {
       if (getApps().length === 0) initializeApp({ credential: applicationDefault(), projectId: this.firebaseProjectId });
       const message: MulticastMessage = {
         tokens: devices.rows.map((device) => device.token),
-        data: { corridaId: ride.id, destino: destination, titulo: title, corpo: body },
+        data: {
+          corridaId: input.corridaId ?? '', destino: input.destination,
+          titulo: input.title, corpo: input.body,
+        },
         webpush: { headers: { Urgency: 'high' } },
       };
       const response = await getMessaging().sendEachForMulticast(message);
@@ -99,16 +247,39 @@ export class NotificacaoService implements CorridaNotificationPublisher {
         await this.database.query(
           `UPDATE admtaxi.dispositivos_push SET ativo = FALSE
             WHERE empresa_id = $1 AND token = ANY($2::text[])`,
-          [ride.empresaId, invalidTokens],
+          [input.empresaId, invalidTokens],
         );
       }
       const status = response.failureCount === 0 ? 'ENVIADA' : response.successCount === 0 ? 'FALHA' : 'PARCIAL';
       await this.finishLog(notificationId, status, {
         enviados: response.successCount, falhas: response.failureCount, tokensInativados: invalidTokens.length,
-      }, response.failureCount ? 'Um ou mais dispositivos recusaram a notificacao.' : null);
+      }, response.failureCount ? 'Um ou mais dispositivos recusaram a notificação.' : null);
     } catch {
-      await this.finishLog(notificationId, 'FALHA', {}, 'Falha ao enviar notificacao pelo Firebase.');
+      await this.finishLog(notificationId, 'FALHA', {}, 'Falha ao enviar notificação pelo Firebase.');
     }
+  }
+
+  private rideMessage(event: RideNotificationEvent): { title: string; body: string } {
+    const messages: Record<RideNotificationEvent, { title: string; body: string }> = {
+      ACEITA: { title: 'Corrida aceita', body: 'O prestador aceitou a corrida.' },
+      DESLOCAMENTO_INICIADO: { title: 'Prestador a caminho', body: 'O prestador está a caminho do local de embarque.' },
+      CHEGADA_AO_EMBARQUE: { title: 'Prestador no embarque', body: 'O prestador chegou ao local de embarque.' },
+      CORRIDA_INICIADA: { title: 'Corrida iniciada', body: 'A corrida foi iniciada.' },
+      FINALIZADA: { title: 'Corrida finalizada', body: 'A corrida foi finalizada.' },
+      CANCELADA: { title: 'Corrida cancelada', body: 'A corrida foi cancelada.' },
+      ATRIBUICAO_ALTERADA: { title: 'Corrida atualizada', body: 'O prestador ou veículo da corrida foi alterado.' },
+    };
+    return messages[event];
+  }
+
+  private mapDevice(row: {
+    id: string; plataforma: string; nome_dispositivo: string | null; ativo: boolean;
+    ultimo_uso_em: Date; criado_em: Date; atualizado_em: Date;
+  }): PushDevice {
+    return {
+      id: row.id, plataforma: row.plataforma, nomeDispositivo: row.nome_dispositivo,
+      ativo: row.ativo, ultimoUsoEm: row.ultimo_uso_em, criadoEm: row.criado_em, atualizadoEm: row.atualizado_em,
+    };
   }
 
   private async finishLog(id: string, status: string, result: Record<string, unknown>, error: string | null): Promise<void> {

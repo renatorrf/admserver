@@ -29,9 +29,10 @@ import { NotificacaoService } from '../notificacoes/notificacao.service';
 
 export function createOperationalRouter(
   pool: Pool, tokens: TokenService, realtime?: RealtimeBus, geoapifyApiKey?: string, firebaseProjectId?: string,
+  allowDevelopmentNotificationTest = false,
 ): Router {
   const router = Router();
-  const notifications = new NotificacaoService(pool, firebaseProjectId);
+  const notifications = new NotificacaoService(pool, firebaseProjectId, allowDevelopmentNotificationTest);
   const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications);
   const locations = new LocalizacaoService(pool, service, realtime);
   router.use('/dashboard', createAuthenticate(tokens), createDashboardRouter(new DashboardService(new DashboardRepository(pool))));

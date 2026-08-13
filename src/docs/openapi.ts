@@ -371,9 +371,20 @@ export const openApiDocument = {
       },
     },
     '/notificacoes/dispositivos': {
+      get: {
+        tags: ['Notificacoes'], summary: 'Lista dispositivos push do usuario autenticado', security: bearerSecurity,
+        responses: { '200': { description: 'Dispositivos ativos e inativos, ordenados pelo ultimo uso' } },
+      },
       post: {
         tags: ['Notificacoes'], summary: 'Registra token push do usuario e dispositivo', security: bearerSecurity,
         responses: { '201': { description: 'Dispositivo registrado' }, '422': { description: 'Token invalido' } },
+      },
+    },
+    '/notificacoes/teste': {
+      post: {
+        tags: ['Notificacoes'], summary: 'Envia uma notificacao de teste', security: bearerSecurity,
+        description: 'Permitido para GESTOR ou para qualquer perfil somente em ambiente de desenvolvimento.',
+        responses: { '204': { description: 'Tentativa registrada' }, '403': { description: 'Perfil nao permitido' } },
       },
     },
     '/notificacoes/dispositivos/{id}': {
