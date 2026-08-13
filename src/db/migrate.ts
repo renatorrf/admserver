@@ -12,6 +12,10 @@ type AppliedMigration = { versao: number; nome: string; checksum: string; aplica
 
 const migrationFilePattern = /^(\d{3})_(.+)\.up\.sql$/;
 
+function migrationChecksum(sql: string): string {
+  return createHash('sha256').update(sql.replace(/\r\n/g, '\n')).digest('hex');
+}
+
 function migrationsDirectory(): string {
   return path.resolve(__dirname, 'migrations');
 }
@@ -30,7 +34,7 @@ async function listMigrations(): Promise<Migration[]> {
       version: Number(match[1]),
       name: match[2],
       path: migrationPath,
-      checksum: createHash('sha256').update(sql).digest('hex'),
+      checksum: migrationChecksum(sql),
     }];
   }));
 

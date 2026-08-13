@@ -49,7 +49,7 @@ async function main(): Promise<void> {
          ORDER BY t.typname
       `);
     const migrations = await client.query<{ versao: number; nome: string }>(`
-        SELECT versao, nome FROM admtaxi.schema_migrations ORDER BY versao
+        SELECT versao, nome, checksum FROM admtaxi.schema_migrations ORDER BY versao
       `);
 
     console.log(JSON.stringify({
