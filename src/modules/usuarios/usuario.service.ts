@@ -78,6 +78,9 @@ export class UsuarioService {
     return withTransaction(this.pool, async (client) => {
       const current = await this.repository.findById(client, auth.empresaId, id);
       if (!current) throw notFound('Usuario');
+      if (current.perfil === 'FUNCIONARIO' && input.perfil !== undefined) {
+        throw conflict('O perfil do funcionario deve ser mantido pelo cadastro unificado.');
+      }
       if (input.perfil && input.perfil !== 'PRESTADOR' && await this.repository.isLinkedProvider(client, auth.empresaId, id)) {
         throw conflict('Remova o vinculo com o prestador antes de alterar o perfil do usuario.');
       }

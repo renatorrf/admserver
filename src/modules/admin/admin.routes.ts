@@ -11,6 +11,8 @@ import { centroCustoCreateSchema, centroCustoDefinition, centroCustoListSchema, 
 import { createEmpresaRouter } from '../empresas/empresa.routes';
 import { EmpresaService } from '../empresas/empresa.service';
 import { funcionarioCreateSchema, funcionarioDefinition, funcionarioListSchema, funcionarioUpdateSchema } from '../funcionarios/funcionario.catalog';
+import { createFuncionarioUnificadoRouter } from '../funcionarios/funcionario-unificado.routes';
+import { FuncionarioUnificadoService } from '../funcionarios/funcionario-unificado.service';
 import { prestadorCreateSchema, prestadorDefinition, prestadorListSchema, prestadorUpdateSchema } from '../prestadores/prestador.catalog';
 import { createPrestadorUnificadoRouter } from '../prestadores/prestador-unificado.routes';
 import { PrestadorUnificadoService } from '../prestadores/prestador-unificado.service';
@@ -26,6 +28,7 @@ export function createAdminRouter(pool: Pool, tokens: TokenService): Router {
   router.use('/empresas', createEmpresaRouter(new EmpresaService(pool, audit)));
   router.use('/usuarios', createUsuarioRouter(new UsuarioService(pool, audit)));
   router.use('/cadastros-unificados', createPrestadorUnificadoRouter(new PrestadorUnificadoService(pool, audit)));
+  router.use('/cadastros-unificados/funcionarios', createFuncionarioUnificadoRouter(new FuncionarioUnificadoService(pool, audit)));
   router.use('/prestadores', createCatalogRouter(
     new CatalogService(pool, audit, prestadorDefinition),
     { create: prestadorCreateSchema, update: prestadorUpdateSchema, list: prestadorListSchema },

@@ -326,6 +326,29 @@ export const openApiDocument = {
         },
       },
     },
+    '/cadastros-unificados/funcionarios': {
+      post: {
+        tags: ['Cadastros unificados'], summary: 'Cria usuario e funcionario em uma transacao', security: bearerSecurity,
+        description: 'O nome, e-mail e telefone do funcionario tambem compoem o usuario de acesso com perfil FUNCIONARIO.',
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/FuncionarioUnificadoCreateInput' } } } },
+        responses: {
+          '201': { description: 'Usuario e funcionario criados' }, '403': { description: 'Acesso restrito a GESTOR' },
+          '409': { description: 'E-mail, matricula ou CPF duplicado' }, '422': { description: 'Dados invalidos ou centro fora da empresa' },
+        },
+      },
+    },
+    '/cadastros-unificados/funcionarios/{id}': {
+      parameters: [idParameter],
+      patch: {
+        tags: ['Cadastros unificados'], summary: 'Atualiza usuario e funcionario em uma transacao', security: bearerSecurity,
+        description: 'Inativar uma das partes inativa ambas e revoga as sessoes. Uma nova senha e opcional quando o usuario ja existe.',
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/FuncionarioUnificadoUpdateInput' } } } },
+        responses: {
+          '200': { description: 'Usuario e funcionario atualizados' }, '403': { description: 'Acesso restrito a GESTOR' },
+          '409': { description: 'Registro duplicado' }, '422': { description: 'Dados invalidos ou vinculo fora da empresa' },
+        },
+      },
+    },
     '/veiculos': veiculos.collection,
     '/veiculos/{id}': veiculos.item,
     '/veiculos/{id}/inativar': veiculos.inativar,
@@ -605,6 +628,34 @@ export const openApiDocument = {
         properties: {
           placa: { type: 'string' }, marca: { type: 'string' }, modelo: { type: 'string' }, cor: { type: 'string' },
           ano: { type: 'integer', minimum: 1900 }, capacidadePassageiros: { type: 'integer', minimum: 1 }, ativo: { type: 'boolean' },
+        },
+      },
+      FuncionarioUnificadoCreateInput: {
+        type: 'object', additionalProperties: false, required: ['acesso', 'funcionario'],
+        properties: {
+          acesso: {
+            type: 'object', additionalProperties: false, required: ['senha'],
+            properties: { senha: { type: 'string', format: 'password', minLength: 12, maxLength: 128 }, ativo: { type: 'boolean', default: true } },
+          },
+          funcionario: { $ref: '#/components/schemas/FuncionarioUnificadoInput' },
+        },
+      },
+      FuncionarioUnificadoUpdateInput: {
+        type: 'object', minProperties: 1, additionalProperties: false,
+        properties: {
+          acesso: { type: 'object', properties: { senha: { type: 'string', format: 'password', minLength: 12, maxLength: 128 }, ativo: { type: 'boolean' } } },
+          funcionario: { type: 'object', description: 'Campos parciais de FuncionarioUnificadoInput, incluindo ativo.' },
+        },
+      },
+      FuncionarioUnificadoInput: {
+        type: 'object', additionalProperties: false,
+        required: ['centroCustoId', 'nome', 'matricula', 'email'],
+        properties: {
+          centroCustoId: { type: 'string', format: 'uuid' }, nome: { type: 'string', minLength: 2, maxLength: 150 },
+          matricula: { type: 'string', minLength: 1, maxLength: 50 }, cpf: { type: ['string', 'null'] },
+          telefone: { type: ['string', 'null'], maxLength: 20 }, email: { type: 'string', format: 'email' },
+          enderecoPadrao: { type: ['string', 'null'] }, latitudePadrao: { type: ['number', 'null'], minimum: -90, maximum: 90 },
+          longitudePadrao: { type: ['number', 'null'], minimum: -180, maximum: 180 },
         },
       },
       ProvisionamentoInput: {

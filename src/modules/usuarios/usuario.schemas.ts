@@ -9,7 +9,7 @@ const fields = {
   email: z.string().trim().email('Informe um e-mail valido.').max(254).transform((value) => value.toLowerCase()),
   telefone: optionalText(20),
   senha: z.string().min(12, 'A senha deve ter ao menos 12 caracteres.').max(128),
-  perfil: z.enum(perfisUsuario),
+  perfil: z.enum(['PRESTADOR', 'GERENTE', 'GESTOR']),
 };
 
 export const usuarioCreateSchema = z.object(fields).strict();
@@ -23,7 +23,7 @@ export const usuarioUpdateSchema = z.object({
   message: 'Informe ao menos um campo para atualizar.',
 });
 export const usuarioListSchema = paginationSchema.extend({
-  perfil: fields.perfil.optional(),
+  perfil: z.enum(perfisUsuario).optional(),
 }).strict();
 export const gerenteCentrosSchema = z.object({
   centroCustoIds: z.array(z.string().uuid('Centro de custo invalido.')).max(100)

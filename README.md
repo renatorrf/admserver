@@ -163,7 +163,7 @@ Os CRUDs administrativos aceitam `GET`, `POST` e `PATCH`. Inativacao e reativaca
 - Senhas usam Argon2id; apenas hashes de refresh tokens sao persistidos.
 - Logs removem authorization, cookies, senhas, tokens e URL do banco.
 - Erros de login nao distinguem usuario inexistente de senha incorreta.
-- `authorize(...)` restringe rotas aos perfis `PRESTADOR`, `GERENTE` e `GESTOR`.
+- `authorize(...)` restringe rotas aos perfis `PRESTADOR`, `FUNCIONARIO`, `GERENTE` e `GESTOR`.
 - As rotas administrativas da Fase 3 sao exclusivas de `GESTOR`.
 - Alteracoes administrativas e vinculos sao auditados na mesma transacao do cadastro.
 

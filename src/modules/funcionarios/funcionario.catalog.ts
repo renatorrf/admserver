@@ -59,6 +59,7 @@ export const funcionarioUpdateSchema = z.object({
   enderecoPadrao: fields.enderecoPadrao,
   latitudePadrao: fields.latitudePadrao,
   longitudePadrao: fields.longitudePadrao,
+  ativo: z.boolean().optional(),
 }).strict().refine((value) => Object.values(value).some((item) => item !== undefined), {
   message: 'Informe ao menos um campo para atualizar.',
 }).refine(coordinatesTogether, {
@@ -86,11 +87,13 @@ export const funcionarioDefinition: CatalogDefinition = {
     enderecoPadrao: 'endereco_padrao',
     latitudePadrao: 'latitude_padrao',
     longitudePadrao: 'longitude_padrao',
+    ativo: 'ativo',
   },
   filters: { centroCustoId: 'centro_custo_id' },
   mapRow: (row) => ({
     id: row.id as string,
     empresaId: row.empresa_id as string,
+    usuarioId: row.usuario_id as string | null,
     centroCustoId: row.centro_custo_id as string,
     nome: row.nome as string,
     matricula: row.matricula as string,

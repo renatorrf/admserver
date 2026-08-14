@@ -1,4 +1,4 @@
-export const perfisUsuario = ['PRESTADOR', 'GERENTE', 'GESTOR'] as const;
+export const perfisUsuario = ['PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR'] as const;
 export type PerfilUsuario = (typeof perfisUsuario)[number];
 
 export type AuthContext = {
