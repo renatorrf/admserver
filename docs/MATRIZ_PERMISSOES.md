@@ -1,6 +1,6 @@
 # Matriz de permissoes
 
-Esta matriz registra o controle implementado ate a Fase 5. O backend e a fonte de autorizacao;
+Esta matriz registra o controle implementado. O backend e a fonte de autorizacao;
 ocultar uma acao no frontend nao substitui a validacao da API.
 
 | Recurso ou acao | PRESTADOR | GERENTE | GESTOR |
@@ -10,6 +10,8 @@ ocultar uma acao no frontend nao substitui a validacao da API.
 | CRUD logico de usuarios | Nao | Nao | Sim |
 | Vincular gerente a centros de custo | Nao | Nao | Sim |
 | CRUD logico de prestadores | Nao | Nao | Sim |
+| Cadastro unificado de acesso, prestador e veiculo | Nao | Nao | Sim |
+| Consultar dispositivos no cadastro unificado | Nao | Nao | Sim |
 | CRUD logico de veiculos | Nao | Nao | Sim |
 | CRUD logico de centros de custo | Nao | Nao | Sim |
 | CRUD logico de funcionarios | Nao | Nao | Sim |
@@ -37,6 +39,10 @@ ocultar uma acao no frontend nao substitui a validacao da API.
 - Apenas centros de custo ativos da mesma empresa podem ser vinculados.
 - Apenas usuario ativo com perfil `PRESTADOR` pode ser vinculado a prestador.
 - Inativar prestador tambem remove sua disponibilidade.
+- No cadastro unificado, inativar o acesso ou o prestador inativa ambos na mesma transacao,
+  remove a disponibilidade e revoga as sessoes do usuario.
+- Veiculo existente so pode ser vinculado quando esta ativo, pertence a mesma empresa e esta livre;
+  transferencia entre prestadores exige uma operacao explicita e nao ocorre silenciosamente.
 - Relacoes atuais de gerente e centro de custo podem ser substituidas fisicamente porque a tabela
   nao possui estado logico; a alteracao completa permanece registrada em auditoria.
 

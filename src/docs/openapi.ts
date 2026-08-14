@@ -92,7 +92,7 @@ export const openApiDocument = {
   },
   tags: [
     { name: 'Auth' }, { name: 'Health' }, { name: 'Empresa' }, { name: 'Usuarios' },
-    { name: 'Prestadores' }, { name: 'Veiculos' }, { name: 'Centros de custo' },
+    { name: 'Prestadores' }, { name: 'Cadastros unificados' }, { name: 'Veiculos' }, { name: 'Centros de custo' },
     { name: 'Funcionarios' }, { name: 'Auditoria' }, { name: 'Operacao' },
     { name: 'Corridas' }, { name: 'Localizacoes' }, { name: 'Dashboard' }, { name: 'Relatorios' },
     { name: 'Enderecos' }, { name: 'Notificacoes' }, { name: 'Provisionamento' },
@@ -285,6 +285,47 @@ export const openApiDocument = {
     '/prestadores/{id}': prestadores.item,
     '/prestadores/{id}/inativar': prestadores.inativar,
     '/prestadores/{id}/reativar': prestadores.reativar,
+    '/cadastros-unificados/veiculos': {
+      get: {
+        tags: ['Cadastros unificados'], summary: 'Pesquisa veiculos elegiveis para vinculo', security: bearerSecurity,
+        description: 'Retorna somente veiculos ativos da empresa autenticada e informa se estao livres ou ja vinculados ao prestador em edicao.',
+        parameters: [
+          { name: 'busca', in: 'query', schema: { type: 'string' } },
+          { name: 'prestadorId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+          { name: 'pagina', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limite', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+        ],
+        responses: { '200': { description: 'Veiculos ativos no escopo do tenant' }, '403': { description: 'Acesso restrito a GESTOR' } },
+      },
+    },
+    '/cadastros-unificados/prestadores': {
+      post: {
+        tags: ['Cadastros unificados'], summary: 'Cria acesso, prestador e vinculo de veiculo em uma transacao', security: bearerSecurity,
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PrestadorUnificadoCreateInput' } } } },
+        responses: {
+          '201': { description: 'Cadastro unificado criado' },
+          '403': { description: 'Acesso restrito a GESTOR' },
+          '409': { description: 'E-mail, CPF, CNH ou placa duplicada, ou veiculo ja vinculado' },
+          '422': { description: 'Dados invalidos ou referencia fora da empresa' },
+        },
+      },
+    },
+    '/cadastros-unificados/prestadores/{id}': {
+      parameters: [idParameter],
+      get: {
+        tags: ['Cadastros unificados'], summary: 'Consulta acesso, prestador, veiculos e dispositivos', security: bearerSecurity,
+        responses: { '200': { description: 'Cadastro unificado' }, '403': { description: 'Acesso restrito a GESTOR' }, '404': { description: 'Prestador nao encontrado' } },
+      },
+      patch: {
+        tags: ['Cadastros unificados'], summary: 'Atualiza o cadastro unificado em uma transacao', security: bearerSecurity,
+        description: 'Trocas e desvinculos de veiculo sao auditados. Inativar acesso ou prestador inativa ambos, remove a disponibilidade e revoga sessoes.',
+        requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/PrestadorUnificadoUpdateInput' } } } },
+        responses: {
+          '200': { description: 'Cadastro unificado atualizado' }, '403': { description: 'Acesso restrito a GESTOR' },
+          '409': { description: 'Duplicidade ou veiculo ja vinculado' }, '422': { description: 'Dados invalidos ou referencia fora da empresa' },
+        },
+      },
+    },
     '/veiculos': veiculos.collection,
     '/veiculos/{id}': veiculos.item,
     '/veiculos/{id}/inativar': veiculos.inativar,
@@ -518,6 +559,54 @@ export const openApiDocument = {
       masterBearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Token exclusivo do portal master.' },
     },
     schemas: {
+      PrestadorUnificadoCreateInput: {
+        type: 'object', additionalProperties: false, required: ['acesso', 'prestador', 'veiculo'],
+        properties: {
+          acesso: {
+            type: 'object', additionalProperties: false,
+            required: ['nome', 'email', 'ativo', 'formaAtivacao', 'senha'],
+            properties: {
+              nome: { type: 'string', minLength: 2, maxLength: 150 }, email: { type: 'string', format: 'email' },
+              telefone: { type: ['string', 'null'], maxLength: 20 }, ativo: { type: 'boolean' },
+              formaAtivacao: { type: 'string', enum: ['SENHA_TEMPORARIA'] },
+              senha: { type: 'string', format: 'password', minLength: 12, maxLength: 128 },
+            },
+          },
+          prestador: {
+            type: 'object', additionalProperties: false,
+            required: ['reutilizarDadosAcesso', 'cpf', 'numeroCnh', 'validadeCnh', 'disponivel', 'ativo'],
+            properties: {
+              reutilizarDadosAcesso: { type: 'boolean' }, nome: { type: 'string', minLength: 2, maxLength: 150 },
+              cpf: { type: 'string' }, telefone: { type: 'string', maxLength: 20 }, email: { type: ['string', 'null'], format: 'email' },
+              numeroCnh: { type: 'string' }, validadeCnh: { type: 'string', format: 'date' },
+              disponivel: { type: 'boolean' }, ativo: { type: 'boolean' },
+            },
+          },
+          veiculo: {
+            oneOf: [
+              { type: 'object', required: ['modo', 'dados'], properties: { modo: { const: 'NOVO' }, dados: { $ref: '#/components/schemas/VeiculoUnificadoInput' } } },
+              { type: 'object', required: ['modo', 'veiculoId'], properties: { modo: { const: 'EXISTENTE' }, veiculoId: { type: 'string', format: 'uuid' } } },
+              { type: 'object', required: ['modo'], properties: { modo: { const: 'DEPOIS' } } },
+            ],
+          },
+        },
+      },
+      PrestadorUnificadoUpdateInput: {
+        type: 'object', minProperties: 1, additionalProperties: false,
+        description: 'Aceita blocos parciais de acesso e prestador e uma acao de veiculo: MANTER, NOVO, EXISTENTE ou DESVINCULAR.',
+        properties: {
+          acesso: { type: 'object' }, prestador: { type: 'object' },
+          veiculo: { type: 'object', required: ['acao'], properties: { acao: { type: 'string', enum: ['MANTER', 'NOVO', 'EXISTENTE', 'DESVINCULAR'] } } },
+        },
+      },
+      VeiculoUnificadoInput: {
+        type: 'object', additionalProperties: false,
+        required: ['placa', 'marca', 'modelo', 'cor', 'ano', 'capacidadePassageiros', 'ativo'],
+        properties: {
+          placa: { type: 'string' }, marca: { type: 'string' }, modelo: { type: 'string' }, cor: { type: 'string' },
+          ano: { type: 'integer', minimum: 1900 }, capacidadePassageiros: { type: 'integer', minimum: 1 }, ativo: { type: 'boolean' },
+        },
+      },
       ProvisionamentoInput: {
         type: 'object', additionalProperties: false, required: ['empresa', 'gestor'],
         properties: {
