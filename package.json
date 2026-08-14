@@ -18,6 +18,8 @@
     "migrate:status": "tsx src/db/migrate.ts status",
     "migrate:down": "tsx src/db/migrate.ts down",
     "db:inspect": "tsx src/db/inspect-schema.ts",
+    "db:cleanup-keep-gestors": "node scripts/cleanup-keep-gestors.mjs",
+    "db:restore-default-center": "node scripts/restore-default-cost-center.mjs",
     "seed:dev": "tsx src/db/seed-development.ts",
     "master:configure": "node scripts/configure-master-bootstrap.mjs",
     "master:bootstrap": "tsx src/db/bootstrap-master.ts"
