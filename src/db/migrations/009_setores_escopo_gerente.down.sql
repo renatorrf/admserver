@@ -1,0 +1,12 @@
+DROP TRIGGER IF EXISTS centros_custo_validar_escopo_gerentes ON admtaxi.centros_custo;
+DROP FUNCTION IF EXISTS admtaxi.validar_setor_do_centro_para_gerentes();
+DROP TRIGGER IF EXISTS gerente_centros_custo_validar_setor ON admtaxi.gerente_centros_custo;
+DROP FUNCTION IF EXISTS admtaxi.validar_gerente_centro_no_setor();
+DROP TRIGGER IF EXISTS gerente_centros_custo_validar_usuario ON admtaxi.gerente_centros_custo;
+DROP TRIGGER IF EXISTS gerente_setores_validar_usuario ON admtaxi.gerente_setores;
+DROP FUNCTION IF EXISTS admtaxi.validar_usuario_gerente();
+DROP TABLE IF EXISTS admtaxi.gerente_setores;
+DROP INDEX IF EXISTS admtaxi.centros_custo_setor_idx;
+ALTER TABLE admtaxi.centros_custo DROP CONSTRAINT IF EXISTS centros_custo_setor_fk;
+ALTER TABLE admtaxi.centros_custo DROP COLUMN IF EXISTS setor_id;
+DROP TABLE IF EXISTS admtaxi.setores;

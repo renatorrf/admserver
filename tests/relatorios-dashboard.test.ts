@@ -8,11 +8,19 @@ import { RelatorioRepository } from '../src/modules/relatorios/relatorio.reposit
 import { relatorioListSchema } from '../src/modules/relatorios/relatorio.schemas';
 import { RelatorioService, rowsToCsv } from '../src/modules/relatorios/relatorio.service';
 import type { RelatorioCorrida } from '../src/modules/relatorios/relatorio.types';
+import type { OperationalScopeResolver } from '../src/modules/escopo/operational-scope.service';
 
 const EMPRESA = '11111111-1111-4111-8111-111111111111';
 const USUARIO = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const gerente: AuthContext = { empresaId: EMPRESA, usuarioId: USUARIO, perfil: 'GERENTE' };
 const prestador: AuthContext = { ...gerente, perfil: 'PRESTADOR' };
+const CENTRO = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const scopeResolver: OperationalScopeResolver = {
+  resolve: () => Promise.resolve({
+    kind: 'GERENTE', empresaId: EMPRESA, usuarioId: USUARIO,
+    setorIds: ['dddddddd-dddd-4ddd-8ddd-dddddddddddd'], centroCustoIds: [CENTRO],
+  }),
+};
 
 describe('relatorios', () => {
   it('valida a ordem do periodo', () => {
@@ -33,15 +41,15 @@ describe('relatorios', () => {
       .mockResolvedValueOnce({ rows: [{ corridas: '0', finalizadas: '0', canceladas: '0', valorEstimado: '0', valorFinal: '0' }] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
-    const repository = new RelatorioRepository({ query } as unknown as Database);
+    const repository = new RelatorioRepository({ query } as unknown as Database, scopeResolver);
 
     await repository.list(gerente, { pagina: 1, limite: 20 });
 
     expect(query).toHaveBeenCalledTimes(5);
     for (const [sql, values] of query.mock.calls as Array<[string, unknown[]]>) {
-      expect(sql).toContain('gerente_centros_custo');
+      expect(sql).toContain('centro_custo_id = ANY($2::uuid[])');
       expect(values[0]).toBe(EMPRESA);
-      expect(values[1]).toBe(USUARIO);
+      expect(values[1]).toEqual([CENTRO]);
     }
   });
 
@@ -74,16 +82,16 @@ describe('dashboard', () => {
         custoMes: '0', proximasCorridas: '0', minhasSolicitacoesMes: '0', prestadoresDisponiveis: '0',
       }] })
       .mockResolvedValue({ rows: [] });
-    const repository = new DashboardRepository({ query } as unknown as Database);
+    const repository = new DashboardRepository({ query } as unknown as Database, scopeResolver);
 
     const result = await repository.get(gerente);
 
     expect(result.indicadores.prestadoresDisponiveis).toBeNull();
     expect(query).toHaveBeenCalledTimes(6);
     for (const [sql, values] of query.mock.calls as Array<[string, unknown[]]>) {
-      expect(sql).toContain('gerente_centros_custo');
+      expect(sql).toContain('centro_custo_id');
       expect(values[0]).toBe(EMPRESA);
-      expect(values).toContain(USUARIO);
+      expect(values).toContainEqual([CENTRO]);
     }
   });
 });

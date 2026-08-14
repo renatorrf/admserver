@@ -16,6 +16,16 @@ export class OperacaoService {
     return this.repository.listEmployees(auth, query);
   }
 
+  listSectors(auth: AuthContext) {
+    if (auth.perfil === 'PRESTADOR') throw forbidden();
+    return this.repository.listSectors(auth);
+  }
+
+  getScopeSummary(auth: AuthContext) {
+    if (auth.perfil === 'PRESTADOR') throw forbidden();
+    return this.repository.getScopeSummary(auth);
+  }
+
   searchEmployees(auth: AuthContext, query: FuncionarioSearchQuery) {
     if (auth.perfil === 'PRESTADOR') throw forbidden();
     return this.repository.searchEmployees(auth, query);
@@ -39,7 +49,7 @@ export class OperacaoService {
   }
 
   searchProviders(auth: AuthContext, query: PrestadorSearchQuery) {
-    if (auth.perfil === 'PRESTADOR') throw forbidden();
+    if (auth.perfil !== 'GESTOR') throw forbidden();
     return this.repository.searchProviders(auth, query);
   }
 

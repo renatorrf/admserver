@@ -29,3 +29,26 @@ aprovacao explicita. O seed de desenvolvimento e separado e nunca e executado pe
 - Nao inclua credenciais ou dados de ambiente nos arquivos SQL.
 - Toda referencia entre entidades de negocio inclui `empresa_id` para reforcar o isolamento.
 - Valores monetarios usam `NUMERIC(12, 2)` e datas de negocio usam `TIMESTAMPTZ`.
+
+## Regularizacao da migration 009
+
+A migration `009_setores_escopo_gerente` nao associa centros existentes automaticamente. Depois da
+aplicacao autorizada, o gestor deve:
+
+1. cadastrar os setores;
+2. vincular os setores aos gerentes;
+3. definir `setor_id` nos centros legados;
+4. revisar os centros autorizados de cada gerente.
+
+Consulta somente leitura para localizar pendencias:
+
+```sql
+SELECT e.codigo_acesso, c.id, c.codigo, c.nome
+FROM admtaxi.centros_custo c
+JOIN admtaxi.empresas e ON e.id = c.empresa_id
+WHERE c.setor_id IS NULL
+ORDER BY e.codigo_acesso, c.codigo;
+```
+
+Enquanto um centro permanecer sem setor, ele e preservado para o historico, mas nao e oferecido em
+novas solicitacoes de corrida.

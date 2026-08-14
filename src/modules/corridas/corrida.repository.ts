@@ -41,7 +41,7 @@ type PrestadorRow = QueryResultRow & PrestadorContext;
 
 export type CorridaScope =
   | { kind: 'GESTOR' }
-  | { kind: 'GERENTE'; usuarioId: string }
+  | { kind: 'GERENTE'; usuarioId: string; setorIds: string[]; centroCustoIds: string[] }
   | { kind: 'PRESTADOR'; prestadorId: string; disponivel: boolean };
 
 export type CorridaPatch = {
@@ -184,12 +184,14 @@ export class CorridaRepository {
     return row ? mapCorrida(row) : null;
   }
 
-  async findForUpdate(executor: QueryExecutor, empresaId: string, id: string): Promise<CorridaRecord | null> {
-    const row = await queryOne<CorridaRow>(
-      executor,
-      'SELECT * FROM admtaxi.corridas WHERE empresa_id = $1 AND id = $2 FOR UPDATE',
-      [empresaId, id],
-    );
+  async findForUpdate(
+    executor: QueryExecutor, empresaId: string, id: string, scope: CorridaScope,
+  ): Promise<CorridaRecord | null> {
+    const values: unknown[] = [empresaId, id];
+    const conditions = ['c.empresa_id = $1', 'c.id = $2'];
+    this.addScope(conditions, values, scope);
+    const row = await queryOne<CorridaRow>(executor,
+      `SELECT c.* FROM admtaxi.corridas c WHERE ${conditions.join(' AND ')} FOR UPDATE`, values);
     return row ? mapCorrida(row) : null;
   }
 
@@ -365,8 +367,9 @@ export class CorridaRepository {
     const result = await executor.query(
       `SELECT 1 FROM admtaxi.funcionarios f
          JOIN admtaxi.centros_custo c ON c.empresa_id = f.empresa_id AND c.id = f.centro_custo_id
+         JOIN admtaxi.setores s ON s.empresa_id = c.empresa_id AND s.id = c.setor_id
         WHERE f.empresa_id = $1 AND f.id = $2 AND f.centro_custo_id = $3
-          AND f.ativo = TRUE AND c.ativo = TRUE`,
+          AND f.ativo = TRUE AND c.ativo = TRUE AND s.ativo = TRUE`,
       [empresaId, funcionarioId, centroCustoId],
     );
     return result.rowCount === 1;
@@ -414,13 +417,8 @@ export class CorridaRepository {
 
   private addScope(conditions: string[], values: unknown[], scope: CorridaScope): void {
     if (scope.kind === 'GERENTE') {
-      values.push(scope.usuarioId);
-      conditions.push(`EXISTS (
-        SELECT 1 FROM admtaxi.gerente_centros_custo gcc
-         WHERE gcc.empresa_id = c.empresa_id
-           AND gcc.centro_custo_id = c.centro_custo_id
-           AND gcc.gerente_usuario_id = $${values.length}
-      )`);
+      values.push(scope.centroCustoIds);
+      conditions.push(`c.centro_custo_id = ANY($${values.length}::uuid[])`);
     } else if (scope.kind === 'PRESTADOR') {
       values.push(scope.prestadorId, scope.disponivel);
       conditions.push(`(

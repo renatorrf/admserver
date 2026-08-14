@@ -5,8 +5,12 @@ import { conflict, invalidReference, notFound } from '../../shared/errors/app-er
 import type { PaginatedResult } from '../../shared/pagination/pagination';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditEntry, AuditMetadata } from '../auditoria/audit.types';
-import type { GerenteCentrosInput, UsuarioCreateInput, UsuarioListQuery, UsuarioUpdateInput } from './usuario.schemas';
-import { UsuarioRepository, type CentroCustoResumo, type UsuarioRecord } from './usuario.repository';
+import type {
+  GerenteCentrosInput, GerenteEscopoInput, UsuarioCreateInput, UsuarioListQuery, UsuarioUpdateInput,
+} from './usuario.schemas';
+import {
+  UsuarioRepository, type CentroCustoResumo, type GerenteEscopoResumo, type SetorResumo, type UsuarioRecord,
+} from './usuario.repository';
 
 export interface PasswordHasher {
   hash(password: string): Promise<string>;
@@ -21,8 +25,15 @@ export interface UsuarioStore {
   revokeSessions(executor: QueryExecutor, empresaId: string, usuarioId: string): Promise<void>;
   isLinkedProvider(executor: QueryExecutor, empresaId: string, usuarioId: string): Promise<boolean>;
   listManagerCenters(executor: QueryExecutor, empresaId: string, usuarioId: string): Promise<CentroCustoResumo[]>;
+  listManagerSectors(executor: QueryExecutor, empresaId: string, usuarioId: string): Promise<SetorResumo[]>;
   replaceManagerCenters(executor: QueryExecutor, empresaId: string, usuarioId: string, centerIds: string[]): Promise<void>;
+  replaceManagerSectors(executor: QueryExecutor, empresaId: string, usuarioId: string, sectorIds: string[]): Promise<void>;
   countActiveCenters(executor: QueryExecutor, empresaId: string, centerIds: string[]): Promise<number>;
+  countActiveSectors(executor: QueryExecutor, empresaId: string, sectorIds: string[]): Promise<number>;
+  countActiveCentersInSectors(
+    executor: QueryExecutor, empresaId: string, centerIds: string[], sectorIds: string[],
+  ): Promise<number>;
+  countVisibleEmployees(executor: QueryExecutor, empresaId: string, centerIds: string[]): Promise<number>;
 }
 
 export interface UsuarioAuditWriter {
@@ -87,10 +98,14 @@ export class UsuarioService {
       const previousCenters = current.perfil === 'GERENTE'
         ? await this.repository.listManagerCenters(client, auth.empresaId, id)
         : [];
+      const previousSectors = current.perfil === 'GERENTE'
+        ? await this.repository.listManagerSectors(client, auth.empresaId, id)
+        : [];
       const updated = await this.repository.update(client, auth.empresaId, id, input, senhaHash);
       if (!updated) throw notFound('Usuario');
       if (current.perfil === 'GERENTE' && updated.perfil !== 'GERENTE') {
         await this.repository.replaceManagerCenters(client, auth.empresaId, id, []);
+        await this.repository.replaceManagerSectors(client, auth.empresaId, id, []);
       }
       if (input.perfil !== undefined || input.senha !== undefined) {
         await this.repository.revokeSessions(client, auth.empresaId, id);
@@ -106,6 +121,13 @@ export class UsuarioService {
           ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
           entidade: 'gerente_centros_custo', entidadeId: id, acao: 'DESVINCULAR',
           dadosAnteriores: { centrosCusto: previousCenters }, dadosNovos: { centrosCusto: [] },
+        });
+      }
+      if (previousSectors.length > 0 && updated.perfil !== 'GERENTE') {
+        await this.audit.record(client, {
+          ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
+          entidade: 'gerente_setores', entidadeId: id, acao: 'DESVINCULAR',
+          dadosAnteriores: { setores: previousSectors }, dadosNovos: { setores: [] },
         });
       }
       return updated;
@@ -149,9 +171,12 @@ export class UsuarioService {
       if (user.perfil !== 'GERENTE' || !user.ativo) {
         throw conflict('Selecione um gerente ativo.');
       }
-      const validCenters = await this.repository.countActiveCenters(client, auth.empresaId, input.centroCustoIds);
+      const currentSectors = await this.repository.listManagerSectors(client, auth.empresaId, id);
+      const validCenters = await this.repository.countActiveCentersInSectors(
+        client, auth.empresaId, input.centroCustoIds, currentSectors.map((sector) => sector.id),
+      );
       if (validCenters !== input.centroCustoIds.length) {
-        throw invalidReference('Um ou mais centros de custo nao existem, estao inativos ou pertencem a outra empresa.');
+        throw invalidReference('Um ou mais centros nao pertencem aos setores autorizados do gerente.');
       }
       const previous = await this.repository.listManagerCenters(client, auth.empresaId, id);
       await this.repository.replaceManagerCenters(client, auth.empresaId, id, input.centroCustoIds);
@@ -160,6 +185,78 @@ export class UsuarioService {
         ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
         entidade: 'gerente_centros_custo', entidadeId: id, acao: 'SUBSTITUIR_VINCULOS',
         dadosAnteriores: { centrosCusto: previous }, dadosNovos: { centrosCusto: updated },
+      });
+      return updated;
+    });
+  }
+
+  async getManagerScope(auth: AuthContext, id: string): Promise<GerenteEscopoResumo> {
+    const user = await this.repository.findById(this.pool, auth.empresaId, id);
+    if (!user) throw notFound('Usuario');
+    if (user.perfil !== 'GERENTE') throw conflict('O usuario informado nao possui perfil GERENTE.');
+    const [setores, centrosCusto] = await Promise.all([
+      this.repository.listManagerSectors(this.pool, auth.empresaId, id),
+      this.repository.listManagerCenters(this.pool, auth.empresaId, id),
+    ]);
+    return {
+      setores, centrosCusto,
+      funcionariosVisiveis: await this.repository.countVisibleEmployees(
+        this.pool, auth.empresaId, centrosCusto.filter((center) => center.ativo).map((center) => center.id),
+      ),
+    };
+  }
+
+  async previewManagerScope(auth: AuthContext, input: GerenteEscopoInput): Promise<{ funcionariosVisiveis: number }> {
+    const validSectors = await this.repository.countActiveSectors(this.pool, auth.empresaId, input.setorIds);
+    if (validSectors !== input.setorIds.length) {
+      throw invalidReference('Um ou mais setores nao existem, estao inativos ou pertencem a outra empresa.');
+    }
+    const validCenters = await this.repository.countActiveCentersInSectors(
+      this.pool, auth.empresaId, input.centroCustoIds, input.setorIds,
+    );
+    if (validCenters !== input.centroCustoIds.length) {
+      throw invalidReference('Um ou mais centros nao pertencem aos setores selecionados.');
+    }
+    return {
+      funcionariosVisiveis: await this.repository.countVisibleEmployees(
+        this.pool, auth.empresaId, input.centroCustoIds,
+      ),
+    };
+  }
+
+  replaceManagerScope(
+    auth: AuthContext, id: string, input: GerenteEscopoInput, metadata: AuditMetadata,
+  ): Promise<GerenteEscopoResumo> {
+    return withTransaction(this.pool, async (client) => {
+      const user = await this.repository.findById(client, auth.empresaId, id);
+      if (!user) throw notFound('Usuario');
+      if (user.perfil !== 'GERENTE' || !user.ativo) throw conflict('Selecione um gerente ativo.');
+      const validSectors = await this.repository.countActiveSectors(client, auth.empresaId, input.setorIds);
+      if (validSectors !== input.setorIds.length) {
+        throw invalidReference('Um ou mais setores nao existem, estao inativos ou pertencem a outra empresa.');
+      }
+      const validCenters = await this.repository.countActiveCentersInSectors(
+        client, auth.empresaId, input.centroCustoIds, input.setorIds,
+      );
+      if (validCenters !== input.centroCustoIds.length) {
+        throw invalidReference('Um ou mais centros nao pertencem aos setores selecionados, estao inativos ou sao de outra empresa.');
+      }
+      const previous = {
+        setores: await this.repository.listManagerSectors(client, auth.empresaId, id),
+        centrosCusto: await this.repository.listManagerCenters(client, auth.empresaId, id),
+      };
+      await this.repository.replaceManagerCenters(client, auth.empresaId, id, []);
+      await this.repository.replaceManagerSectors(client, auth.empresaId, id, input.setorIds);
+      await this.repository.replaceManagerCenters(client, auth.empresaId, id, input.centroCustoIds);
+      const updated = {
+        setores: await this.repository.listManagerSectors(client, auth.empresaId, id),
+        centrosCusto: await this.repository.listManagerCenters(client, auth.empresaId, id),
+        funcionariosVisiveis: await this.repository.countVisibleEmployees(client, auth.empresaId, input.centroCustoIds),
+      };
+      await this.audit.record(client, {
+        ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
+        entidade: 'escopo_gerente', entidadeId: id, acao: 'SUBSTITUIR_VINCULOS',
+        dadosAnteriores: previous, dadosNovos: updated,
       });
       return updated;
     });

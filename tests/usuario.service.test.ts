@@ -6,7 +6,7 @@ import type { AuthContext } from '../src/modules/auth/auth.types';
 import type { AuditEntry } from '../src/modules/auditoria/audit.types';
 import type { PaginatedResult } from '../src/shared/pagination/pagination';
 import type { GerenteCentrosInput, UsuarioCreateInput, UsuarioListQuery, UsuarioUpdateInput } from '../src/modules/usuarios/usuario.schemas';
-import type { CentroCustoResumo, UsuarioRecord } from '../src/modules/usuarios/usuario.repository';
+import type { CentroCustoResumo, SetorResumo, UsuarioRecord } from '../src/modules/usuarios/usuario.repository';
 import { UsuarioService, type PasswordHasher, type UsuarioAuditWriter, type UsuarioStore } from '../src/modules/usuarios/usuario.service';
 
 const EMPRESA = '11111111-1111-4111-8111-111111111111';
@@ -49,8 +49,17 @@ class UserStore implements UsuarioStore {
   revokeSessions(): Promise<void> { this.revoked = true; return Promise.resolve(); }
   isLinkedProvider(): Promise<boolean> { return Promise.resolve(false); }
   listManagerCenters(): Promise<CentroCustoResumo[]> { return Promise.resolve([]); }
+  listManagerSectors(): Promise<SetorResumo[]> {
+    return Promise.resolve([{ id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', codigo: 'SET', nome: 'Setor', ativo: true }]);
+  }
   replaceManagerCenters(): Promise<void> { return Promise.resolve(); }
+  replaceManagerSectors(): Promise<void> { return Promise.resolve(); }
   countActiveCenters(_executor: QueryExecutor, _empresaId: string, ids: string[]): Promise<number> { return Promise.resolve(ids.length); }
+  countActiveSectors(_executor: QueryExecutor, _empresaId: string, ids: string[]): Promise<number> { return Promise.resolve(ids.length); }
+  countActiveCentersInSectors(
+    _executor: QueryExecutor, _empresaId: string, ids: string[], _sectorIds: string[],
+  ): Promise<number> { return Promise.resolve(ids.length); }
+  countVisibleEmployees(): Promise<number> { return Promise.resolve(0); }
 }
 
 class UserAudit implements UsuarioAuditWriter {
@@ -108,7 +117,7 @@ describe('UsuarioService', () => {
 
   it('valida todos os centros de custo dentro da empresa', async () => {
     const store = new UserStore();
-    store.countActiveCenters = () => Promise.resolve(0);
+    store.countActiveCentersInSectors = () => Promise.resolve(0);
     const service = new UsuarioService(fakeDatabase(), new UserAudit(), hasher, store);
     const input: GerenteCentrosInput = { centroCustoIds: ['cccccccc-cccc-4ccc-8ccc-cccccccccccc'] };
 

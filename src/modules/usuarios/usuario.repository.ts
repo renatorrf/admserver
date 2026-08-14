@@ -30,9 +30,20 @@ export type UsuarioRecord = Record<string, unknown> & {
 
 export type CentroCustoResumo = Record<string, unknown> & {
   id: string;
+  setorId: string | null;
   codigo: string;
   nome: string;
   ativo: boolean;
+};
+
+export type SetorResumo = Record<string, unknown> & {
+  id: string; codigo: string; nome: string; ativo: boolean;
+};
+
+export type GerenteEscopoResumo = {
+  setores: SetorResumo[];
+  centrosCusto: CentroCustoResumo[];
+  funcionariosVisiveis: number;
 };
 
 function mapUsuario(row: UsuarioRow): UsuarioRecord {
@@ -172,7 +183,7 @@ export class UsuarioRepository {
 
   async listManagerCenters(executor: QueryExecutor, empresaId: string, usuarioId: string): Promise<CentroCustoResumo[]> {
     const result = await executor.query<QueryResultRow>(
-      `SELECT c.id, c.codigo, c.nome, c.ativo
+      `SELECT c.id, c.setor_id, c.codigo, c.nome, c.ativo
          FROM admtaxi.gerente_centros_custo gcc
          JOIN admtaxi.centros_custo c
            ON c.empresa_id = gcc.empresa_id AND c.id = gcc.centro_custo_id
@@ -182,10 +193,39 @@ export class UsuarioRepository {
     );
     return result.rows.map((row) => ({
       id: row.id as string,
+      setorId: row.setor_id as string | null,
       codigo: row.codigo as string,
       nome: row.nome as string,
       ativo: row.ativo as boolean,
     }));
+  }
+
+  async listManagerSectors(executor: QueryExecutor, empresaId: string, usuarioId: string): Promise<SetorResumo[]> {
+    const result = await executor.query<QueryResultRow>(
+      `SELECT s.id,s.codigo,s.nome,s.ativo FROM admtaxi.gerente_setores gs
+       JOIN admtaxi.setores s ON s.empresa_id=gs.empresa_id AND s.id=gs.setor_id
+       WHERE gs.empresa_id=$1 AND gs.gerente_usuario_id=$2 ORDER BY s.codigo,s.nome`,
+      [empresaId, usuarioId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id as string, codigo: row.codigo as string, nome: row.nome as string, ativo: row.ativo as boolean,
+    }));
+  }
+
+  async replaceManagerSectors(
+    executor: QueryExecutor, empresaId: string, usuarioId: string, sectorIds: string[],
+  ): Promise<void> {
+    await executor.query(
+      'DELETE FROM admtaxi.gerente_setores WHERE empresa_id=$1 AND gerente_usuario_id=$2',
+      [empresaId, usuarioId],
+    );
+    if (sectorIds.length > 0) {
+      await executor.query(
+        `INSERT INTO admtaxi.gerente_setores (empresa_id,gerente_usuario_id,setor_id)
+         SELECT $1,$2,setor_id FROM unnest($3::uuid[]) AS setor_id`,
+        [empresaId, usuarioId, sectorIds],
+      );
+    }
   }
 
   async replaceManagerCenters(
@@ -212,6 +252,42 @@ export class UsuarioRepository {
     const result = await executor.query<{ total: string }>(
       `SELECT COUNT(*)::text AS total FROM admtaxi.centros_custo
         WHERE empresa_id = $1 AND id = ANY($2::uuid[]) AND ativo = TRUE`,
+      [empresaId, centerIds],
+    );
+    return Number(result.rows[0]?.total ?? 0);
+  }
+
+  async countActiveSectors(executor: QueryExecutor, empresaId: string, sectorIds: string[]): Promise<number> {
+    if (sectorIds.length === 0) return 0;
+    const result = await executor.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM admtaxi.setores
+       WHERE empresa_id=$1 AND id=ANY($2::uuid[]) AND ativo=TRUE`,
+      [empresaId, sectorIds],
+    );
+    return Number(result.rows[0]?.total ?? 0);
+  }
+
+  async countActiveCentersInSectors(
+    executor: QueryExecutor, empresaId: string, centerIds: string[], sectorIds: string[],
+  ): Promise<number> {
+    if (centerIds.length === 0) return 0;
+    const result = await executor.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM admtaxi.centros_custo c
+       JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
+       WHERE c.empresa_id=$1 AND c.id=ANY($2::uuid[]) AND c.setor_id=ANY($3::uuid[])
+         AND c.ativo=TRUE AND s.ativo=TRUE`,
+      [empresaId, centerIds, sectorIds],
+    );
+    return Number(result.rows[0]?.total ?? 0);
+  }
+
+  async countVisibleEmployees(
+    executor: QueryExecutor, empresaId: string, centerIds: string[],
+  ): Promise<number> {
+    if (centerIds.length === 0) return 0;
+    const result = await executor.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM admtaxi.funcionarios
+       WHERE empresa_id=$1 AND centro_custo_id=ANY($2::uuid[]) AND ativo=TRUE`,
       [empresaId, centerIds],
     );
     return Number(result.rows[0]?.total ?? 0);

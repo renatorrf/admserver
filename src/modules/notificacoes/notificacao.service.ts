@@ -140,6 +140,27 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   }
 
   private async sendRequesterRide(ride: CorridaRecord, event: RideNotificationEvent): Promise<void> {
+    const authorized = await this.database.query<{ id: string }>(
+      `SELECT u.id FROM admtaxi.usuarios u
+       WHERE u.empresa_id=$1 AND u.id=$2 AND u.ativo=TRUE AND (
+         u.perfil='GESTOR' OR (
+           u.perfil='GERENTE' AND EXISTS (
+             SELECT 1 FROM admtaxi.gerente_centros_custo gcc
+             JOIN admtaxi.centros_custo cc
+               ON cc.empresa_id=gcc.empresa_id AND cc.id=gcc.centro_custo_id AND cc.ativo=TRUE
+             JOIN admtaxi.setores s
+               ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id AND s.ativo=TRUE
+             JOIN admtaxi.gerente_setores gs
+               ON gs.empresa_id=gcc.empresa_id AND gs.gerente_usuario_id=gcc.gerente_usuario_id
+              AND gs.setor_id=cc.setor_id
+             WHERE gcc.empresa_id=u.empresa_id AND gcc.gerente_usuario_id=u.id
+               AND gcc.centro_custo_id=$3
+           )
+         )
+       )`,
+      [ride.empresaId, ride.solicitanteUsuarioId, ride.centroCustoId],
+    );
+    if (authorized.rowCount !== 1) return;
     const message = this.rideMessage(event);
     await this.sendRecipient({
       empresaId: ride.empresaId,
@@ -154,8 +175,14 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   }
 
   private async sendEmployeeRide(ride: CorridaRecord, event: RideNotificationEvent | 'SOLICITADA'): Promise<void> {
-    if (!this.employeeUsers) return;
-    const userId = await this.employeeUsers.resolveEmployeeUser(ride.empresaId, ride.funcionarioId);
+    const userId = this.employeeUsers
+      ? await this.employeeUsers.resolveEmployeeUser(ride.empresaId, ride.funcionarioId)
+      : (await this.database.query<UserRow>(
+        `SELECT f.usuario_id FROM admtaxi.funcionarios f
+         JOIN admtaxi.usuarios u ON u.empresa_id=f.empresa_id AND u.id=f.usuario_id
+         WHERE f.empresa_id=$1 AND f.id=$2 AND f.ativo=TRUE AND u.ativo=TRUE`,
+        [ride.empresaId, ride.funcionarioId],
+      )).rows[0]?.usuario_id ?? null;
     if (!userId) return;
     const message = event === 'SOLICITADA'
       ? { title: 'Nova corrida solicitada', body: 'Uma nova corrida foi solicitada para você.' }

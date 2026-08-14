@@ -70,7 +70,9 @@ describe('NotificacaoService', () => {
 
     await vi.waitFor(() => expect(query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO admtaxi.notificacoes_push'))).toHaveLength(2));
     expect(query).toHaveBeenCalledWith(expect.stringContaining('p.ativo = TRUE AND p.disponivel = TRUE'), [auth.empresaId]);
-    expect(query.mock.calls.some(([sql]) => String(sql).includes('funcionarios'))).toBe(false);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('FROM admtaxi.funcionarios f'), [
+      auth.empresaId, ride.funcionarioId,
+    ]);
   });
 
   it('restricts test notifications to managers outside development', async () => {

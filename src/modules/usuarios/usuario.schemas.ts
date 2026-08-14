@@ -29,8 +29,15 @@ export const gerenteCentrosSchema = z.object({
   centroCustoIds: z.array(z.string().uuid('Centro de custo invalido.')).max(100)
     .refine((ids) => new Set(ids).size === ids.length, 'Nao repita centros de custo.'),
 }).strict();
+export const gerenteEscopoSchema = z.object({
+  setorIds: z.array(z.string().uuid('Setor invalido.')).max(100)
+    .refine((ids) => new Set(ids).size === ids.length, 'Nao repita setores.'),
+  centroCustoIds: z.array(z.string().uuid('Centro de custo invalido.')).max(100)
+    .refine((ids) => new Set(ids).size === ids.length, 'Nao repita centros de custo.'),
+}).strict();
 
 export type UsuarioCreateInput = z.infer<typeof usuarioCreateSchema>;
 export type UsuarioUpdateInput = z.infer<typeof usuarioUpdateSchema>;
 export type UsuarioListQuery = z.infer<typeof usuarioListSchema>;
 export type GerenteCentrosInput = z.infer<typeof gerenteCentrosSchema>;
+export type GerenteEscopoInput = z.infer<typeof gerenteEscopoSchema>;

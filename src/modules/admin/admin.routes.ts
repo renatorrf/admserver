@@ -16,6 +16,7 @@ import { FuncionarioUnificadoService } from '../funcionarios/funcionario-unifica
 import { prestadorCreateSchema, prestadorDefinition, prestadorListSchema, prestadorUpdateSchema } from '../prestadores/prestador.catalog';
 import { createPrestadorUnificadoRouter } from '../prestadores/prestador-unificado.routes';
 import { PrestadorUnificadoService } from '../prestadores/prestador-unificado.service';
+import { setorCreateSchema, setorDefinition, setorListSchema, setorUpdateSchema } from '../setores/setor.catalog';
 import { createUsuarioRouter } from '../usuarios/usuario.routes';
 import { UsuarioService } from '../usuarios/usuario.service';
 import { veiculoCreateSchema, veiculoDefinition, veiculoListSchema, veiculoUpdateSchema } from '../veiculos/veiculo.catalog';
@@ -36,6 +37,10 @@ export function createAdminRouter(pool: Pool, tokens: TokenService): Router {
   router.use('/veiculos', createCatalogRouter(
     new CatalogService(pool, audit, veiculoDefinition),
     { create: veiculoCreateSchema, update: veiculoUpdateSchema, list: veiculoListSchema },
+  ));
+  router.use('/setores', createCatalogRouter(
+    new CatalogService(pool, audit, setorDefinition),
+    { create: setorCreateSchema, update: setorUpdateSchema, list: setorListSchema },
   ));
   router.use('/centros-custo', createCatalogRouter(
     new CatalogService(pool, audit, centroCustoDefinition),

@@ -59,6 +59,7 @@ function catalogPaths(tag: string, label: string) {
 const usuarios = catalogPaths('Usuarios', 'usuarios');
 const prestadores = catalogPaths('Prestadores', 'prestadores');
 const veiculos = catalogPaths('Veiculos', 'veiculos');
+const setores = catalogPaths('Setores', 'setores');
 const centrosCusto = catalogPaths('Centros de custo', 'centros de custo');
 const funcionarios = catalogPaths('Funcionarios', 'funcionarios');
 
@@ -92,7 +93,7 @@ export const openApiDocument = {
   },
   tags: [
     { name: 'Auth' }, { name: 'Health' }, { name: 'Empresa' }, { name: 'Usuarios' },
-    { name: 'Prestadores' }, { name: 'Cadastros unificados' }, { name: 'Veiculos' }, { name: 'Centros de custo' },
+    { name: 'Prestadores' }, { name: 'Cadastros unificados' }, { name: 'Veiculos' }, { name: 'Setores' }, { name: 'Centros de custo' },
     { name: 'Funcionarios' }, { name: 'Auditoria' }, { name: 'Operacao' },
     { name: 'Corridas' }, { name: 'Localizacoes' }, { name: 'Dashboard' }, { name: 'Relatorios' },
     { name: 'Enderecos' }, { name: 'Notificacoes' }, { name: 'Dispositivos' }, { name: 'Provisionamento' },
@@ -298,6 +299,25 @@ export const openApiDocument = {
         responses: { '200': { description: 'Veiculos ativos no escopo do tenant' }, '403': { description: 'Acesso restrito a GESTOR' } },
       },
     },
+    '/usuarios/escopo/preview': {
+      post: {
+        tags: ['Usuarios'], summary: 'Calcula a visibilidade de um escopo de gerente', security: bearerSecurity,
+        description: 'Valida setores e centros da empresa autenticada sem alterar vinculos.',
+        responses: { '200': { description: 'Quantidade de funcionarios visiveis' }, '422': { description: 'Escopo invalido' } },
+      },
+    },
+    '/usuarios/{id}/escopo': {
+      parameters: [idParameter],
+      get: {
+        tags: ['Usuarios'], summary: 'Consulta setores e centros autorizados do gerente', security: bearerSecurity,
+        responses: { '200': { description: 'Escopo e quantidade de funcionarios visiveis' } },
+      },
+      put: {
+        tags: ['Usuarios'], summary: 'Substitui o escopo operacional do gerente', security: bearerSecurity,
+        description: 'A operacao valida mesma empresa, setores ativos e centros pertencentes aos setores selecionados.',
+        responses: { '200': { description: 'Escopo substituido e auditado' }, '422': { description: 'Setor ou centro invalido' } },
+      },
+    },
     '/cadastros-unificados/prestadores': {
       post: {
         tags: ['Cadastros unificados'], summary: 'Cria acesso, prestador e vinculo de veiculo em uma transacao', security: bearerSecurity,
@@ -353,6 +373,10 @@ export const openApiDocument = {
     '/veiculos/{id}': veiculos.item,
     '/veiculos/{id}/inativar': veiculos.inativar,
     '/veiculos/{id}/reativar': veiculos.reativar,
+    '/setores': setores.collection,
+    '/setores/{id}': setores.item,
+    '/setores/{id}/inativar': setores.inativar,
+    '/setores/{id}/reativar': setores.reativar,
     '/centros-custo': centrosCusto.collection,
     '/centros-custo/{id}': centrosCusto.item,
     '/centros-custo/{id}/inativar': centrosCusto.inativar,
@@ -388,6 +412,19 @@ export const openApiDocument = {
         responses: { '200': { description: 'Funcionarios ativos no escopo do perfil' }, '403': { description: 'Perfil nao permitido' } },
       },
     },
+    '/operacao/escopo': {
+      get: {
+        tags: ['Operacao'], summary: 'Consulta o escopo operacional autenticado', security: bearerSecurity,
+        description: 'GESTOR recebe a empresa inteira. GERENTE recebe somente setores, centros e quantidade de funcionarios autorizados.',
+        responses: { '200': { description: 'Escopo operacional atual' }, '403': { description: 'Perfil nao permitido' } },
+      },
+    },
+    '/operacao/setores': {
+      get: {
+        tags: ['Operacao'], summary: 'Lista setores no escopo autenticado', security: bearerSecurity,
+        responses: { '200': { description: 'Setores ativos permitidos' }, '403': { description: 'Perfil nao permitido' } },
+      },
+    },
     '/operacao/funcionarios/pesquisa': {
       get: {
         tags: ['Operacao'], summary: 'Pesquisa funcionarios com paginacao', security: bearerSecurity,
@@ -411,7 +448,7 @@ export const openApiDocument = {
       get: {
         tags: ['Operacao'], summary: 'Lista prestadores para filtros operacionais', security: bearerSecurity,
         description: 'Perfis permitidos: GERENTE e GESTOR.',
-        responses: { '200': { description: 'Prestadores ativos da empresa' }, '403': { description: 'Perfil nao permitido' } },
+        responses: { '200': { description: 'Gestor recebe a empresa; gerente recebe prestadores presentes em corridas do escopo' }, '403': { description: 'Perfil nao permitido' } },
       },
     },
     '/operacao/prestadores/pesquisa': {

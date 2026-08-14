@@ -10,7 +10,7 @@ export type CatalogRecord = Record<string, unknown> & {
 };
 
 export type CatalogDefinition = {
-  table: 'prestadores' | 'veiculos' | 'centros_custo' | 'funcionarios';
+  table: 'prestadores' | 'veiculos' | 'setores' | 'centros_custo' | 'funcionarios';
   entity: string;
   entityLabel: string;
   orderBy: string;

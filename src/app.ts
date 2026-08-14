@@ -91,6 +91,6 @@ export function createApp(dependencies: AppDependencies): Express {
   app.get('/api/openapi.json', (_request, response) => response.json(openApiDocument));
 
   app.use(notFoundHandler);
-  app.use(createErrorHandler(logger));
+  app.use(createErrorHandler(logger, pool));
   return app;
 }

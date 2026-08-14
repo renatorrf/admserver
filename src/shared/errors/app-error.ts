@@ -13,8 +13,8 @@ export class AppError extends Error {
 export const unauthorized = (message = 'Nao autorizado.'): AppError =>
   new AppError(401, 'NAO_AUTORIZADO', message);
 
-export const forbidden = (): AppError =>
-  new AppError(403, 'ACESSO_NEGADO', 'Voce nao tem permissao para realizar esta acao.');
+export const forbidden = (message = 'Voce nao tem permissao para realizar esta acao.'): AppError =>
+  new AppError(403, 'ACESSO_NEGADO', message);
 
 export const notFound = (entity = 'Registro'): AppError =>
   new AppError(404, 'REGISTRO_NAO_ENCONTRADO', `${entity} nao encontrado.`);

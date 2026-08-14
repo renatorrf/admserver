@@ -2,8 +2,12 @@ import type { Database } from '../../db/pool';
 import type { AuthContext } from '../auth/auth.types';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
 import type { FuncionarioLookupQuery, FuncionarioSearchQuery, PrestadorSearchQuery } from './operacao.schemas';
+import {
+  addCenterScope, OperationalScopeService, type OperationalScope, type OperationalScopeResolver,
+} from '../escopo/operational-scope.service';
 
-export type CentroCustoLookup = { id: string; codigo: string; nome: string };
+export type SetorLookup = { id: string; codigo: string; nome: string };
+export type CentroCustoLookup = { id: string; setorId: string; codigo: string; nome: string };
 export type FuncionarioLookup = {
   id: string;
   centroCustoId: string;
@@ -28,25 +32,45 @@ export type PrestadorSearchResult = PrestadorLookup & {
   cpf: string; telefone: string; numeroCnh: string; disponivel: boolean; ativo: boolean;
 };
 export type SolicitanteLookup = { id: string; nome: string; perfil: 'GERENTE' | 'GESTOR' };
+export type OperationalScopeSummary = {
+  perfil: 'GERENTE' | 'GESTOR'; setores: SetorLookup[]; centrosCusto: CentroCustoLookup[];
+  funcionariosVisiveis: number;
+};
 
 export class OperacaoRepository {
-  constructor(private readonly database: Database) {}
+  private readonly scopeResolver: OperationalScopeResolver;
+
+  constructor(private readonly database: Database, scopeResolver?: OperationalScopeResolver) {
+    this.scopeResolver = scopeResolver ?? new OperationalScopeService(database);
+  }
+
+  async listSectors(auth: AuthContext): Promise<SetorLookup[]> {
+    const scope = await this.scopeResolver.resolve(auth);
+    const values: unknown[] = [auth.empresaId];
+    const conditions = ['s.empresa_id = $1', 's.ativo = TRUE'];
+    if (scope.kind === 'GERENTE') {
+      values.push(scope.setorIds);
+      conditions.push(`s.id = ANY($${values.length}::uuid[])`);
+    }
+    const result = await this.database.query<SetorLookup>(
+      `SELECT s.id, s.codigo, s.nome FROM admtaxi.setores s
+        WHERE ${conditions.join(' AND ')} ORDER BY s.codigo, s.nome`, values,
+    );
+    return result.rows;
+  }
 
   async listCenters(auth: AuthContext): Promise<CentroCustoLookup[]> {
-    const managerFilter = auth.perfil === 'GERENTE'
-      ? `AND EXISTS (
-           SELECT 1 FROM admtaxi.gerente_centros_custo gcc
-            WHERE gcc.empresa_id = c.empresa_id AND gcc.centro_custo_id = c.id
-              AND gcc.gerente_usuario_id = $2
-         )`
-      : '';
-    const values = auth.perfil === 'GERENTE' ? [auth.empresaId, auth.usuarioId] : [auth.empresaId];
+    const scope = await this.scopeResolver.resolve(auth);
+    const values: unknown[] = [auth.empresaId];
+    const conditions = ['c.empresa_id = $1', 'c.ativo = TRUE', 's.ativo = TRUE'];
+    addCenterScope(conditions, values, scope, 'c.id');
     const result = await this.database.query<{
-      id: string; codigo: string; nome: string;
+      id: string; setorId: string; codigo: string; nome: string;
     }>(
-      `SELECT c.id, c.codigo, c.nome
+      `SELECT c.id, c.setor_id AS "setorId", c.codigo, c.nome
          FROM admtaxi.centros_custo c
-        WHERE c.empresa_id = $1 AND c.ativo = TRUE ${managerFilter}
+         JOIN admtaxi.setores s ON s.empresa_id = c.empresa_id AND s.id = c.setor_id
+        WHERE ${conditions.join(' AND ')}
         ORDER BY c.codigo, c.nome`,
       values,
     );
@@ -54,16 +78,10 @@ export class OperacaoRepository {
   }
 
   async listEmployees(auth: AuthContext, query: FuncionarioLookupQuery): Promise<FuncionarioLookup[]> {
+    const scope = await this.scopeResolver.resolve(auth);
     const values: unknown[] = [auth.empresaId];
-    const conditions = ['f.empresa_id = $1', 'f.ativo = TRUE', 'c.ativo = TRUE'];
-    if (auth.perfil === 'GERENTE') {
-      values.push(auth.usuarioId);
-      conditions.push(`EXISTS (
-        SELECT 1 FROM admtaxi.gerente_centros_custo gcc
-         WHERE gcc.empresa_id = f.empresa_id AND gcc.centro_custo_id = f.centro_custo_id
-           AND gcc.gerente_usuario_id = $${values.length}
-      )`);
-    }
+    const conditions = ['f.empresa_id = $1', 'f.ativo = TRUE', 'c.ativo = TRUE', 's.ativo = TRUE'];
+    addCenterScope(conditions, values, scope, 'f.centro_custo_id');
     if (query.centroCustoId) {
       values.push(query.centroCustoId);
       conditions.push(`f.centro_custo_id = $${values.length}`);
@@ -83,6 +101,7 @@ export class OperacaoRepository {
          FROM admtaxi.funcionarios f
          JOIN admtaxi.centros_custo c
            ON c.empresa_id = f.empresa_id AND c.id = f.centro_custo_id
+         JOIN admtaxi.setores s ON s.empresa_id = c.empresa_id AND s.id = c.setor_id
         WHERE ${conditions.join(' AND ')}
         ORDER BY f.nome, f.id`,
       values,
@@ -110,20 +129,14 @@ export class OperacaoRepository {
   }
 
   async searchEmployees(auth: AuthContext, query: FuncionarioSearchQuery): Promise<PaginatedResult<FuncionarioLookup & { cpf: string | null; ativo: boolean }>> {
+    const scope = await this.scopeResolver.resolve(auth);
     const values: unknown[] = [auth.empresaId];
-    const conditions = ['f.empresa_id = $1'];
+    const conditions = ['f.empresa_id = $1', 'c.ativo = TRUE', 's.ativo = TRUE'];
     if (query.ativo !== undefined) {
       values.push(query.ativo);
       conditions.push(`f.ativo = $${values.length}`);
     }
-    if (auth.perfil === 'GERENTE') {
-      values.push(auth.usuarioId);
-      conditions.push(`EXISTS (
-        SELECT 1 FROM admtaxi.gerente_centros_custo gcc
-         WHERE gcc.empresa_id = f.empresa_id AND gcc.centro_custo_id = f.centro_custo_id
-           AND gcc.gerente_usuario_id = $${values.length}
-      )`);
-    }
+    addCenterScope(conditions, values, scope, 'f.centro_custo_id');
     if (query.centroCustoId) {
       values.push(query.centroCustoId);
       conditions.push(`f.centro_custo_id = $${values.length}`);
@@ -135,7 +148,10 @@ export class OperacaoRepository {
     }
     const where = conditions.join(' AND ');
     const count = await this.database.query<{ total: string }>(
-      `SELECT COUNT(*)::text AS total FROM admtaxi.funcionarios f WHERE ${where}`, values,
+      `SELECT COUNT(*)::text AS total FROM admtaxi.funcionarios f
+       JOIN admtaxi.centros_custo c ON c.empresa_id=f.empresa_id AND c.id=f.centro_custo_id
+       JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
+       WHERE ${where}`, values,
     );
     const total = Number(count.rows[0]?.total ?? 0);
     values.push(query.limite, (query.pagina - 1) * query.limite);
@@ -146,7 +162,10 @@ export class OperacaoRepository {
     }>(
       `SELECT f.id, f.centro_custo_id, f.nome, f.matricula, f.cpf, f.telefone, f.endereco_padrao,
               f.latitude_padrao::text, f.longitude_padrao::text, f.ativo
-         FROM admtaxi.funcionarios f WHERE ${where}
+         FROM admtaxi.funcionarios f
+         JOIN admtaxi.centros_custo c ON c.empresa_id=f.empresa_id AND c.id=f.centro_custo_id
+         JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
+        WHERE ${where}
         ORDER BY f.ativo DESC, f.nome, f.id LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values,
     );
@@ -174,10 +193,19 @@ export class OperacaoRepository {
   }
 
   async listProviders(auth: AuthContext): Promise<PrestadorLookup[]> {
+    const scope = await this.scopeResolver.resolve(auth);
+    const values: unknown[] = [auth.empresaId];
+    const conditions = ['p.empresa_id = $1', 'p.ativo = TRUE'];
+    if (scope.kind === 'GERENTE') {
+      values.push(scope.centroCustoIds);
+      conditions.push(`EXISTS (SELECT 1 FROM admtaxi.corridas c
+        WHERE c.empresa_id=p.empresa_id AND c.prestador_id=p.id
+          AND c.centro_custo_id=ANY($${values.length}::uuid[]))`);
+    }
     const result = await this.database.query<PrestadorLookup>(
-      `SELECT id, nome FROM admtaxi.prestadores
-        WHERE empresa_id = $1 AND ativo = TRUE ORDER BY nome, id`,
-      [auth.empresaId],
+      `SELECT p.id, p.nome FROM admtaxi.prestadores p
+        WHERE ${conditions.join(' AND ')} ORDER BY p.nome, p.id`,
+      values,
     );
     return result.rows;
   }
@@ -229,6 +257,49 @@ export class OperacaoRepository {
         WHERE empresa_id = $1 AND ativo = TRUE AND perfil IN ('GERENTE','GESTOR') ${userFilter}
         ORDER BY nome, id`,
       values,
+    );
+    return result.rows;
+  }
+
+  async getScopeSummary(auth: AuthContext): Promise<OperationalScopeSummary> {
+    const scope = await this.scopeResolver.resolve(auth);
+    const [setores, centrosCusto] = await Promise.all([this.listSectorsFromScope(scope), this.listCentersFromScope(scope)]);
+    const values: unknown[] = [auth.empresaId];
+    const conditions = ['f.empresa_id = $1', 'f.ativo = TRUE', 'c.ativo = TRUE', 's.ativo = TRUE'];
+    addCenterScope(conditions, values, scope, 'f.centro_custo_id');
+    const count = await this.database.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM admtaxi.funcionarios f
+       JOIN admtaxi.centros_custo c ON c.empresa_id=f.empresa_id AND c.id=f.centro_custo_id
+       JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
+       WHERE ${conditions.join(' AND ')}`, values,
+    );
+    return {
+      perfil: scope.kind, setores, centrosCusto,
+      funcionariosVisiveis: Number(count.rows[0]?.total ?? 0),
+    };
+  }
+
+  private async listSectorsFromScope(scope: OperationalScope): Promise<SetorLookup[]> {
+    const values: unknown[] = [scope.empresaId];
+    const conditions = ['empresa_id = $1', 'ativo = TRUE'];
+    if (scope.kind === 'GERENTE') {
+      values.push(scope.setorIds);
+      conditions.push(`id = ANY($${values.length}::uuid[])`);
+    }
+    const result = await this.database.query<SetorLookup>(
+      `SELECT id,codigo,nome FROM admtaxi.setores WHERE ${conditions.join(' AND ')} ORDER BY codigo,nome`, values,
+    );
+    return result.rows;
+  }
+
+  private async listCentersFromScope(scope: OperationalScope): Promise<CentroCustoLookup[]> {
+    const values: unknown[] = [scope.empresaId];
+    const conditions = ['c.empresa_id=$1', 'c.ativo=TRUE', 's.ativo=TRUE'];
+    addCenterScope(conditions, values, scope, 'c.id');
+    const result = await this.database.query<CentroCustoLookup>(
+      `SELECT c.id,c.setor_id AS "setorId",c.codigo,c.nome FROM admtaxi.centros_custo c
+       JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
+       WHERE ${conditions.join(' AND ')} ORDER BY c.codigo,c.nome`, values,
     );
     return result.rows;
   }

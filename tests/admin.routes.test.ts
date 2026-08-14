@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import pino from 'pino';
 import request from 'supertest';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app';
 import type { AppConfig } from '../src/config/env';
@@ -30,6 +30,8 @@ function app() {
 }
 
 describe('rotas administrativas', () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it('bloqueia gerente antes de consultar o banco', async () => {
     const token = tokens.issueTokens({
       usuarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -40,7 +42,8 @@ describe('rotas administrativas', () => {
     const response = await request(app()).get('/api/v1/usuarios').set('Authorization', `Bearer ${token}`);
 
     expect(response.status).toBe(403);
-    expect(pool.query).not.toHaveBeenCalled();
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('controle_acesso'), expect.any(Array));
+    expect(pool.query).not.toHaveBeenCalledWith(expect.stringContaining('SELECT'), expect.anything());
   });
 
   it('rejeita empresa_id informado pelo cliente', async () => {

@@ -19,6 +19,9 @@ import type {
 import { assertTransition, isActiveRide } from './state-machine';
 import type { CorridaEventoRecord, CorridaRecord, PrestadorContext, StatusCorrida } from './corrida.types';
 import type { CorridaNotificationPublisher } from '../notificacoes/notificacao.service';
+import {
+  centerAllowed, OperationalScopeService, type OperationalScopeResolver,
+} from '../escopo/operational-scope.service';
 
 export interface CorridaAuditWriter {
   record(executor: QueryExecutor, entry: AuditEntry): Promise<void>;
@@ -27,7 +30,7 @@ export interface CorridaAuditWriter {
 export interface CorridaStore {
   list(empresaId: string, scope: CorridaScope, query: CorridaListQuery): Promise<PaginatedResult<CorridaRecord>>;
   findAccessible(executor: QueryExecutor, empresaId: string, id: string, scope: CorridaScope): Promise<CorridaRecord | null>;
-  findForUpdate(executor: QueryExecutor, empresaId: string, id: string): Promise<CorridaRecord | null>;
+  findForUpdate(executor: QueryExecutor, empresaId: string, id: string, scope: CorridaScope): Promise<CorridaRecord | null>;
   create(executor: QueryExecutor, empresaId: string, usuarioId: string, input: CorridaCreateInput): Promise<CorridaRecord>;
   updateAssignment(executor: QueryExecutor, empresaId: string, id: string, prestadorId: string, veiculoId: string | null): Promise<CorridaRecord>;
   changeStatus(executor: QueryExecutor, empresaId: string, id: string, status: StatusCorrida, patch?: CorridaPatch): Promise<CorridaRecord>;
@@ -55,6 +58,7 @@ export type DisponibilidadeResult = {
 
 export class CorridaService {
   private readonly repository: CorridaStore;
+  private readonly scopeResolver: OperationalScopeResolver;
 
   constructor(
     private readonly database: Database,
@@ -62,8 +66,10 @@ export class CorridaService {
     repository?: CorridaStore,
     private readonly realtime?: CorridaRealtimePublisher,
     private readonly notifications?: CorridaNotificationPublisher,
+    scopeResolver?: OperationalScopeResolver,
   ) {
     this.repository = repository ?? new CorridaRepository(database);
+    this.scopeResolver = scopeResolver ?? new OperationalScopeService(database);
   }
 
   async list(auth: AuthContext, query: CorridaListQuery): Promise<PaginatedResult<CorridaRecord>> {
@@ -91,12 +97,12 @@ export class CorridaService {
       throw conflict('A corrida agendada deve possuir data futura.');
     }
     return this.withRealtime(withTransaction(this.database, async (client) => {
+      const scope = await this.scopeResolver.resolve(auth, client);
+      if (!centerAllowed(scope, input.centroCustoId)) {
+        throw forbidden('Voce nao possui permissao para solicitar corridas para este funcionario ou centro de custo.');
+      }
       if (!await this.repository.validateEmployeeAndCenter(client, auth.empresaId, input.funcionarioId, input.centroCustoId)) {
         throw invalidReference('Funcionario e centro de custo devem estar ativos, vinculados e pertencer a mesma empresa.');
-      }
-      if (auth.perfil === 'GERENTE'
-        && !await this.repository.managerCanAccessCenter(client, auth.empresaId, auth.usuarioId, input.centroCustoId)) {
-        throw forbidden();
       }
       const created = await this.repository.create(client, auth.empresaId, auth.usuarioId, input);
       await this.repository.createEvent(
@@ -288,9 +294,6 @@ export class CorridaService {
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
       if (auth.perfil === 'GERENTE') {
-        if (!await this.repository.managerCanAccessCenter(client, auth.empresaId, auth.usuarioId, current.centroCustoId)) {
-          throw forbidden();
-        }
         if (current.status !== 'SOLICITADA' && current.status !== 'OFERTADA') {
           throw conflict('O gerente so pode cancelar corridas solicitadas ou ofertadas.');
         }
@@ -384,10 +387,17 @@ export class CorridaService {
     return ride;
   }
 
-  private async resolveScope(auth: AuthContext): Promise<CorridaScope> {
-    if (auth.perfil === 'GESTOR') return { kind: 'GESTOR' };
-    if (auth.perfil === 'GERENTE') return { kind: 'GERENTE', usuarioId: auth.usuarioId };
-    const provider = await this.requireProviderContext(this.database, auth, false);
+  private async resolveScope(auth: AuthContext, executor: QueryExecutor = this.database): Promise<CorridaScope> {
+    if (auth.perfil === 'GESTOR' || auth.perfil === 'GERENTE') {
+      const scope = await this.scopeResolver.resolve(auth, executor);
+      return scope.kind === 'GESTOR'
+        ? { kind: 'GESTOR' }
+        : {
+          kind: 'GERENTE', usuarioId: scope.usuarioId,
+          setorIds: scope.setorIds, centroCustoIds: scope.centroCustoIds,
+        };
+    }
+    const provider = await this.requireProviderContext(executor, auth, false);
     return { kind: 'PRESTADOR', prestadorId: provider.id, disponivel: provider.disponivel };
   }
 
@@ -402,7 +412,7 @@ export class CorridaService {
   }
 
   private async requireLockedRide(executor: QueryExecutor, auth: AuthContext, id: string): Promise<CorridaRecord> {
-    const ride = await this.repository.findForUpdate(executor, auth.empresaId, id);
+    const ride = await this.repository.findForUpdate(executor, auth.empresaId, id, await this.resolveScope(auth, executor));
     if (!ride) throw notFound('Corrida');
     return ride;
   }

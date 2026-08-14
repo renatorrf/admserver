@@ -12,6 +12,13 @@ import type { OperacaoService } from './operacao.service';
 export function createOperacaoRouter(service: OperacaoService): Router {
   const router = Router();
 
+  router.get('/escopo', authorize('GERENTE', 'GESTOR'), asyncHandler(async (request, response) => {
+    response.status(200).json({ data: await service.getScopeSummary(requireAuthContext(request)) });
+  }));
+  router.get('/setores', authorize('GERENTE', 'GESTOR'), asyncHandler(async (request, response) => {
+    response.status(200).json({ data: await service.listSectors(requireAuthContext(request)) });
+  }));
+
   router.get('/centros-custo', authorize('GERENTE', 'GESTOR'), asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.listCenters(requireAuthContext(request)) });
   }));
@@ -46,7 +53,7 @@ export function createOperacaoRouter(service: OperacaoService): Router {
   }));
   router.get(
     '/prestadores/pesquisa',
-    authorize('GERENTE', 'GESTOR'),
+    authorize('GESTOR'),
     validateQuery(prestadorSearchSchema),
     asyncHandler(async (request, response) => {
       response.status(200).json(await service.searchProviders(

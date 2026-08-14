@@ -3,6 +3,9 @@ import type { QueryResultRow } from 'pg';
 import type { Database } from '../../db/pool';
 import { paginate } from '../../shared/pagination/pagination';
 import type { AuthContext } from '../auth/auth.types';
+import {
+  addCenterScope, OperationalScopeService, type OperationalScope, type OperationalScopeResolver,
+} from '../escopo/operational-scope.service';
 import type { RelatorioExportQuery, RelatorioFilters, RelatorioListQuery } from './relatorio.schemas';
 import type { CustoAgrupado, RelatorioCorrida, RelatorioResumo } from './relatorio.types';
 
@@ -27,10 +30,14 @@ const select = `SELECT c.id, c.solicitada_em AS "solicitadaEm", c.agendada_para 
  LEFT JOIN admtaxi.prestadores p ON p.empresa_id = c.empresa_id AND p.id = c.prestador_id`;
 
 export class RelatorioRepository {
-  constructor(private readonly database: Database) {}
+  private readonly scopeResolver: OperationalScopeResolver;
+
+  constructor(private readonly database: Database, scopeResolver?: OperationalScopeResolver) {
+    this.scopeResolver = scopeResolver ?? new OperationalScopeService(database);
+  }
 
   async list(auth: AuthContext, query: RelatorioListQuery) {
-    const { where, values } = this.buildWhere(auth, query);
+    const { where, values } = this.buildWhere(await this.scopeResolver.resolve(auth), query);
     const count = await this.database.query<{ total: string }>(
       `SELECT COUNT(*)::text AS total FROM admtaxi.corridas c WHERE ${where}`,
       values,
@@ -52,7 +59,7 @@ export class RelatorioRepository {
   }
 
   async export(auth: AuthContext, query: RelatorioExportQuery): Promise<RelatorioCorrida[]> {
-    const { where, values } = this.buildWhere(auth, query);
+    const { where, values } = this.buildWhere(await this.scopeResolver.resolve(auth), query);
     const result = await this.database.query<ReportRow>(
       `${select} WHERE ${where}
        ORDER BY COALESCE(c.finalizada_em, c.agendada_para, c.solicitada_em) DESC, c.id DESC
@@ -103,16 +110,11 @@ export class RelatorioRepository {
     return result.rows.map((row) => ({ ...row, corridas: Number(row.corridas) }));
   }
 
-  private buildWhere(auth: AuthContext, query: RelatorioFilters): { where: string; values: unknown[] } {
-    const values: unknown[] = [auth.empresaId];
+  private buildWhere(scope: OperationalScope, query: RelatorioFilters): { where: string; values: unknown[] } {
+    const values: unknown[] = [scope.empresaId];
     const conditions = ['c.empresa_id = $1'];
     const add = (sql: string, value: unknown): void => { values.push(value); conditions.push(sql.replace('?', `$${values.length}`)); };
-    if (auth.perfil === 'GERENTE') {
-      values.push(auth.usuarioId);
-      conditions.push(`EXISTS (SELECT 1 FROM admtaxi.gerente_centros_custo gcc
-        WHERE gcc.empresa_id = c.empresa_id AND gcc.centro_custo_id = c.centro_custo_id
-          AND gcc.gerente_usuario_id = $${values.length})`);
-    }
+    addCenterScope(conditions, values, scope, 'c.centro_custo_id');
     if (query.inicio) add('c.solicitada_em >= ?', query.inicio);
     if (query.fim) add('c.solicitada_em <= ?', query.fim);
     if (query.status) add('c.status = ?', query.status);

@@ -21,8 +21,10 @@ const CORRIDA = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 const CENTRO = '12121212-1212-4212-8212-121212121212';
 const FUNCIONARIO = '34343434-3434-4434-8434-343434343434';
 
-function fakeDatabase(): Database {
-  const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+function fakeDatabase(centerIds: string[] = [CENTRO]): Database {
+  const query = vi.fn().mockResolvedValue({
+    rows: [{ setor_ids: ['56565656-5656-4656-8656-565656565656'], centro_custo_ids: centerIds }], rowCount: 1,
+  });
   const client = { query, release: vi.fn() } as unknown as PoolClient;
   return { query: query as QueryExecutor['query'], connect: () => Promise.resolve(client) };
 }
@@ -109,15 +111,17 @@ describe('CorridaService', () => {
 
     expect(store.scopes).toEqual([
       { kind: 'GESTOR' },
-      { kind: 'GERENTE', usuarioId: GERENTE },
+      {
+        kind: 'GERENTE', usuarioId: GERENTE,
+        setorIds: ['56565656-5656-4656-8656-565656565656'], centroCustoIds: [CENTRO],
+      },
       { kind: 'PRESTADOR', prestadorId: PRESTADOR, disponivel: true },
     ]);
   });
 
   it('impede gerente sem centro autorizado de solicitar corrida', async () => {
     const store = new RideStore();
-    store.managerAccess = false;
-    const service = new CorridaService(fakeDatabase(), new RideAudit(), store);
+    const service = new CorridaService(fakeDatabase([]), new RideAudit(), store);
     const input: CorridaCreateInput = {
       funcionarioId: FUNCIONARIO, centroCustoId: CENTRO, tipo: 'IMEDIATA', quantidadePassageiros: 1,
       origemDescricao: 'Origem', destinoDescricao: 'Destino',

@@ -8,15 +8,19 @@ ocultar uma acao no frontend nao substitui a validacao da API.
 | Login, refresh, logout e perfil atual | Sim | Sim | Sim | Sim |
 | Consultar e atualizar empresa atual | Nao | Nao | Nao | Sim |
 | CRUD logico de usuarios | Nao | Nao | Nao | Sim |
-| Vincular gerente a centros de custo | Nao | Nao | Nao | Sim |
+| Vincular gerente a setores e centros de custo | Nao | Nao | Nao | Sim |
 | CRUD logico de prestadores | Nao | Nao | Nao | Sim |
 | Cadastro unificado de acesso, prestador e veiculo | Nao | Nao | Nao | Sim |
 | Cadastro unificado de acesso e funcionario | Nao | Nao | Nao | Sim |
 | Consultar dispositivos no cadastro unificado | Nao | Nao | Nao | Sim |
 | CRUD logico de veiculos | Nao | Nao | Nao | Sim |
+| CRUD logico de setores | Nao | Nao | Nao | Sim |
 | CRUD logico de centros de custo | Nao | Nao | Nao | Sim |
 | CRUD logico de funcionarios | Nao | Nao | Nao | Sim |
 | Consultar auditoria da empresa | Nao | Nao | Nao | Sim |
+| Consultar escopo operacional proprio | Nao | Nao | Sim | Sim |
+| Pesquisar funcionarios fora dos centros autorizados | Nao | Nao | Nao | Sim |
+| Consultar prestadores presentes nas corridas do escopo | Nao | Nao | Sim | Sim |
 | Listar corridas dentro do proprio escopo | Sim | Nao | Sim | Sim |
 | Solicitar corrida | Nao | Nao | Sim | Sim |
 | Atribuir prestador ou reabrir recusa | Nao | Nao | Nao | Sim |
@@ -36,8 +40,11 @@ ocultar uma acao no frontend nao substitui a validacao da API.
 - Um gestor nao pode inativar a propria conta nem alterar o proprio perfil.
 - Inativar usuario revoga todos os refresh tokens desse usuario.
 - Alterar senha ou perfil tambem revoga os refresh tokens existentes.
-- Apenas usuario ativo com perfil `GERENTE` pode receber centros de custo.
-- Apenas centros de custo ativos da mesma empresa podem ser vinculados.
+- Apenas usuario ativo com perfil `GERENTE` pode receber setores e centros de custo.
+- O centro vinculado deve estar ativo, pertencer a um setor ativo autorizado e estar na mesma empresa.
+- O escopo do gerente e resolvido pelo backend em cada requisicao e nunca e aceito do frontend.
+- Um gerente sem setores ou centros possui escopo vazio; nenhum fallback para a empresa inteira e aplicado.
+- Detalhes, acoes, dashboard, relatorios, CSV, localizacoes e Socket.IO usam o mesmo escopo.
 - Apenas usuario ativo com perfil `PRESTADOR` pode ser vinculado a prestador.
 - Inativar prestador tambem remove sua disponibilidade.
 - No cadastro unificado, inativar o acesso ou o prestador inativa ambos na mesma transacao,
@@ -49,8 +56,8 @@ ocultar uma acao no frontend nao substitui a validacao da API.
 - O perfil `FUNCIONARIO` pode autenticar e consultar a propria conta. Corridas, dashboard e relatorios
   permanecem bloqueados ate que suas permissoes operacionais sejam definidas.
 - Inativar o funcionario pelo fluxo unificado tambem inativa seu usuario e revoga as sessoes.
-- Relacoes atuais de gerente e centro de custo podem ser substituidas fisicamente porque a tabela
-  nao possui estado logico; a alteracao completa permanece registrada em auditoria.
+- Relacoes atuais de gerente, setor e centro podem ser substituidas fisicamente porque as tabelas
+  nao possuem estado logico; os valores anteriores e novos permanecem registrados em auditoria.
 
 - A localizacao so e aceita do prestador vinculado, entre `ACEITA` e `EM_CORRIDA`.
 - Gerentes recebem tempo real apenas de corridas pertencentes aos centros de custo autorizados.

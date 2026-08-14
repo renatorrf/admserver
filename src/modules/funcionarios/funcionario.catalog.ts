@@ -110,9 +110,11 @@ export const funcionarioDefinition: CatalogDefinition = {
   validateReferences: async (executor, empresaId, input) => {
     if (input.centroCustoId === undefined) return;
     const result = await executor.query(
-      'SELECT 1 FROM admtaxi.centros_custo WHERE empresa_id = $1 AND id = $2 AND ativo = TRUE',
+      `SELECT 1 FROM admtaxi.centros_custo c
+       JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
+       WHERE c.empresa_id=$1 AND c.id=$2 AND c.ativo=TRUE AND s.ativo=TRUE`,
       [empresaId, input.centroCustoId],
     );
-    if (result.rowCount !== 1) throw invalidReference('Selecione um centro de custo ativo da mesma empresa.');
+    if (result.rowCount !== 1) throw invalidReference('Selecione um centro de custo com setor ativo da mesma empresa.');
   },
 };

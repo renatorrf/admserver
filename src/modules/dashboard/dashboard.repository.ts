@@ -2,6 +2,9 @@ import type { QueryResultRow } from 'pg';
 
 import type { Database } from '../../db/pool';
 import type { AuthContext } from '../auth/auth.types';
+import {
+  addCenterScope, OperationalScopeService, type OperationalScope, type OperationalScopeResolver,
+} from '../escopo/operational-scope.service';
 
 type MetricsRow = QueryResultRow & {
   solicitadasHoje: string;
@@ -25,10 +28,15 @@ type UpcomingRow = QueryResultRow & {
 };
 
 export class DashboardRepository {
-  constructor(private readonly database: Database) {}
+  private readonly scopeResolver: OperationalScopeResolver;
+
+  constructor(private readonly database: Database, scopeResolver?: OperationalScopeResolver) {
+    this.scopeResolver = scopeResolver ?? new OperationalScopeService(database);
+  }
 
   async get(auth: AuthContext) {
-    const { where, values } = this.scope(auth);
+    const scope = await this.scopeResolver.resolve(auth);
+    const { where, values } = this.scope(scope);
     const [metrics, centers, providers, monthly, active, upcoming] = await Promise.all([
       this.database.query<MetricsRow>(
         `SELECT
@@ -64,7 +72,7 @@ export class DashboardRepository {
          FROM generate_series(date_trunc('month',CURRENT_DATE)-interval '11 months',date_trunc('month',CURRENT_DATE),interval '1 month') months(mes)
          LEFT JOIN admtaxi.corridas c ON c.empresa_id=$1 AND c.status='FINALIZADA'
           AND date_trunc('month',c.finalizada_em)=months.mes
-          ${this.managerJoinScope(auth, values)}
+          ${this.managerJoinScope(scope, values)}
          GROUP BY months.mes ORDER BY months.mes`, values,
       ),
       this.database.query<ActiveRideRow>(
@@ -109,22 +117,15 @@ export class DashboardRepository {
 
   private readonly mapCost = (row: CostRow) => ({ ...row, corridas: Number(row.corridas) });
 
-  private scope(auth: AuthContext): { where: string; values: unknown[] } {
-    const values: unknown[] = [auth.empresaId];
-    let where = 'c.empresa_id=$1';
-    if (auth.perfil === 'GERENTE') {
-      values.push(auth.usuarioId);
-      where += ` AND EXISTS (SELECT 1 FROM admtaxi.gerente_centros_custo gcc
-        WHERE gcc.empresa_id=c.empresa_id AND gcc.centro_custo_id=c.centro_custo_id
-          AND gcc.gerente_usuario_id=$${values.length})`;
-    }
-    return { where, values };
+  private scope(scope: OperationalScope): { where: string; values: unknown[] } {
+    const values: unknown[] = [scope.empresaId];
+    const conditions = ['c.empresa_id=$1'];
+    addCenterScope(conditions, values, scope, 'c.centro_custo_id');
+    return { where: conditions.join(' AND '), values };
   }
 
-  private managerJoinScope(auth: AuthContext, values: unknown[]): string {
-    if (auth.perfil !== 'GERENTE') return '';
-    return `AND EXISTS (SELECT 1 FROM admtaxi.gerente_centros_custo gcc
-      WHERE gcc.empresa_id=c.empresa_id AND gcc.centro_custo_id=c.centro_custo_id
-        AND gcc.gerente_usuario_id=$${values.length})`;
+  private managerJoinScope(scope: OperationalScope, values: unknown[]): string {
+    if (scope.kind !== 'GERENTE') return '';
+    return `AND c.centro_custo_id = ANY($${values.length}::uuid[])`;
   }
 }
