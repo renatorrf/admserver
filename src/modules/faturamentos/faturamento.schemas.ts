@@ -7,7 +7,7 @@ const money = z.union([z.string(), z.number()])
   .transform((value) => String(value).replace(',', '.'))
   .pipe(z.string().regex(/^\d{1,10}(\.\d{1,2})?$/, 'Informe um valor monetario valido.'));
 
-export const faturamentoFiltroSchema = z.object({
+const faturamentoFiltroShape = {
   periodoInicio: dateOnly,
   periodoFim: dateOnly,
   prestadorId: z.string().uuid('Prestador invalido.'),
@@ -15,20 +15,29 @@ export const faturamentoFiltroSchema = z.object({
   centroCustoId: z.string().uuid('Centro de custo invalido.').optional(),
   funcionarioId: z.string().uuid('Funcionario invalido.').optional(),
   solicitanteUsuarioId: z.string().uuid('Solicitante invalido.').optional(),
-}).strict().refine((value) => value.periodoInicio <= value.periodoFim, {
+};
+const periodoValido = (value: { periodoInicio: string; periodoFim: string }): boolean =>
+  value.periodoInicio <= value.periodoFim;
+const periodoInvalido = { message: 'O periodo informado e invalido.' };
+
+export const faturamentoFiltroSchema = z.object(faturamentoFiltroShape).strict().refine(periodoValido, {
   message: 'O periodo informado e invalido.',
 });
 
-export const faturamentoResumoSchema = faturamentoFiltroSchema.partial({ prestadorId: true }).strict();
+export const faturamentoResumoSchema = z.object({
+  ...faturamentoFiltroShape,
+  prestadorId: faturamentoFiltroShape.prestadorId.optional(),
+}).strict().refine(periodoValido, periodoInvalido);
 
-export const faturamentoCreateSchema = faturamentoFiltroSchema.extend({
+export const faturamentoCreateSchema = z.object({
+  ...faturamentoFiltroShape,
   corridaIds: z.array(z.string().uuid()).min(1, 'Selecione ao menos uma corrida.'),
   exclusoes: z.array(z.object({
     corridaId: z.string().uuid(),
     motivo: z.string().trim().min(5, 'Justifique a exclusao.').max(1000),
   }).strict()).default([]),
   observacao: z.string().trim().max(2000).nullable().optional(),
-}).strict();
+}).strict().refine(periodoValido, periodoInvalido);
 
 export const faturamentoListSchema = paginationSchema.extend({
   status: z.enum(['ABERTO', 'FECHADO', 'CANCELADO']).optional(),
