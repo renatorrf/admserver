@@ -36,7 +36,7 @@ export type AppConfig = {
   jwtAccessExpiresInSeconds: number;
   jwtRefreshExpiresInSeconds: number;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
-  trustProxy: boolean;
+  trustProxy: false | 1;
   provisioningSecret?: string;
   masterBootstrapUsername?: string;
   masterBootstrapPasswordHash?: string;
@@ -45,6 +45,10 @@ export type AppConfig = {
 };
 
 let cachedConfig: AppConfig | undefined;
+
+export function resolveTrustProxy(nodeEnv: AppConfig['nodeEnv'], enabled: boolean): false | 1 {
+  return nodeEnv === 'production' || enabled ? 1 : false;
+}
 
 export function getConfig(): AppConfig {
   if (cachedConfig) {
@@ -67,7 +71,7 @@ export function getConfig(): AppConfig {
     jwtAccessExpiresInSeconds: parsed.data.JWT_ACCESS_EXPIRES_IN_SECONDS,
     jwtRefreshExpiresInSeconds: parsed.data.JWT_REFRESH_EXPIRES_IN_SECONDS,
     logLevel: parsed.data.LOG_LEVEL,
-    trustProxy: parsed.data.TRUST_PROXY,
+    trustProxy: resolveTrustProxy(parsed.data.NODE_ENV, parsed.data.TRUST_PROXY),
     provisioningSecret: parsed.data.PROVISIONING_SECRET,
     masterBootstrapUsername: parsed.data.MASTER_BOOTSTRAP_USERNAME,
     masterBootstrapPasswordHash: parsed.data.MASTER_BOOTSTRAP_PASSWORD_HASH,
