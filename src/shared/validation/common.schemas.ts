@@ -33,8 +33,8 @@ function isValidCpf(value: string): boolean {
 
 export const cpf = z.string()
   .transform((value) => value.replace(/\D/g, ''))
-  .pipe(z.string().length(11, 'O CPF deve conter 11 digitos validos.'))
-  .refine(isValidCpf, 'O CPF deve conter 11 digitos validos.');
+  .pipe(z.string().length(11, 'Informe um CPF valido.'))
+  .refine(isValidCpf, 'Informe um CPF valido.');
 
 export function atLeastOneField<T extends z.ZodRawShape>(shape: T): z.ZodObject<T> {
   return z.object(shape).strict().refine(

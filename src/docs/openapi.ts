@@ -95,7 +95,7 @@ export const openApiDocument = {
     { name: 'Prestadores' }, { name: 'Cadastros unificados' }, { name: 'Veiculos' }, { name: 'Centros de custo' },
     { name: 'Funcionarios' }, { name: 'Auditoria' }, { name: 'Operacao' },
     { name: 'Corridas' }, { name: 'Localizacoes' }, { name: 'Dashboard' }, { name: 'Relatorios' },
-    { name: 'Enderecos' }, { name: 'Notificacoes' }, { name: 'Provisionamento' },
+    { name: 'Enderecos' }, { name: 'Notificacoes' }, { name: 'Dispositivos' }, { name: 'Provisionamento' },
     { name: 'Master' },
   ],
   paths: {
@@ -456,6 +456,32 @@ export const openApiDocument = {
       delete: {
         tags: ['Notificacoes'], summary: 'Inativa token push do dispositivo atual', security: bearerSecurity,
         responses: { '204': { description: 'Dispositivo inativado' }, '404': { description: 'Dispositivo fora do usuario ou empresa' } },
+      },
+    },
+    '/dispositivos/atual': {
+      put: {
+        tags: ['Dispositivos'], summary: 'Sincroniza permissoes e modo de acesso do dispositivo atual', security: bearerSecurity,
+        responses: { '200': { description: 'Dispositivo sincronizado' }, '422': { description: 'Estado do dispositivo invalido' } },
+      },
+    },
+    '/dispositivos/atual/{chaveDispositivo}': {
+      parameters: [{ name: 'chaveDispositivo', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      delete: {
+        tags: ['Dispositivos'], summary: 'Marca o dispositivo atual como desconectado', security: bearerSecurity,
+        responses: { '204': { description: 'Dispositivo marcado como inativo' } },
+      },
+    },
+    '/dispositivos': {
+      get: {
+        tags: ['Dispositivos'], summary: 'Lista dispositivos e permissoes dos usuarios da empresa', security: bearerSecurity,
+        description: 'Acesso exclusivo do perfil GESTOR.',
+        parameters: [
+          { name: 'pagina', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limite', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+          { name: 'busca', in: 'query', schema: { type: 'string' } },
+          { name: 'ativo', in: 'query', schema: { type: 'boolean' } },
+        ],
+        responses: { '200': { description: 'Dispositivos paginados com usuario e permissoes' }, '403': { description: 'Acesso restrito a GESTOR' } },
       },
     },
     '/operacao/solicitantes': {

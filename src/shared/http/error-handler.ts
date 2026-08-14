@@ -27,15 +27,15 @@ export function createErrorHandler(logger: Logger): ErrorRequestHandler {
     }
 
     if (error instanceof ZodError) {
+      const fields = error.issues.map((issue) => ({
+        campo: issue.path.join('.') || 'formulario', mensagem: issue.message,
+      }));
+      logger.warn({ requestId: request.id, validationFields: fields }, 'Requisicao rejeitada por dados invalidos');
       response.status(422).json({
         erro: {
           codigo: 'DADOS_INVALIDOS',
           mensagem: 'Revise os dados informados.',
-          detalhes: {
-            campos: error.issues.map((issue) => ({
-              campo: issue.path.join('.') || 'formulario', mensagem: issue.message,
-            })),
-          },
+          detalhes: { campos: fields },
         },
         requisicaoId: request.id,
       });

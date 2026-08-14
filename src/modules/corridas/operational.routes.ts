@@ -26,6 +26,8 @@ import { createEnderecoRouter } from '../enderecos/endereco.routes';
 import { EnderecoService } from '../enderecos/endereco.service';
 import { createNotificacaoRouter } from '../notificacoes/notificacao.routes';
 import { NotificacaoService } from '../notificacoes/notificacao.service';
+import { createDispositivoRouter } from '../dispositivos/dispositivo.routes';
+import { DispositivoService } from '../dispositivos/dispositivo.service';
 
 export function createOperationalRouter(
   pool: Pool, tokens: TokenService, realtime?: RealtimeBus, geoapifyApiKey?: string, firebaseProjectId?: string,
@@ -46,6 +48,7 @@ export function createOperationalRouter(
   router.use('/corridas', createAuthenticate(tokens), createCorridaRouter(service));
   router.use('/enderecos', createAuthenticate(tokens), createEnderecoRouter(new EnderecoService(pool, geoapifyApiKey)));
   router.use('/notificacoes', createAuthenticate(tokens), createNotificacaoRouter(notifications));
+  router.use('/dispositivos', createAuthenticate(tokens), createDispositivoRouter(new DispositivoService(pool)));
   router.patch(
     '/prestadores/minha-disponibilidade',
     createAuthenticate(tokens),

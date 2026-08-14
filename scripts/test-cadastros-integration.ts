@@ -14,6 +14,7 @@ import { createAdminRouter } from '../src/modules/admin/admin.routes';
 import { PgAuthRepository } from '../src/modules/auth/auth.repository';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { TokenService } from '../src/modules/auth/token-service';
+import { DispositivoService } from '../src/modules/dispositivos/dispositivo.service';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -127,7 +128,7 @@ async function cleanupTenant(database: Pool): Promise<void> {
   try {
     await client.query('BEGIN');
     for (const table of [
-      'notificacoes_push', 'dispositivos_push', 'corrida_localizacoes', 'corrida_eventos', 'corridas',
+      'notificacoes_push', 'dispositivos_push', 'dispositivos_usuario', 'corrida_localizacoes', 'corrida_eventos', 'corridas',
       'auditoria', 'gerente_centros_custo', 'veiculos', 'prestadores', 'funcionarios', 'refresh_tokens',
       'usuarios', 'centros_custo',
     ]) {
@@ -161,6 +162,27 @@ async function run(): Promise<void> {
     const authorized = (
       method: 'GET' | 'POST' | 'PUT' | 'PATCH', path: string, payload?: JsonRecord,
     ) => send(target.baseUrl, method, path, payload, accessToken);
+
+    if (!configuredBaseUrl) {
+      const deviceService = new DispositivoService(pool);
+      const device = await deviceService.syncCurrent(
+        { empresaId: tenant.companyId, usuarioId: tenant.gestorId, perfil: 'GESTOR' },
+        {
+          chaveDispositivo: randomUUID(), plataforma: 'WEB', nomeDispositivo: 'Navegador de teste',
+          navegador: 'Smoke Test', modoAcesso: 'NAVEGADOR', notificacoesStatus: 'NAO_SOLICITADA',
+          geolocalizacaoStatus: 'NAO_SOLICITADA',
+        },
+      );
+      const managed = await deviceService.listManaged(
+        { empresaId: tenant.companyId, usuarioId: tenant.gestorId, perfil: 'GESTOR' },
+        { pagina: 1, limite: 20 },
+      );
+      assert.equal(managed.data[0]?.id, device.id, 'Dispositivo nao apareceu na visao do gestor.');
+      await deviceService.deactivateCurrent(
+        { empresaId: tenant.companyId, usuarioId: tenant.gestorId, perfil: 'GESTOR' }, device.chaveDispositivo,
+      );
+      checks.push('dispositivo, permissoes e visao do gestor');
+    }
 
     const centerResponse = await authorized('POST', '/api/v1/centros-custo', {
       codigo: `CC-${suffix.slice(0, 6)}`, nome: 'Centro de custo teste', descricao: 'Criado pelo smoke test',
