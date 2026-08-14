@@ -55,6 +55,11 @@ describe('Socket.IO', () => {
 
     expect(response).toMatchObject({ ok: true, data: { corrida: { id: corridaId } } });
     expect(snapshot).toHaveBeenCalledWith(auth, corridaId);
+
+    client.emit('corrida:acompanhar', { corridaId });
+    const responseAfterMissingAck = await emitWithAck(client, 'corrida:acompanhar', { corridaId });
+    expect(responseAfterMissingAck).toMatchObject({ ok: true });
+    expect(snapshot).toHaveBeenCalledTimes(3);
   });
 
   it('recusa conexao sem access token', async () => {

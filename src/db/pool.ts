@@ -13,6 +13,8 @@ export function createPool(config: Pick<AppConfig, 'databaseUrl'>): Pool {
     max: 10,
     connectionTimeoutMillis: 10_000,
     idleTimeoutMillis: 30_000,
+    statement_timeout: 30_000,
+    query_timeout: 35_000,
   });
 
   return pool;

@@ -22,6 +22,7 @@ import type { CorridaRealtimeEvent, FaturamentoRealtimeEvent, FaturamentoRealtim
 type SocketData = {
   auth: AuthContext;
   accessToken: string;
+  accessTokenExpiresAt: number;
   locationTimestamps: number[];
 };
 
@@ -32,9 +33,9 @@ type RealtimeAck<T = unknown> = (response: {
 }) => void;
 
 type ClientToServerEvents = {
-  'corrida:acompanhar': (payload: unknown, ack: RealtimeAck) => void;
-  'corrida:parar-acompanhamento': (payload: unknown, ack: RealtimeAck) => void;
-  'localizacao:enviar': (payload: unknown, ack: RealtimeAck) => void;
+  'corrida:acompanhar': (payload: unknown, ack?: RealtimeAck) => void;
+  'corrida:parar-acompanhamento': (payload: unknown, ack?: RealtimeAck) => void;
+  'localizacao:enviar': (payload: unknown, ack?: RealtimeAck) => void;
 };
 
 type ServerToClientEvents = {
@@ -50,6 +51,7 @@ type ServerToClientEvents = {
   'faturamento:criado': (payload: FaturamentoRealtimePayload) => void;
   'faturamento:cancelado': (payload: FaturamentoRealtimePayload) => void;
   'localizacao:atualizada': (location: LocalizacaoRecord) => void;
+  'sessao:expirando': () => void;
 };
 
 type AdmTaxiSocket = Socket<ClientToServerEvents, ServerToClientEvents, never, SocketData>;
@@ -71,16 +73,20 @@ function tokenFromSocket(socket: Socket): string | null {
   return scheme === 'Bearer' && token ? token : null;
 }
 
-function ackError(ack: RealtimeAck, error: unknown): void {
+function respond<T>(ack: RealtimeAck<T> | undefined, payload: Parameters<RealtimeAck<T>>[0]): void {
+  if (typeof ack === 'function') ack(payload);
+}
+
+function ackError(ack: RealtimeAck | undefined, error: unknown): void {
   if (error instanceof AppError) {
-    ack({ ok: false, erro: { codigo: error.code, mensagem: error.message } });
+    respond(ack, { ok: false, erro: { codigo: error.code, mensagem: error.message } });
     return;
   }
   if (error instanceof ZodError) {
-    ack({ ok: false, erro: { codigo: 'DADOS_INVALIDOS', mensagem: 'Revise os dados informados.' } });
+    respond(ack, { ok: false, erro: { codigo: 'DADOS_INVALIDOS', mensagem: 'Revise os dados informados.' } });
     return;
   }
-  ack({ ok: false, erro: { codigo: 'ERRO_INTERNO', mensagem: 'Nao foi possivel concluir a operacao.' } });
+  respond(ack, { ok: false, erro: { codigo: 'ERRO_INTERNO', mensagem: 'Nao foi possivel concluir a operacao.' } });
 }
 
 function assertSocketRate(socket: AdmTaxiSocket): void {
@@ -116,9 +122,8 @@ export function attachSocketServer(
       const session = tokens.verifyAccessSession(token);
       socket.data.auth = session.auth;
       socket.data.accessToken = token;
+      socket.data.accessTokenExpiresAt = session.expiresAt.getTime();
       socket.data.locationTimestamps = [];
-      const expiresIn = Math.max(0, session.expiresAt.getTime() - Date.now());
-      setTimeout(() => socket.disconnect(true), expiresIn + 250).unref();
       next();
     } catch {
       next(new Error('NAO_AUTORIZADO'));
@@ -126,6 +131,19 @@ export function attachSocketServer(
   });
 
   io.on('connection', (socket) => {
+    const expiresIn = Math.max(0, socket.data.accessTokenExpiresAt - Date.now());
+    const refreshLeadTime = Math.min(30_000, Math.max(1_000, Math.floor(expiresIn * 0.2)));
+    const warningTimer = setTimeout(() => {
+      if (socket.connected) socket.emit('sessao:expirando');
+    }, Math.max(0, expiresIn - refreshLeadTime));
+    const expirationTimer = setTimeout(() => socket.disconnect(true), expiresIn + 250);
+    warningTimer.unref();
+    expirationTimer.unref();
+    socket.once('disconnect', () => {
+      clearTimeout(warningTimer);
+      clearTimeout(expirationTimer);
+    });
+
     void socket.join(userRoom(socket.data.auth.empresaId, socket.data.auth.usuarioId));
     if (socket.data.auth.perfil === 'GESTOR') {
       void socket.join(profileRoom(socket.data.auth.empresaId, 'GESTOR'));
@@ -153,31 +171,37 @@ export function attachSocketServer(
         ]) : undefined)
         .catch(() => socket.disconnect(true));
     }
-    socket.on('corrida:acompanhar', (raw: unknown, ack: RealtimeAck) => {
+    socket.on('corrida:acompanhar', (raw: unknown, ack?: RealtimeAck) => {
       void (async () => {
+        const startedAt = Date.now();
         try {
           tokens.verifyAccess(socket.data.accessToken);
           const { corridaId } = acompanharCorridaSchema.parse(raw);
           const snapshot = await locations.snapshot(socket.data.auth, corridaId);
           await socket.join(rideRoom(socket.data.auth.empresaId, corridaId));
-          ack({ ok: true, data: snapshot });
+          respond(ack, { ok: true, data: snapshot });
         } catch (error) {
           ackError(ack, error);
+        } finally {
+          const durationMs = Date.now() - startedAt;
+          if (durationMs >= 5_000) {
+            logger.warn({ corridaId: acompanharCorridaSchema.safeParse(raw).data?.corridaId, durationMs }, 'Snapshot de corrida lento');
+          }
         }
       })();
     });
 
-    socket.on('corrida:parar-acompanhamento', (raw: unknown, ack: RealtimeAck) => {
+    socket.on('corrida:parar-acompanhamento', (raw: unknown, ack?: RealtimeAck) => {
       try {
         const { corridaId } = acompanharCorridaSchema.parse(raw);
         void socket.leave(rideRoom(socket.data.auth.empresaId, corridaId));
-        ack({ ok: true, data: null });
+        respond(ack, { ok: true, data: null });
       } catch (error) {
         ackError(ack, error);
       }
     });
 
-    socket.on('localizacao:enviar', (raw: unknown, ack: RealtimeAck) => {
+    socket.on('localizacao:enviar', (raw: unknown, ack?: RealtimeAck) => {
       void (async () => {
         try {
           tokens.verifyAccess(socket.data.accessToken);
@@ -185,7 +209,7 @@ export function attachSocketServer(
           const input = enviarLocalizacaoSocketSchema.parse(raw);
           const { corridaId, ...location } = input;
           const created = await locations.create(socket.data.auth, corridaId, location);
-          ack({ ok: true, data: created });
+          respond(ack, { ok: true, data: created });
         } catch (error) {
           ackError(ack, error);
         }
