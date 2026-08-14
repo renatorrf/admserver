@@ -11,6 +11,7 @@
     "start": "node dist/server.js",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:cadastros:integration": "tsx scripts/test-cadastros-integration.ts",
     "test:watch": "vitest",
     "env:configure": "node scripts/configure-local-env.mjs",
     "migrate": "tsx src/db/migrate.ts up",
