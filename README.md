@@ -34,17 +34,18 @@ quando necessario. Ele tambem gera `PROVISIONING_SECRET` sem exibir o valor. Em 
 producao, injete todas as variaveis com o gerenciador de
 segredos do ambiente. Consulte `.env.example` para a lista completa.
 
-### Geoapify e Firebase
+### Geoapify e Web Push
 
 - `GEOAPIFY_API_KEY`: chave privada usada pelo backend no autocomplete e na geocodificacao reversa.
   Nao coloque essa chave no frontend.
-- `FIREBASE_PROJECT_ID`: projeto usado pelo Firebase Admin para enviar push. Em Cloud Run, conceda
-  a conta de servico permissao para Firebase Cloud Messaging e use Application Default Credentials.
-- Em desenvolvimento fora do Google Cloud, defina `GOOGLE_APPLICATION_CREDENTIALS` apontando para
-  um arquivo local de conta de servico, nunca versionado.
+- `PUSH_VAPID_SUBJECT`, `PUSH_VAPID_PUBLIC_KEY` e `PUSH_VAPID_PRIVATE_KEY`: identidade e par VAPID.
+- `PUSH_APP_URL` e as URLs de icone, badge e abertura: destinos publicos HTTPS do PWA.
+- Gere o par uma unica vez com `npm run push:vapid:generate`. Nao gere chaves durante o startup e
+  nao altere o par enquanto existirem inscricoes ativas.
 
 Sem essas variaveis, a API continua iniciando. A busca de enderecos retorna erro controlado `503`
-e os envios push ficam registrados como ignorados, sem bloquear operacoes de corrida.
+e os envios push ficam registrados como ignorados, sem bloquear operacoes de corrida. Configuracao
+VAPID parcial e rejeitada na inicializacao. Consulte `docs/WEB_PUSH_VAPID.md`.
 
 ## Banco de dados
 
@@ -109,6 +110,9 @@ Endpoints iniciais:
 - `GET /api/v1/dashboard`: indicadores e acompanhamento consolidado.
 - `GET /api/v1/relatorios/corridas`: relatorio paginado com filtros e totais.
 - `GET /api/v1/relatorios/corridas.csv`: exportacao CSV limitada a 10.000 linhas.
+- `GET /api/v1/paineis/meu`: painel isolado do funcionario ou prestador autenticado.
+- `/api/v1/faturamentos`: resumo, elegibilidade, fechamento, cancelamento e CSV financeiro.
+- `/api/v1/push`: chave publica, inscricoes, teste e diagnostico Web Push VAPID.
 - `/socket.io`: acompanhamento autenticado de corridas e localizacoes em tempo real.
 - `GET /api/docs`: Swagger UI.
 - `GET /api/openapi.json`: especificacao OpenAPI.
@@ -169,7 +173,8 @@ Os CRUDs administrativos aceitam `GET`, `POST` e `PATCH`. Inativacao e reativaca
 
 A matriz completa esta em `docs/MATRIZ_PERMISSOES.md`, a maquina de estados em
 `docs/FLUXO_CORRIDAS.md`, o contrato de rastreamento em `docs/GEOLOCALIZACAO_E_TEMPO_REAL.md` e
-os indicadores em `docs/DASHBOARD_E_RELATORIOS.md`.
+os indicadores em `docs/DASHBOARD_E_RELATORIOS.md`. Faturamento e push estao documentados em
+`docs/FATURAMENTO.md` e `docs/WEB_PUSH_VAPID.md`.
 
 ## Qualidade
 

@@ -2,7 +2,7 @@ import type { Database, QueryExecutor } from '../../db/pool';
 import { withTransaction } from '../../db/pool';
 import { conflict, forbidden, invalidReference, notFound } from '../../shared/errors/app-error';
 import type { PaginatedResult } from '../../shared/pagination/pagination';
-import type { CorridaRealtimePublisher } from '../../realtime/realtime-bus';
+import type { CorridaRealtimeEvent, CorridaRealtimePublisher } from '../../realtime/realtime-bus';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditEntry, AuditMetadata } from '../auditoria/audit.types';
 import { CorridaRepository, type CorridaPatch, type CorridaScope } from './corrida.repository';
@@ -17,7 +17,9 @@ import type {
   EventoListQuery,
 } from './corrida.schemas';
 import { assertTransition, isActiveRide } from './state-machine';
-import type { CorridaEventoRecord, CorridaRecord, PrestadorContext, StatusCorrida } from './corrida.types';
+import type {
+  CorridaEventoRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida,
+} from './corrida.types';
 import type { CorridaNotificationPublisher } from '../notificacoes/notificacao.service';
 import {
   centerAllowed, OperationalScopeService, type OperationalScopeResolver,
@@ -42,6 +44,7 @@ export interface CorridaStore {
   markDisembark(executor: QueryExecutor, empresaId: string, id: string): Promise<CorridaRecord>;
   listEvents(empresaId: string, corridaId: string, query: EventoListQuery): Promise<PaginatedResult<CorridaEventoRecord>>;
   getProviderByUser(executor: QueryExecutor, empresaId: string, usuarioId: string, lock?: boolean): Promise<PrestadorContext | null>;
+  getEmployeeByUser(executor: QueryExecutor, empresaId: string, usuarioId: string): Promise<FuncionarioContext | null>;
   validateProviderAndVehicle(
     executor: QueryExecutor, empresaId: string, prestadorId: string, veiculoId: string | null, requireAvailable: boolean,
   ): Promise<boolean>;
@@ -382,9 +385,21 @@ export class CorridaService {
     operation: Promise<CorridaRecord>, afterCommit?: (ride: CorridaRecord) => void,
   ): Promise<CorridaRecord> {
     const ride = await operation;
-    this.realtime?.publishRide(ride);
-    afterCommit?.(ride);
-    return ride;
+    const complete = await this.repository.findAccessible(
+      this.database, ride.empresaId, ride.id, { kind: 'GESTOR' },
+    ) ?? ride;
+    this.realtime?.publishRide(complete, this.realtimeEvent(complete));
+    afterCommit?.(complete);
+    return complete;
+  }
+
+  private realtimeEvent(ride: CorridaRecord): CorridaRealtimeEvent {
+    if (ride.status === 'SOLICITADA') return 'corrida:criada';
+    if (ride.status === 'OFERTADA') return 'corrida:ofertada';
+    if (ride.status === 'ACEITA') return 'corrida:aceita';
+    if (ride.status === 'FINALIZADA') return 'corrida:finalizada';
+    if (ride.status === 'CANCELADA') return 'corrida:cancelada';
+    return 'corrida:status-alterado';
   }
 
   private async resolveScope(auth: AuthContext, executor: QueryExecutor = this.database): Promise<CorridaScope> {
@@ -397,8 +412,13 @@ export class CorridaService {
           setorIds: scope.setorIds, centroCustoIds: scope.centroCustoIds,
         };
     }
-    const provider = await this.requireProviderContext(executor, auth, false);
-    return { kind: 'PRESTADOR', prestadorId: provider.id, disponivel: provider.disponivel };
+    if (auth.perfil === 'PRESTADOR') {
+      const provider = await this.requireProviderContext(executor, auth, false);
+      return { kind: 'PRESTADOR', prestadorId: provider.id, disponivel: provider.disponivel };
+    }
+    const employee = await this.repository.getEmployeeByUser(executor, auth.empresaId, auth.usuarioId);
+    if (!employee || !employee.ativo) throw forbidden();
+    return { kind: 'FUNCIONARIO', funcionarioId: employee.id };
   }
 
   private async requireProviderContext(

@@ -35,7 +35,7 @@ const authService = new AuthService(
 const realtime = new RealtimeBus();
 const adminRouter = createAdminRouter(pool, tokenService);
 const operationalRouter = createOperationalRouter(
-  pool, tokenService, realtime, config.geoapifyApiKey, config.firebaseProjectId, config.nodeEnv !== 'production',
+  pool, tokenService, realtime, config.geoapifyApiKey, config.push,
 );
 const provisioningRouter = config.provisioningSecret
   ? createProvisionamentoRouter(new ProvisionamentoService(pool), config.provisioningSecret)
@@ -51,7 +51,7 @@ const app = createApp({
 const server = createServer(app);
 const socketRideService = new CorridaService(pool, new AuditRepository(pool));
 const socketLocationService = new LocalizacaoService(pool, socketRideService, realtime);
-const io = attachSocketServer(server, config, tokenService, socketLocationService, realtime, logger);
+const io = attachSocketServer(server, config, tokenService, socketLocationService, realtime, logger, pool);
 
 async function start(): Promise<void> {
   await ensureInitialMaster(pool, config.masterBootstrapUsername, config.masterBootstrapPasswordHash);

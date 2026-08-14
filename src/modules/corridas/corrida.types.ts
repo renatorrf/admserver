@@ -55,3 +55,9 @@ export type PrestadorContext = {
   disponivel: boolean;
   ativo: boolean;
 };
+
+export type FuncionarioContext = {
+  id: string;
+  usuarioId: string;
+  ativo: boolean;
+};

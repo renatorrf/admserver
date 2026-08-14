@@ -28,16 +28,27 @@ import { createNotificacaoRouter } from '../notificacoes/notificacao.routes';
 import { NotificacaoService } from '../notificacoes/notificacao.service';
 import { createDispositivoRouter } from '../dispositivos/dispositivo.routes';
 import { DispositivoService } from '../dispositivos/dispositivo.service';
+import type { PushConfig } from '../../config/env';
+import { createPainelParticipanteRouter } from '../paineis/painel.routes';
+import { PainelParticipanteRepository } from '../paineis/painel.repository';
+import { PainelParticipanteService } from '../paineis/painel.service';
+import { createFaturamentoRouter } from '../faturamentos/faturamento.routes';
+import { FaturamentoService } from '../faturamentos/faturamento.service';
 
 export function createOperationalRouter(
-  pool: Pool, tokens: TokenService, realtime?: RealtimeBus, geoapifyApiKey?: string, firebaseProjectId?: string,
-  allowDevelopmentNotificationTest = false,
+  pool: Pool, tokens: TokenService, realtime?: RealtimeBus, geoapifyApiKey?: string, pushConfig?: PushConfig,
 ): Router {
   const router = Router();
-  const notifications = new NotificacaoService(pool, firebaseProjectId, allowDevelopmentNotificationTest);
+  const notifications = new NotificacaoService(pool, pushConfig);
   const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications);
   const locations = new LocalizacaoService(pool, service, realtime);
   router.use('/dashboard', createAuthenticate(tokens), createDashboardRouter(new DashboardService(new DashboardRepository(pool))));
+  router.use('/paineis', createAuthenticate(tokens), createPainelParticipanteRouter(
+    new PainelParticipanteService(new PainelParticipanteRepository(pool)),
+  ));
+  router.use('/faturamentos', createAuthenticate(tokens), createFaturamentoRouter(
+    new FaturamentoService(pool, new AuditRepository(pool), realtime),
+  ));
   router.use('/relatorios', createAuthenticate(tokens), createRelatorioRouter(new RelatorioService(new RelatorioRepository(pool))));
   router.use(
     '/operacao',
@@ -47,7 +58,7 @@ export function createOperationalRouter(
   router.use('/corridas/:id/localizacoes', createAuthenticate(tokens), createLocalizacaoRouter(locations));
   router.use('/corridas', createAuthenticate(tokens), createCorridaRouter(service));
   router.use('/enderecos', createAuthenticate(tokens), createEnderecoRouter(new EnderecoService(pool, geoapifyApiKey)));
-  router.use('/notificacoes', createAuthenticate(tokens), createNotificacaoRouter(notifications));
+  router.use('/push', createNotificacaoRouter(notifications, tokens));
   router.use('/dispositivos', createAuthenticate(tokens), createDispositivoRouter(new DispositivoService(pool)));
   router.patch(
     '/prestadores/minha-disponibilidade',

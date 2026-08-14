@@ -42,12 +42,18 @@ Eventos enviados pelo servidor:
 
 | Evento | Conteudo |
 | --- | --- |
-| `corrida:atualizada` | Corrida apos uma operacao confirmada no banco |
+| `corrida:atualizada` | Compatibilidade: corrida completa apos uma operacao confirmada |
+| `corrida:criada`, `corrida:ofertada`, `corrida:aceita` | Criacao, oferta e aceite com prestador e veiculo reconciliados |
+| `corrida:status-alterado`, `corrida:finalizada`, `corrida:cancelada` | Transicoes operacionais confirmadas |
+| `corrida:valor-alterado` | Correcao administrativa do valor final |
+| `corrida:lista-invalidada` | Somente ID para prestadores recarregarem ofertas sem receber detalhes sem acesso |
+| `faturamento:criado`, `faturamento:cancelado` | Invalidacao dos resumos e historicos financeiros |
 | `localizacao:atualizada` | Posicao apos persistencia confirmada |
 
-As salas usam empresa e corrida no identificador interno. Antes de entrar, o backend aplica o mesmo
-escopo da API REST: gestor ve a empresa, gerente ve centros autorizados e prestador ve suas corridas.
-Salas de corridas finalizadas ou canceladas sao encerradas apos o ultimo evento.
+As salas usam usuario, perfil gestor, centro de custo, prestador e corrida. Antes de entrar, o backend
+aplica o mesmo escopo da API REST: gestor ve somente a empresa, gerente somente centros autorizados,
+funcionario somente as proprias corridas e prestador somente atribuicoes proprias ou ofertas elegiveis.
+Na reconexao, o frontend recarrega as telas visiveis e reconcilia os registros pelo ID.
 
 ## Mapa
 

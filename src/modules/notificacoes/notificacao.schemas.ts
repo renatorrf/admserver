@@ -1,14 +1,18 @@
 import { z } from 'zod';
 
-export const dispositivoPushSchema = z.object({
-  token: z.string().trim().min(20, 'Token do dispositivo invalido.').max(4096),
-  plataforma: z.enum(['WEB', 'ANDROID', 'IOS']),
-  nomeDispositivo: z.string().trim().min(1).max(120).nullable().optional(),
+export const pushSubscriptionSchema = z.object({
+  endpoint: z.string().url().startsWith('https://').max(4096),
+  expirationTime: z.number().int().nonnegative().nullable(),
+  keys: z.object({
+    p256dh: z.string().min(20).max(512),
+    auth: z.string().min(8).max(256),
+  }).strict(),
+  dispositivoDescricao: z.string().trim().min(1).max(160).nullable().optional(),
 }).strict();
 
-export const dispositivoIdSchema = z.object({
-  id: z.string().uuid('Dispositivo invalido.'),
+export const subscriptionIdSchema = z.object({
+  id: z.string().uuid('Inscricao invalida.'),
 }).strict();
 
-export type DispositivoPushInput = z.infer<typeof dispositivoPushSchema>;
-export type DispositivoIdParams = z.infer<typeof dispositivoIdSchema>;
+export type PushSubscriptionInput = z.infer<typeof pushSubscriptionSchema>;
+export type SubscriptionIdParams = z.infer<typeof subscriptionIdSchema>;

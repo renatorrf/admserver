@@ -24,3 +24,6 @@ export const conflict = (message: string): AppError =>
 
 export const invalidReference = (message: string): AppError =>
   new AppError(422, 'REFERENCIA_INVALIDA', message);
+
+export const unavailable = (message: string): AppError =>
+  new AppError(503, 'SERVICO_INDISPONIVEL', message);

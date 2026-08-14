@@ -89,7 +89,12 @@ export const openApiDocument = {
     path: '/socket.io',
     authentication: 'Access token JWT em handshake.auth.token.',
     clientEvents: ['corrida:acompanhar', 'corrida:parar-acompanhamento', 'localizacao:enviar'],
-    serverEvents: ['corrida:atualizada', 'localizacao:atualizada'],
+    serverEvents: [
+      'corrida:atualizada', 'corrida:criada', 'corrida:ofertada', 'corrida:aceita',
+      'corrida:status-alterado', 'corrida:finalizada', 'corrida:cancelada', 'corrida:valor-alterado',
+      'corrida:lista-invalidada',
+      'faturamento:criado', 'faturamento:cancelado', 'localizacao:atualizada',
+    ],
   },
   tags: [
     { name: 'Auth' }, { name: 'Health' }, { name: 'Empresa' }, { name: 'Usuarios' },
@@ -97,7 +102,7 @@ export const openApiDocument = {
     { name: 'Funcionarios' }, { name: 'Auditoria' }, { name: 'Operacao' },
     { name: 'Corridas' }, { name: 'Localizacoes' }, { name: 'Dashboard' }, { name: 'Relatorios' },
     { name: 'Enderecos' }, { name: 'Notificacoes' }, { name: 'Dispositivos' }, { name: 'Provisionamento' },
-    { name: 'Master' },
+    { name: 'Paineis' }, { name: 'Faturamentos' }, { name: 'Master' },
   ],
   paths: {
     '/health': {
@@ -471,28 +476,50 @@ export const openApiDocument = {
         responses: { '200': { description: 'Endereco identificado ou nulo' }, '503': { description: 'Geoapify indisponivel' } },
       },
     },
-    '/notificacoes/dispositivos': {
+    '/push/public-key': {
       get: {
-        tags: ['Notificacoes'], summary: 'Lista dispositivos push do usuario autenticado', security: bearerSecurity,
-        responses: { '200': { description: 'Dispositivos ativos e inativos, ordenados pelo ultimo uso' } },
-      },
-      post: {
-        tags: ['Notificacoes'], summary: 'Registra token push do usuario e dispositivo', security: bearerSecurity,
-        responses: { '201': { description: 'Dispositivo registrado' }, '422': { description: 'Token invalido' } },
+        tags: ['Notificacoes'], summary: 'Retorna a chave publica VAPID',
+        responses: { '200': { description: 'Chave publica para criar a inscricao Web Push' }, '503': { description: 'Web Push nao configurado' } },
       },
     },
-    '/notificacoes/teste': {
+    '/push/subscriptions': {
       post: {
-        tags: ['Notificacoes'], summary: 'Envia uma notificacao de teste', security: bearerSecurity,
-        description: 'Permitido para GESTOR ou para qualquer perfil somente em ambiente de desenvolvimento.',
-        responses: { '204': { description: 'Tentativa registrada' }, '403': { description: 'Perfil nao permitido' } },
+        tags: ['Notificacoes'], summary: 'Registra ou reativa uma inscricao Web Push', security: bearerSecurity,
+        responses: { '201': { description: 'Inscricao registrada sem expor as chaves privadas' }, '422': { description: 'Inscricao invalida' } },
       },
     },
-    '/notificacoes/dispositivos/{id}': {
+    '/push/subscriptions/status': {
+      get: {
+        tags: ['Notificacoes'], summary: 'Consulta as inscricoes Web Push do usuario', security: bearerSecurity,
+        responses: { '200': { description: 'Configuracao do servidor e inscricoes ativas/inativas' } },
+      },
+    },
+    '/push/subscriptions/{id}': {
       parameters: [idParameter],
       delete: {
-        tags: ['Notificacoes'], summary: 'Inativa token push do dispositivo atual', security: bearerSecurity,
-        responses: { '204': { description: 'Dispositivo inativado' }, '404': { description: 'Dispositivo fora do usuario ou empresa' } },
+        tags: ['Notificacoes'], summary: 'Inativa uma inscricao Web Push do usuario', security: bearerSecurity,
+        responses: { '204': { description: 'Inscricao inativada' }, '404': { description: 'Inscricao fora do usuario ou empresa' } },
+      },
+    },
+    '/push/test': {
+      post: {
+        tags: ['Notificacoes'], summary: 'Envia uma notificacao de teste', security: bearerSecurity,
+        responses: { '204': { description: 'Tentativa registrada para o usuario autenticado' } },
+      },
+    },
+    '/push/diagnostics': {
+      get: {
+        tags: ['Notificacoes'], summary: 'Lista diagnosticos Web Push da empresa', security: bearerSecurity,
+        description: 'Acesso exclusivo do perfil GESTOR. Nao retorna endpoint completo, p256dh ou auth.',
+        responses: { '200': { description: 'Usuarios, inscricoes e ultimo resultado de envio' }, '403': { description: 'Acesso restrito a GESTOR' } },
+      },
+    },
+    '/push/diagnostics/{id}/test': {
+      parameters: [idParameter],
+      post: {
+        tags: ['Notificacoes'], summary: 'Envia teste para uma inscricao da empresa', security: bearerSecurity,
+        description: 'Acesso exclusivo do perfil GESTOR.',
+        responses: { '204': { description: 'Tentativa registrada' }, '404': { description: 'Inscricao nao encontrada no tenant' } },
       },
     },
     '/dispositivos/atual': {
@@ -557,10 +584,80 @@ export const openApiDocument = {
         },
       },
     },
+    '/paineis/meu': {
+      get: {
+        tags: ['Paineis'], summary: 'Consulta o painel individual do participante', security: bearerSecurity,
+        description: 'FUNCIONARIO recebe somente corridas vinculadas ao proprio cadastro; PRESTADOR recebe somente atribuicoes proprias.',
+        parameters: [
+          { name: 'inicio', in: 'query', schema: { type: 'string', format: 'date' } },
+          { name: 'fim', in: 'query', schema: { type: 'string', format: 'date' } },
+          { name: 'status', in: 'query', schema: { type: 'string' } },
+          { name: 'pagina', in: 'query', schema: { type: 'integer', minimum: 1 } },
+          { name: 'limite', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+        ],
+        responses: { '200': { description: 'Resumo realizado e historico paginado' }, '403': { description: 'Perfil sem painel individual' } },
+      },
+    },
+    '/faturamentos/resumo': {
+      get: {
+        tags: ['Faturamentos'], summary: 'Resume a situacao financeira do periodo', security: bearerSecurity,
+        description: 'Exclusivo do GESTOR. Agrupa por prestador, setor, centro de custo e funcionario.',
+        responses: { '200': { description: 'Totais, medias, pendencias e agrupamentos' }, '403': { description: 'Acesso negado' } },
+      },
+    },
+    '/faturamentos/elegiveis': {
+      get: {
+        tags: ['Faturamentos'], summary: 'Lista corridas elegiveis para fechamento', security: bearerSecurity,
+        description: 'Exclusivo do GESTOR. Exige periodo e prestador; retorna somente finalizadas com valor e sem item ativo.',
+        responses: { '200': { description: 'Corridas elegiveis do tenant' }, '403': { description: 'Acesso negado' } },
+      },
+    },
+    '/faturamentos': {
+      get: {
+        tags: ['Faturamentos'], summary: 'Lista fechamentos financeiros', security: bearerSecurity,
+        description: 'GESTOR consulta a empresa; PRESTADOR consulta somente os proprios fechamentos.',
+        responses: { '200': { description: 'Fechamentos paginados' }, '403': { description: 'Perfil nao permitido' } },
+      },
+      post: {
+        tags: ['Faturamentos'], summary: 'Fecha corridas elegiveis em uma transacao', security: bearerSecurity,
+        description: 'Exclusivo do GESTOR. Preserva valor por item e exige motivo para cada exclusao.',
+        responses: { '201': { description: 'Faturamento fechado' }, '409': { description: 'Elegibilidade mudou durante a revisao' } },
+      },
+    },
+    '/faturamentos/{id}': {
+      parameters: [idParameter],
+      get: {
+        tags: ['Faturamentos'], summary: 'Consulta fechamento e itens', security: bearerSecurity,
+        responses: { '200': { description: 'Fechamento dentro do escopo' }, '404': { description: 'Fechamento sem acesso' } },
+      },
+    },
+    '/faturamentos/{id}/csv': {
+      parameters: [idParameter],
+      get: {
+        tags: ['Faturamentos'], summary: 'Exporta os itens congelados em CSV', security: bearerSecurity,
+        responses: { '200': { description: 'CSV UTF-8 delimitado por ponto e virgula', content: { 'text/csv': {} } } },
+      },
+    },
+    '/faturamentos/{id}/cancelar': {
+      parameters: [idParameter],
+      post: {
+        tags: ['Faturamentos'], summary: 'Cancela logicamente um fechamento', security: bearerSecurity,
+        description: 'Exclusivo do GESTOR. Preserva itens e exige motivo.',
+        responses: { '200': { description: 'Faturamento cancelado' }, '409': { description: 'Estado incompativel' } },
+      },
+    },
+    '/faturamentos/corridas/{id}/valor-final': {
+      parameters: [idParameter],
+      patch: {
+        tags: ['Faturamentos'], summary: 'Corrige o valor final com justificativa', security: bearerSecurity,
+        description: 'Exclusivo do GESTOR. Bloqueado enquanto a corrida participar de fechamento ativo.',
+        responses: { '200': { description: 'Valor corrigido e auditado' }, '409': { description: 'Corrida faturada ou nao finalizada' } },
+      },
+    },
     '/corridas': {
       get: {
         tags: ['Corridas'], summary: 'Lista corridas conforme o perfil autenticado', security: bearerSecurity,
-        description: 'GESTOR ve a empresa; GERENTE ve centros autorizados; PRESTADOR ve as proprias corridas e solicitadas disponiveis.',
+        description: 'GESTOR ve a empresa; GERENTE ve centros autorizados; PRESTADOR ve as proprias corridas e ofertas; FUNCIONARIO ve somente corridas vinculadas ao proprio cadastro.',
         parameters: [
           { name: 'pagina', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
           { name: 'limite', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },

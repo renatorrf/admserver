@@ -26,7 +26,7 @@ import type { CorridaService } from './corrida.service';
 export function createCorridaRouter(service: CorridaService): Router {
   const router = Router();
 
-  router.get('/', authorize('PRESTADOR', 'GERENTE', 'GESTOR'), validateQuery(corridaListSchema), asyncHandler(async (request, response) => {
+  router.get('/', authorize('PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR'), validateQuery(corridaListSchema), asyncHandler(async (request, response) => {
     response.status(200).json(await service.list(
       requireAuthContext(request), getValidatedQuery<CorridaListQuery>(request),
     ));
@@ -37,11 +37,11 @@ export function createCorridaRouter(service: CorridaService): Router {
     );
     response.status(201).json({ data: result });
   }));
-  router.get('/:id', authorize('PRESTADOR', 'GERENTE', 'GESTOR'), validateParams(uuidParamsSchema), asyncHandler(async (request, response) => {
+  router.get('/:id', authorize('PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR'), validateParams(uuidParamsSchema), asyncHandler(async (request, response) => {
     const { id } = getValidatedParams<UuidParams>(request);
     response.status(200).json({ data: await service.get(requireAuthContext(request), id) });
   }));
-  router.get('/:id/eventos', authorize('PRESTADOR', 'GERENTE', 'GESTOR'), validateParams(uuidParamsSchema), validateQuery(eventoListSchema), asyncHandler(async (request, response) => {
+  router.get('/:id/eventos', authorize('PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR'), validateParams(uuidParamsSchema), validateQuery(eventoListSchema), asyncHandler(async (request, response) => {
     const { id } = getValidatedParams<UuidParams>(request);
     response.status(200).json(await service.listEvents(
       requireAuthContext(request), id, getValidatedQuery<EventoListQuery>(request),

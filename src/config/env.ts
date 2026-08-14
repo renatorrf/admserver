@@ -8,6 +8,11 @@ const booleanFromString = z
   .default("false")
   .transform((value) => value === "true");
 
+const optionalEnvironmentValue = <T extends z.ZodType>(schema: T) => z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  schema.optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
@@ -44,7 +49,14 @@ const envSchema = z.object({
   MASTER_BOOTSTRAP_USERNAME: z.string().min(3).max(50).optional(),
   MASTER_BOOTSTRAP_PASSWORD_HASH: z.string().min(20).optional(),
   GEOAPIFY_API_KEY: z.string().min(20, "GEOAPIFY_API_KEY invalida").optional(),
-  FIREBASE_PROJECT_ID: z.string().trim().min(4).optional(),
+  PUSH_VAPID_SUBJECT: optionalEnvironmentValue(z.string().trim().min(8)),
+  PUSH_VAPID_PUBLIC_KEY: optionalEnvironmentValue(z.string().trim().min(20)),
+  PUSH_VAPID_PRIVATE_KEY: optionalEnvironmentValue(z.string().trim().min(20)),
+  PUSH_APP_URL: optionalEnvironmentValue(z.string().url()),
+  PUSH_NOTIFICATION_ICON_URL: optionalEnvironmentValue(z.string().url()),
+  PUSH_NOTIFICATION_BADGE_URL: optionalEnvironmentValue(z.string().url()),
+  PUSH_DEFAULT_OPEN_URL: optionalEnvironmentValue(z.string().trim().startsWith('/')),
+  PUSH_RIDE_OPEN_URL: optionalEnvironmentValue(z.string().trim().startsWith('/')),
 });
 
 export type AppConfig = {
@@ -62,7 +74,18 @@ export type AppConfig = {
   masterBootstrapUsername?: string;
   masterBootstrapPasswordHash?: string;
   geoapifyApiKey?: string;
-  firebaseProjectId?: string;
+  push?: PushConfig;
+};
+
+export type PushConfig = {
+  subject: string;
+  publicKey: string;
+  privateKey: string;
+  appUrl: string;
+  notificationIconUrl?: string;
+  notificationBadgeUrl?: string;
+  defaultOpenUrl: string;
+  rideOpenUrl: string;
 };
 
 let cachedConfig: AppConfig | undefined;
@@ -86,6 +109,13 @@ export function getConfig(): AppConfig {
       .join(", ");
     throw new Error(`Configuracao de ambiente invalida: ${fields}`);
   }
+  const pushRequired = [
+    parsed.data.PUSH_VAPID_SUBJECT, parsed.data.PUSH_VAPID_PUBLIC_KEY,
+    parsed.data.PUSH_VAPID_PRIVATE_KEY, parsed.data.PUSH_APP_URL,
+  ];
+  if (pushRequired.some(Boolean) && !pushRequired.every(Boolean)) {
+    throw new Error('Configuracao de ambiente invalida: informe todas as variaveis PUSH_VAPID_* e PUSH_APP_URL.');
+  }
 
   cachedConfig = {
     nodeEnv: parsed.data.NODE_ENV,
@@ -107,7 +137,16 @@ export function getConfig(): AppConfig {
     masterBootstrapUsername: parsed.data.MASTER_BOOTSTRAP_USERNAME,
     masterBootstrapPasswordHash: parsed.data.MASTER_BOOTSTRAP_PASSWORD_HASH,
     geoapifyApiKey: parsed.data.GEOAPIFY_API_KEY,
-    firebaseProjectId: parsed.data.FIREBASE_PROJECT_ID,
+    push: parsed.data.PUSH_VAPID_SUBJECT ? {
+      subject: parsed.data.PUSH_VAPID_SUBJECT,
+      publicKey: parsed.data.PUSH_VAPID_PUBLIC_KEY!,
+      privateKey: parsed.data.PUSH_VAPID_PRIVATE_KEY!,
+      appUrl: parsed.data.PUSH_APP_URL!,
+      notificationIconUrl: parsed.data.PUSH_NOTIFICATION_ICON_URL,
+      notificationBadgeUrl: parsed.data.PUSH_NOTIFICATION_BADGE_URL,
+      defaultOpenUrl: parsed.data.PUSH_DEFAULT_OPEN_URL ?? '/app',
+      rideOpenUrl: parsed.data.PUSH_RIDE_OPEN_URL ?? '/app/corridas',
+    } : undefined,
   };
 
   return cachedConfig;

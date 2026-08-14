@@ -7,7 +7,7 @@ import type { AuditEntry } from '../src/modules/auditoria/audit.types';
 import type { CorridaScope } from '../src/modules/corridas/corrida.repository';
 import type { CorridaCreateInput, CorridaListQuery, EventoListQuery } from '../src/modules/corridas/corrida.schemas';
 import { CorridaService, type CorridaAuditWriter, type CorridaStore } from '../src/modules/corridas/corrida.service';
-import type { CorridaEventoRecord, CorridaRecord, PrestadorContext, StatusCorrida } from '../src/modules/corridas/corrida.types';
+import type { CorridaEventoRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida } from '../src/modules/corridas/corrida.types';
 import type { PaginatedResult } from '../src/shared/pagination/pagination';
 import type { CorridaNotificationPublisher } from '../src/modules/notificacoes/notificacao.service';
 
@@ -80,6 +80,7 @@ class RideStore implements CorridaStore {
     return Promise.resolve({ data: [], meta: { pagina: query.pagina, limite: query.limite, total: 0, totalPaginas: 0 } });
   }
   getProviderByUser(): Promise<PrestadorContext> { return Promise.resolve(this.provider); }
+  getEmployeeByUser(): Promise<FuncionarioContext> { return Promise.resolve({ id: FUNCIONARIO, usuarioId: '78787878-7878-4787-8787-787878787878', ativo: true }); }
   validateProviderAndVehicle(): Promise<boolean> { return Promise.resolve(this.providerVehicleValid); }
   validateEmployeeAndCenter(): Promise<boolean> { return Promise.resolve(this.employeeValid); }
   managerCanAccessCenter(): Promise<boolean> { return Promise.resolve(this.managerAccess); }
@@ -98,6 +99,7 @@ class RideAudit implements CorridaAuditWriter {
 const gestor: AuthContext = { usuarioId: GESTOR, empresaId: EMPRESA, perfil: 'GESTOR' };
 const gerente: AuthContext = { usuarioId: GERENTE, empresaId: EMPRESA, perfil: 'GERENTE' };
 const prestador: AuthContext = { usuarioId: USUARIO_PRESTADOR, empresaId: EMPRESA, perfil: 'PRESTADOR' };
+const funcionario: AuthContext = { usuarioId: '78787878-7878-4787-8787-787878787878', empresaId: EMPRESA, perfil: 'FUNCIONARIO' };
 const listQuery: CorridaListQuery = { pagina: 1, limite: 20 };
 
 describe('CorridaService', () => {
@@ -108,6 +110,7 @@ describe('CorridaService', () => {
     await service.list(gestor, listQuery);
     await service.list(gerente, listQuery);
     await service.list(prestador, listQuery);
+    await service.list(funcionario, listQuery);
 
     expect(store.scopes).toEqual([
       { kind: 'GESTOR' },
@@ -116,6 +119,7 @@ describe('CorridaService', () => {
         setorIds: ['56565656-5656-4656-8656-565656565656'], centroCustoIds: [CENTRO],
       },
       { kind: 'PRESTADOR', prestadorId: PRESTADOR, disponivel: true },
+      { kind: 'FUNCIONARIO', funcionarioId: FUNCIONARIO },
     ]);
   });
 

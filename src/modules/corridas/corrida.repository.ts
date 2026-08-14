@@ -3,7 +3,9 @@ import type { QueryResultRow } from 'pg';
 import { queryOne, type Database, type QueryExecutor } from '../../db/pool';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
 import type { CorridaCreateInput, CorridaListQuery, EventoListQuery } from './corrida.schemas';
-import type { CorridaEventoRecord, CorridaRecord, PrestadorContext, StatusCorrida } from './corrida.types';
+import type {
+  CorridaEventoRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida,
+} from './corrida.types';
 
 type CorridaRow = QueryResultRow & {
   id: string;
@@ -24,6 +26,7 @@ type CorridaRow = QueryResultRow & {
   prestador_telefone?: string | null;
   veiculo_placa?: string | null;
   veiculo_descricao?: string | null;
+  solicitante_nome?: string;
 };
 
 type EventoRow = QueryResultRow & {
@@ -38,11 +41,13 @@ type EventoRow = QueryResultRow & {
   criado_em: Date;
 };
 type PrestadorRow = QueryResultRow & PrestadorContext;
+type FuncionarioContextRow = QueryResultRow & FuncionarioContext;
 
 export type CorridaScope =
   | { kind: 'GESTOR' }
   | { kind: 'GERENTE'; usuarioId: string; setorIds: string[]; centroCustoIds: string[] }
-  | { kind: 'PRESTADOR'; prestadorId: string; disponivel: boolean };
+  | { kind: 'PRESTADOR'; prestadorId: string; disponivel: boolean }
+  | { kind: 'FUNCIONARIO'; funcionarioId: string };
 
 export type CorridaPatch = {
   prestadorId?: string | null;
@@ -59,12 +64,14 @@ function numeric(value: unknown): number | null {
 const corridaSelect = `SELECT c.*,
   f.nome AS funcionario_nome, f.telefone AS funcionario_telefone, f.matricula AS funcionario_matricula,
   cc.codigo AS centro_custo_codigo, cc.nome AS centro_custo_nome,
+  su.nome AS solicitante_nome,
   p.nome AS prestador_nome, p.telefone AS prestador_telefone,
   v.placa AS veiculo_placa,
   CASE WHEN v.id IS NULL THEN NULL ELSE v.marca || ' ' || v.modelo || ' - ' || v.cor END AS veiculo_descricao
  FROM admtaxi.corridas c
  JOIN admtaxi.funcionarios f ON f.empresa_id = c.empresa_id AND f.id = c.funcionario_id
  JOIN admtaxi.centros_custo cc ON cc.empresa_id = c.empresa_id AND cc.id = c.centro_custo_id
+ JOIN admtaxi.usuarios su ON su.empresa_id = c.empresa_id AND su.id = c.solicitante_usuario_id
  LEFT JOIN admtaxi.prestadores p ON p.empresa_id = c.empresa_id AND p.id = c.prestador_id
  LEFT JOIN admtaxi.veiculos v ON v.empresa_id = c.empresa_id AND v.id = c.veiculo_id`;
 
@@ -111,6 +118,7 @@ export function mapCorrida(row: CorridaRow): CorridaRecord {
     prestadorTelefone: row.prestador_telefone,
     veiculoPlaca: row.veiculo_placa,
     veiculoDescricao: row.veiculo_descricao,
+    solicitanteNome: row.solicitante_nome,
   };
 }
 
@@ -336,6 +344,20 @@ export class CorridaRepository {
     );
   }
 
+  async getEmployeeByUser(
+    executor: QueryExecutor,
+    empresaId: string,
+    usuarioId: string,
+  ): Promise<FuncionarioContext | null> {
+    return queryOne<FuncionarioContextRow>(
+      executor,
+      `SELECT id, usuario_id AS "usuarioId", ativo
+         FROM admtaxi.funcionarios
+        WHERE empresa_id = $1 AND usuario_id = $2`,
+      [empresaId, usuarioId],
+    );
+  }
+
   async validateProviderAndVehicle(
     executor: QueryExecutor,
     empresaId: string,
@@ -425,6 +447,9 @@ export class CorridaRepository {
         c.prestador_id = $${values.length - 1}
         OR (c.prestador_id IS NULL AND c.status = 'SOLICITADA' AND $${values.length}::boolean = TRUE)
       )`);
+    } else if (scope.kind === 'FUNCIONARIO') {
+      values.push(scope.funcionarioId);
+      conditions.push(`c.funcionario_id = $${values.length}`);
     }
   }
 }

@@ -231,8 +231,11 @@ export class PrestadorUnificadoService {
       `SELECT id, placa, marca, modelo, cor, ano, capacidade_passageiros, ativo
          FROM admtaxi.veiculos WHERE empresa_id = $1 AND prestador_id = $2 ORDER BY ativo DESC, placa`, [empresaId, id]);
     const devices = await executor.query<QueryResultRow>(
-      `SELECT id, plataforma, nome_dispositivo, ativo, ultimo_uso_em
-         FROM admtaxi.dispositivos_push WHERE empresa_id = $1 AND usuario_id = $2 ORDER BY ativo DESC, ultimo_uso_em DESC`,
+      `SELECT id, dispositivo_descricao, user_agent, endpoint, ativo,
+              ultimo_sucesso_em, ultima_falha_em, atualizado_em
+         FROM admtaxi.push_subscriptions
+        WHERE empresa_id = $1 AND usuario_id = $2
+        ORDER BY ativo DESC, atualizado_em DESC`,
       [empresaId, provider.usuario_id]);
     return {
       id: provider.id,
@@ -242,8 +245,20 @@ export class PrestadorUnificadoService {
         numeroCnh: provider.numero_cnh, validadeCnh: provider.validade_cnh, disponivel: provider.disponivel, ativo: provider.ativo },
       veiculos: vehicles.rows.map((row) => ({ id: row.id, placa: row.placa, marca: row.marca, modelo: row.modelo,
         cor: row.cor, ano: row.ano, capacidadePassageiros: row.capacidade_passageiros, ativo: row.ativo })),
-      dispositivos: devices.rows.map((row) => ({ id: row.id, plataforma: row.plataforma, nomeDispositivo: row.nome_dispositivo,
-        ativo: row.ativo, ultimoUsoEm: row.ultimo_uso_em })),
+      dispositivos: devices.rows.map((row) => ({
+        id: row.id,
+        descricao: row.dispositivo_descricao,
+        navegador: typeof row.user_agent === 'string' ? row.user_agent.slice(0, 120) : null,
+        endpointHost: this.endpointHost(row.endpoint),
+        ativo: row.ativo,
+        ultimoSucessoEm: row.ultimo_sucesso_em,
+        ultimaFalhaEm: row.ultima_falha_em,
+        atualizadoEm: row.atualizado_em,
+      })),
     };
+  }
+
+  private endpointHost(endpoint: unknown): string {
+    try { return new URL(String(endpoint)).host; } catch { return 'push-service'; }
   }
 }

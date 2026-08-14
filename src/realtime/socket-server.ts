@@ -5,6 +5,7 @@ import { Server, type Socket } from 'socket.io';
 import { ZodError } from 'zod';
 
 import type { AppConfig } from '../config/env';
+import type { Database } from '../db/pool';
 import type { AuthContext } from '../modules/auth/auth.types';
 import type { TokenService } from '../modules/auth/token-service';
 import type { CorridaRecord } from '../modules/corridas/corrida.types';
@@ -16,6 +17,7 @@ import type { LocalizacaoService } from '../modules/localizacoes/localizacao.ser
 import type { LocalizacaoRecord } from '../modules/localizacoes/localizacao.types';
 import { AppError } from '../shared/errors/app-error';
 import type { RealtimeBus } from './realtime-bus';
+import type { CorridaRealtimeEvent, FaturamentoRealtimeEvent, FaturamentoRealtimePayload } from './realtime-bus';
 
 type SocketData = {
   auth: AuthContext;
@@ -37,6 +39,16 @@ type ClientToServerEvents = {
 
 type ServerToClientEvents = {
   'corrida:atualizada': (ride: CorridaRecord) => void;
+  'corrida:criada': (ride: CorridaRecord) => void;
+  'corrida:ofertada': (ride: CorridaRecord) => void;
+  'corrida:aceita': (ride: CorridaRecord) => void;
+  'corrida:status-alterado': (ride: CorridaRecord) => void;
+  'corrida:finalizada': (ride: CorridaRecord) => void;
+  'corrida:cancelada': (ride: CorridaRecord) => void;
+  'corrida:valor-alterado': (ride: CorridaRecord) => void;
+  'corrida:lista-invalidada': (payload: { corridaId: string }) => void;
+  'faturamento:criado': (payload: FaturamentoRealtimePayload) => void;
+  'faturamento:cancelado': (payload: FaturamentoRealtimePayload) => void;
   'localizacao:atualizada': (location: LocalizacaoRecord) => void;
 };
 
@@ -45,6 +57,11 @@ type AdmTaxiSocket = Socket<ClientToServerEvents, ServerToClientEvents, never, S
 function rideRoom(empresaId: string, corridaId: string): string {
   return `empresa:${empresaId}:corrida:${corridaId}`;
 }
+
+const userRoom = (empresaId: string, usuarioId: string): string => `empresa:${empresaId}:usuario:${usuarioId}`;
+const profileRoom = (empresaId: string, profile: string): string => `empresa:${empresaId}:perfil:${profile}`;
+const centerRoom = (empresaId: string, centerId: string): string => `empresa:${empresaId}:centro:${centerId}`;
+const providerRoom = (empresaId: string, providerId: string): string => `empresa:${empresaId}:prestador:${providerId}`;
 
 function tokenFromSocket(socket: Socket): string | null {
   const authToken = socket.handshake.auth?.token;
@@ -82,6 +99,7 @@ export function attachSocketServer(
   locations: LocalizacaoService,
   realtime: RealtimeBus,
   logger: Logger,
+  database?: Database,
 ): Server {
   const io = new Server<ClientToServerEvents, ServerToClientEvents, never, SocketData>(server, {
     serveClient: false,
@@ -108,6 +126,33 @@ export function attachSocketServer(
   });
 
   io.on('connection', (socket) => {
+    void socket.join(userRoom(socket.data.auth.empresaId, socket.data.auth.usuarioId));
+    if (socket.data.auth.perfil === 'GESTOR') {
+      void socket.join(profileRoom(socket.data.auth.empresaId, 'GESTOR'));
+    }
+    if (database && socket.data.auth.perfil === 'GERENTE') {
+      void database.query<{ centro_custo_id: string }>(
+        `SELECT gcc.centro_custo_id FROM admtaxi.gerente_centros_custo gcc
+         JOIN admtaxi.centros_custo cc ON cc.empresa_id=gcc.empresa_id AND cc.id=gcc.centro_custo_id AND cc.ativo=TRUE
+         JOIN admtaxi.setores s ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id AND s.ativo=TRUE
+         JOIN admtaxi.gerente_setores gs ON gs.empresa_id=gcc.empresa_id
+           AND gs.gerente_usuario_id=gcc.gerente_usuario_id AND gs.setor_id=cc.setor_id
+         WHERE gcc.empresa_id=$1 AND gcc.gerente_usuario_id=$2`,
+        [socket.data.auth.empresaId, socket.data.auth.usuarioId],
+      ).then((result) => socket.join(result.rows.map((row) => centerRoom(socket.data.auth.empresaId, row.centro_custo_id))))
+        .catch(() => socket.disconnect(true));
+    }
+    if (database && socket.data.auth.perfil === 'PRESTADOR') {
+      void database.query<{ id: string }>(
+        'SELECT id FROM admtaxi.prestadores WHERE empresa_id=$1 AND usuario_id=$2 AND ativo=TRUE',
+        [socket.data.auth.empresaId, socket.data.auth.usuarioId],
+      ).then((result) => result.rows[0]?.id
+        ? socket.join([
+          providerRoom(socket.data.auth.empresaId, result.rows[0].id),
+          profileRoom(socket.data.auth.empresaId, 'PRESTADOR'),
+        ]) : undefined)
+        .catch(() => socket.disconnect(true));
+    }
     socket.on('corrida:acompanhar', (raw: unknown, ack: RealtimeAck) => {
       void (async () => {
         try {
@@ -151,12 +196,40 @@ export function attachSocketServer(
   realtime.onLocation((location) => {
     io.to(rideRoom(location.empresaId, location.corridaId)).emit('localizacao:atualizada', location);
   });
-  realtime.onRide((ride) => {
-    const room = rideRoom(ride.empresaId, ride.id);
-    io.to(room).emit('corrida:atualizada', ride);
-    if (ride.status === 'FINALIZADA' || ride.status === 'CANCELADA') {
-      io.in(room).socketsLeave(room);
-    }
+  realtime.onRide((ride, event) => {
+    void (async () => {
+      const rooms = new Set<string>([
+        rideRoom(ride.empresaId, ride.id), profileRoom(ride.empresaId, 'GESTOR'),
+        centerRoom(ride.empresaId, ride.centroCustoId), userRoom(ride.empresaId, ride.solicitanteUsuarioId),
+      ]);
+      if (ride.prestadorId) rooms.add(providerRoom(ride.empresaId, ride.prestadorId));
+      if (database) {
+        const users = await database.query<{ funcionario_usuario_id: string | null; prestador_usuario_id: string | null }>(
+          `SELECT f.usuario_id AS funcionario_usuario_id,p.usuario_id AS prestador_usuario_id
+           FROM admtaxi.corridas c
+           JOIN admtaxi.funcionarios f ON f.empresa_id=c.empresa_id AND f.id=c.funcionario_id
+           LEFT JOIN admtaxi.prestadores p ON p.empresa_id=c.empresa_id AND p.id=c.prestador_id
+           WHERE c.empresa_id=$1 AND c.id=$2`, [ride.empresaId, ride.id],
+        );
+        const audience = users.rows[0];
+        if (audience?.funcionario_usuario_id) rooms.add(userRoom(ride.empresaId, audience.funcionario_usuario_id));
+        if (audience?.prestador_usuario_id) rooms.add(userRoom(ride.empresaId, audience.prestador_usuario_id));
+      }
+      const targets = [...rooms];
+      io.to(targets).emit('corrida:atualizada', ride);
+      io.to(targets).emit(event as CorridaRealtimeEvent, ride);
+      if (event === 'corrida:criada' || event === 'corrida:aceita' || event === 'corrida:cancelada') {
+        io.to(profileRoom(ride.empresaId, 'PRESTADOR')).emit('corrida:lista-invalidada', { corridaId: ride.id });
+      }
+      if (ride.status === 'FINALIZADA' || ride.status === 'CANCELADA') {
+        io.in(rideRoom(ride.empresaId, ride.id)).socketsLeave(rideRoom(ride.empresaId, ride.id));
+      }
+    })().catch(() => logger.warn({ corridaId: ride.id }, 'Falha ao distribuir atualizacao de corrida'));
+  });
+  realtime.onBilling((event, payload) => {
+    const rooms = [profileRoom(payload.empresaId, 'GESTOR')];
+    if (payload.prestadorId) rooms.push(providerRoom(payload.empresaId, payload.prestadorId));
+    io.to(rooms).emit(event as FaturamentoRealtimeEvent, payload);
   });
 
   io.engine.on('connection_error', (error) => {
