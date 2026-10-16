@@ -417,6 +417,13 @@ export const openApiDocument = {
         responses: { '200': { description: 'Funcionarios ativos no escopo do perfil' }, '403': { description: 'Perfil nao permitido' } },
       },
     },
+    '/operacao/localizacao-padrao': {
+      get: {
+        tags: ['Operacao'], summary: 'Coordenadas iniciais do mapa da empresa autenticada', security: bearerSecurity,
+        description: 'Todos os perfis autenticados. A empresa vem exclusivamente do token; nao recebe empresaId. Retorna somente latitudePadrao e longitudePadrao, numericas ou nulas.',
+        responses: { '200': { description: 'Localizacao padrao, sem dados administrativos da empresa' }, '401': { description: 'Autenticacao necessaria' } },
+      },
+    },
     '/operacao/escopo': {
       get: {
         tags: ['Operacao'], summary: 'Consulta o escopo operacional autenticado', security: bearerSecurity,

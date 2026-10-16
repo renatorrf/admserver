@@ -47,6 +47,23 @@ describe('OperacaoService', () => {
 });
 
 describe('OperacaoRepository', () => {
+  it('busca a localizacao exclusivamente na empresa autenticada e nao reaproveita outra empresa', async () => {
+    const query = vi.fn().mockResolvedValueOnce({ rows: [{ latitude_padrao: '-18.91', longitude_padrao: '-48.27' }] })
+      .mockResolvedValueOnce({ rows: [{ latitude_padrao: '0', longitude_padrao: '0' }] });
+    const service = new OperacaoService(new OperacaoRepository({ query } as unknown as Database));
+    await expect(service.getMapLocation(gerente)).resolves.toEqual({ latitudePadrao: -18.91, longitudePadrao: -48.27 });
+    await expect(service.getMapLocation({ ...prestador, empresaId: 'outra-empresa' }))
+      .resolves.toEqual({ latitudePadrao: 0, longitudePadrao: 0 });
+    expect(query).toHaveBeenNthCalledWith(1, expect.stringContaining('WHERE id = $1 AND ativo = TRUE'), [EMPRESA]);
+    expect(query).toHaveBeenNthCalledWith(2, expect.any(String), ['outra-empresa']);
+  });
+
+  it.each([{ rows: [] }, { rows: [{ latitude_padrao: null, longitude_padrao: null }] }])('nao transforma ausencia de localizacao em zero', async ({ rows }) => {
+    const query = vi.fn().mockResolvedValue({ rows });
+    const repository = new OperacaoRepository({ query } as unknown as Database);
+    await expect(repository.getMapLocation(gerente)).resolves.toEqual({ latitudePadrao: null, longitudePadrao: null });
+  });
+
   it('aplica empresa e usuario ao escopo de centros do gerente', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [{ id: CENTRO, codigo: 'FIN', nome: 'Financeiro' }] });
     const repository = new OperacaoRepository({ query } as unknown as Database, scopeResolver);

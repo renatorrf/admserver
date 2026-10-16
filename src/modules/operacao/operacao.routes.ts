@@ -4,13 +4,17 @@ import { asyncHandler } from '../../shared/http/async-handler';
 import { getValidatedQuery, validateQuery } from '../../shared/validation/validate';
 import { authorize, requireAuthContext } from '../auth/auth.middleware';
 import {
-  funcionarioLookupSchema, funcionarioSearchSchema, prestadorSearchSchema,
+  funcionarioLookupSchema, funcionarioSearchSchema, prestadorSearchSchema, mapLocationQuerySchema,
   type FuncionarioLookupQuery, type FuncionarioSearchQuery, type PrestadorSearchQuery,
 } from './operacao.schemas';
 import type { OperacaoService } from './operacao.service';
 
 export function createOperacaoRouter(service: OperacaoService): Router {
   const router = Router();
+
+  router.get('/localizacao-padrao', validateQuery(mapLocationQuerySchema), asyncHandler(async (request, response) => {
+    response.status(200).json({ data: await service.getMapLocation(requireAuthContext(request)) });
+  }));
 
   router.get('/escopo', authorize('GERENTE', 'GESTOR'), asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.getScopeSummary(requireAuthContext(request)) });

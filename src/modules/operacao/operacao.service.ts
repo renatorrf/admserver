@@ -6,6 +6,10 @@ import type { FuncionarioLookupQuery, FuncionarioSearchQuery, PrestadorSearchQue
 export class OperacaoService {
   constructor(private readonly repository: OperacaoRepository) {}
 
+  getMapLocation(auth: AuthContext) {
+    return this.repository.getMapLocation(auth);
+  }
+
   listCenters(auth: AuthContext) {
     if (auth.perfil === 'PRESTADOR') throw forbidden();
     return this.repository.listCenters(auth);

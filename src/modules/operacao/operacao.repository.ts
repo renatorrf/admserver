@@ -44,6 +44,18 @@ export class OperacaoRepository {
     this.scopeResolver = scopeResolver ?? new OperationalScopeService(database);
   }
 
+  async getMapLocation(auth: AuthContext) {
+    const result = await this.database.query<{ latitude_padrao: string | null; longitude_padrao: string | null }>(
+      'SELECT latitude_padrao, longitude_padrao FROM admtaxi.empresas WHERE id = $1 AND ativo = TRUE',
+      [auth.empresaId],
+    );
+    const row = result.rows[0];
+    return {
+      latitudePadrao: row?.latitude_padrao == null ? null : Number(row.latitude_padrao),
+      longitudePadrao: row?.longitude_padrao == null ? null : Number(row.longitude_padrao),
+    };
+  }
+
   async listSectors(auth: AuthContext): Promise<SetorLookup[]> {
     const scope = await this.scopeResolver.resolve(auth);
     const values: unknown[] = [auth.empresaId];

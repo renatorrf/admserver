@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { paginationSchema } from '../../shared/pagination/pagination';
 
+export const mapLocationQuerySchema = z.object({}).strict();
+
 export const funcionarioLookupSchema = z.object({
   centroCustoId: z.string().uuid('Centro de custo invalido.').optional(),
 }).strict();
