@@ -273,6 +273,22 @@ export const openApiDocument = {
       },
     },
     '/usuarios': usuarios.collection,
+    '/usuarios/controle': {
+      get: {
+        tags: ['Usuarios'], security: bearerSecurity, summary: 'Controle de usuarios e acessos da empresa (GESTOR)',
+        description: 'Retorna data, meta, resumo, consultadoEm e janelaAtividadeMinutos. Empresa derivada do token.',
+        parameters: [
+          { name: 'pagina', in: 'query', schema: { type: 'integer', minimum: 1 } },
+          { name: 'limite', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+          { name: 'busca', in: 'query', schema: { type: 'string', maxLength: 100 } },
+          { name: 'perfil', in: 'query', schema: { type: 'string', enum: ['GESTOR', 'GERENTE', 'PRESTADOR', 'FUNCIONARIO'] } },
+          { name: 'ativo', in: 'query', schema: { type: 'string', enum: ['true', 'false'] } },
+          { name: 'atividade', in: 'query', schema: { type: 'string', enum: ['RECENTE', 'SEM_ATIVIDADE'] } },
+        ],
+        responses: { '200': { description: 'Usuarios e resumo de acessos' }, '401': { description: 'Autenticacao necessaria' },
+          '403': { description: 'Apenas GESTOR' }, '422': { description: 'Filtros invalidos' } },
+      },
+    },
     '/usuarios/{id}': usuarios.item,
     '/usuarios/{id}/inativar': usuarios.inativar,
     '/usuarios/{id}/reativar': usuarios.reativar,

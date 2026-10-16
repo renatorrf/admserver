@@ -8,6 +8,7 @@ import type { AppConfig } from '../src/config/env';
 import { createAdminRouter } from '../src/modules/admin/admin.routes';
 import type { AuthApplication } from '../src/modules/auth/auth.service';
 import { TokenService } from '../src/modules/auth/token-service';
+import { createOperationalRouter } from '../src/modules/corridas/operational.routes';
 
 const config: AppConfig = {
   nodeEnv: 'test', port: 3000, databaseUrl: 'postgres://unused', appOrigins: [],
@@ -26,11 +27,39 @@ function app() {
   return createApp({
     config, logger: pino({ level: 'silent' }), pool, auth, tokens,
     adminRouter: createAdminRouter(pool, tokens),
+    operationalRouter: createOperationalRouter(pool, tokens),
   });
 }
 
 describe('rotas administrativas', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('resolve usuarios/controle antes de usuarios/:id com os filtros da tela', async () => {
+    const empresaId = '11111111-1111-4111-8111-111111111111';
+    const token = tokens.issueTokens({ usuarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', empresaId, perfil: 'GESTOR' }).accessToken;
+    const resumo = { total: 0, habilitados: 0, bloqueados: 0, atividadeRecente: 0, comSessao: 0 };
+    vi.mocked(pool.query).mockResolvedValueOnce({ rows: [{ data: [], total: 0, resumo, consultadoEm: '2026-10-16T12:00:00Z' }] } as never);
+
+    const response = await request(app()).get('/api/v1/usuarios/controle')
+      .query({ pagina: '1', limite: '20', busca: 'Ana', perfil: 'GERENTE', ativo: 'true', atividade: 'RECENTE' })
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ data: [], resumo, janelaAtividadeMinutos: 5,
+      meta: { pagina: 1, limite: 20, total: 0, totalPaginas: 0 } });
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('WHERE u.empresa_id=$1'),
+      [empresaId, true, 'GERENTE', '%Ana%', true, 20, 0]);
+    expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('continua validando IDs nas consultas individuais', async () => {
+    const token = tokens.issueTokens({ usuarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      empresaId: '11111111-1111-4111-8111-111111111111', perfil: 'GESTOR' }).accessToken;
+    const response = await request(app()).get('/api/v1/usuarios/id-invalido').set('Authorization', `Bearer ${token}`);
+    expect(response.status).toBe(422);
+    expect(response.body.erro.detalhes.campos).toContainEqual({ campo: 'id', mensagem: 'Identificador invalido.' });
+    expect(pool.query).not.toHaveBeenCalled();
+  });
 
   it.each(['/api/v1/usuarios', '/api/v1/usuarios/controle'])('bloqueia gerente em %s antes de consultar o banco', async (path) => {
     const token = tokens.issueTokens({
