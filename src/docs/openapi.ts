@@ -672,7 +672,7 @@ export const openApiDocument = {
         responses: { '200': { description: 'Lista paginada e limitada ao tenant' } },
       },
       post: {
-        tags: ['Corridas'], summary: 'Solicita corrida', description: 'Perfis permitidos: GERENTE e GESTOR.',
+        tags: ['Corridas'], summary: 'Solicita corrida', description: 'GERENTE e GESTOR. Alem dos campos legados, aceita itinerario (ItinerarioInput) e chaveSolicitacao UUID obrigatoria no modo individual. Nao misture itinerario e paradas legadas. Quantidade deve corresponder aos participantes. Chave por empresa/solicitante: retry identico nao duplica corrida.',
         security: bearerSecurity,
         responses: { '201': { description: 'Corrida solicitada' }, '422': { description: 'Funcionario ou centro invalido' } },
       },
@@ -689,6 +689,42 @@ export const openApiDocument = {
       get: {
         tags: ['Corridas'], summary: 'Lista o historico de eventos da corrida', security: bearerSecurity,
         responses: { '200': { description: 'Eventos paginados' } },
+      },
+    },
+    '/corridas/{id}/itinerario': {
+      parameters: [idParameter],
+      put: {
+        tags: ['Corridas'], security: bearerSecurity, summary: 'Edita itinerario antes do aceite',
+        description: 'GESTOR/GERENTE autorizado. Mantem IDs estaveis e participantes; exige versao atual. Maximo operacional de 32 pontos e 99 participantes, mesma empresa e centro.',
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', additionalProperties: false, required: ['versao', 'itinerario'], properties: {
+            versao: { type: 'integer', minimum: 1 }, itinerario: { $ref: '#/components/schemas/ItinerarioInput' },
+          },
+        } } } },
+        responses: { '200': { description: 'Snapshot atualizado' }, '404': { description: 'Objeto sem acesso' },
+          '409': { description: 'Versao, lotacao ou estado em conflito' }, '422': { description: 'Campos invalidos; detalhes.campos inclui objetoId quando disponivel' } },
+      },
+    },
+    '/corridas/{id}/itinerario/acoes': {
+      parameters: [idParameter],
+      post: {
+        tags: ['Corridas'], security: bearerSecurity, summary: 'Executa uma etapa individual',
+        description: 'Somente prestador atribuido. Mesma chave e payload repetidos retornam o snapshot sem repetir efeitos. Chave reutilizada com outros dados retorna 409.',
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', additionalProperties: false, required: ['chave', 'versao', 'paradaId', 'acao'], properties: {
+            chave: { type: 'string', format: 'uuid' }, versao: { type: 'integer', minimum: 1 }, paradaId: { type: 'string', format: 'uuid' },
+            acao: { type: 'string', enum: ['INICIAR', 'CHEGAR', 'EMBARCAR', 'DESEMBARCAR', 'AUSENTE', 'CANCELAR_PASSAGEIRO', 'CONCLUIR'] },
+            funcionarioId: { type: 'string', format: 'uuid' }, motivo: { type: 'string', minLength: 5, maxLength: 1000 },
+          },
+        } } } },
+        responses: { '200': { description: 'Snapshot persistido' }, '409': { description: 'Estado, chave ou versao conflitante' }, '422': { description: 'Dados invalidos' } },
+      },
+    },
+    '/corridas/{id}/rota': {
+      parameters: [idParameter],
+      get: { tags: ['Corridas'], security: bearerSecurity, summary: 'Calcula rota Geoapify ordenada',
+        description: 'Funcionario recebe somente os pontos do proprio trajeto. Retorno: versao, distanciaMetros, duracaoSegundos, linhas [latitude,longitude] e calculadoEm. Estimativa, nao GPS observado.',
+        responses: { '200': { description: 'Geometria e estimativas' }, '404': { description: 'Objeto sem acesso' }, '503': { description: 'Provedor indisponivel; detalhes textuais permanecem acessiveis' } },
       },
     },
     '/corridas/{id}/localizacoes': {
@@ -742,6 +778,21 @@ export const openApiDocument = {
       masterBearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Token exclusivo do portal master.' },
     },
     schemas: {
+      ItinerarioInput: {
+        type: 'object', additionalProperties: false, required: ['paradas', 'participantes'], properties: {
+          paradas: { type: 'array', minItems: 2, maxItems: 32, items: {
+            type: 'object', additionalProperties: false, required: ['id', 'descricao', 'latitude', 'longitude'], properties: {
+              id: { type: 'string', format: 'uuid' }, descricao: { type: 'string', minLength: 3, maxLength: 1000 },
+              latitude: { type: 'number', minimum: -90, maximum: 90 }, longitude: { type: 'number', minimum: -180, maximum: 180 },
+            },
+          } },
+          participantes: { type: 'array', minItems: 1, maxItems: 99, items: {
+            type: 'object', additionalProperties: false, required: ['funcionarioId', 'embarqueId', 'desembarqueId'], properties: {
+              funcionarioId: { type: 'string', format: 'uuid' }, embarqueId: { type: 'string', format: 'uuid' }, desembarqueId: { type: 'string', format: 'uuid' },
+            },
+          } },
+        },
+      },
       PrestadorUnificadoCreateInput: {
         type: 'object', additionalProperties: false, required: ['acesso', 'prestador', 'veiculo'],
         properties: {

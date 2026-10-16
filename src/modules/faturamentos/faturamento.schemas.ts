@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 import { paginationSchema } from '../../shared/pagination/pagination';
+import { calendarDate } from '../../shared/validation/calendar-date';
 
-const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Informe a data no formato AAAA-MM-DD.');
+const dateOnly = calendarDate;
 const money = z.union([z.string(), z.number()])
   .transform((value) => String(value).replace(',', '.'))
   .pipe(z.string().regex(/^\d{1,10}(\.\d{1,2})?$/, 'Informe um valor monetario valido.'));

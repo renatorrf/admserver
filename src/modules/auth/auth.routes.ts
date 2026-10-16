@@ -8,6 +8,7 @@ import { createAuthenticate } from './auth.middleware';
 import { loginSchema, refreshSchema } from './auth.schemas';
 import type { AuthApplication } from './auth.service';
 import type { TokenService } from './token-service';
+import { authenticatedRateKey } from '../../shared/http/rate-key';
 
 export function createAuthRouter(auth: AuthApplication, tokens: TokenService): Router {
   const router = Router();
@@ -16,16 +17,22 @@ export function createAuthRouter(auth: AuthApplication, tokens: TokenService): R
   const sensitiveRouteLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 10,
+    skipSuccessfulRequests: true,
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: {
       erro: { codigo: 'MUITAS_TENTATIVAS', mensagem: 'Aguarde alguns minutos antes de tentar novamente.' },
     },
   });
+  const refreshLimiter = rateLimit({
+    windowMs: 60_000, limit: 60, standardHeaders: 'draft-8', legacyHeaders: false,
+    keyGenerator: authenticatedRateKey(tokens, 'refresh'),
+    message: { erro: { codigo: 'MUITAS_TENTATIVAS', mensagem: 'Aguarde um minuto antes de renovar a sessao.' } },
+  });
 
   router.get('/empresas', asyncHandler(controller.companies));
   router.post('/login', sensitiveRouteLimiter, validateBody(loginSchema), asyncHandler(controller.login));
-  router.post('/refresh', sensitiveRouteLimiter, validateBody(refreshSchema), asyncHandler(controller.refresh));
+  router.post('/refresh', validateBody(refreshSchema), refreshLimiter, asyncHandler(controller.refresh));
   router.post('/logout', validateBody(refreshSchema), asyncHandler(controller.logout));
   router.get('/me', authenticate, asyncHandler(controller.me));
 

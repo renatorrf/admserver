@@ -7,6 +7,7 @@ import type { Database } from '../../db/pool';
 import { forbidden, notFound, unavailable } from '../../shared/errors/app-error';
 import type { AuthContext } from '../auth/auth.types';
 import type { CorridaRecord } from '../corridas/corrida.types';
+import type { ItineraryAction } from '../corridas/itinerary';
 import type { PushSubscriptionInput } from './notificacao.schemas';
 
 type SubscriptionRow = {
@@ -24,6 +25,8 @@ export type RideNotificationEvent =
   | 'CORRIDA_INICIADA'
   | 'FINALIZADA'
   | 'CANCELADA'
+  | 'ITINERARIO_ALTERADO'
+  | 'ETAPA_ATUALIZADA'
   | 'ATRIBUICAO_ALTERADA';
 
 export type PushDevice = {
@@ -47,6 +50,7 @@ export interface CorridaNotificationPublisher {
   publishRideCreated(ride: CorridaRecord): void;
   publishRideUpdate(ride: CorridaRecord, event: RideNotificationEvent): void;
   publishProviderRide(ride: CorridaRecord, event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA'): void;
+  publishItineraryUpdate?(ride: CorridaRecord, action?: ItineraryAction): void;
 }
 
 let vapidInitialized = false;
@@ -180,6 +184,18 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     void this.sendProviderRide(ride, event).catch(() => undefined);
   }
 
+  publishItineraryUpdate(ride: CorridaRecord, action?: ItineraryAction): void {
+    if (action?.acao === 'CONCLUIR') return;
+    const event = action ? 'ETAPA_ATUALIZADA' : 'ITINERARIO_ALTERADO';
+    const affected = (ride.itinerario?.participantes ?? []).filter(p => !action
+      || (action.funcionarioId ? p.funcionarioId === action.funcionarioId
+        : p.embarqueId === action.paradaId || p.desembarqueId === action.paradaId)).map(p => p.funcionarioId);
+    void Promise.all([
+      this.sendRequesterRide(ride, event), this.sendGestorsRide(ride, event), this.sendEmployeeRide(ride, event, affected),
+      ...(!action ? [this.sendProviderRide(ride, 'ALTERADA')] : []),
+    ]).catch(() => undefined);
+  }
+
   private async sendAvailableRide(ride: CorridaRecord): Promise<void> {
     const recipients = await this.database.query<UserRow>(
       `SELECT DISTINCT p.usuario_id
@@ -225,25 +241,31 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     await Promise.all(users.rows.map((user) => this.sendRideMessage(ride, user.usuario_id, `GESTOR_${event}`, event)));
   }
 
-  private async sendEmployeeRide(ride: CorridaRecord, event: RideNotificationEvent | 'SOLICITADA'): Promise<void> {
-    const userId = this.employeeUsers
-      ? await this.employeeUsers.resolveEmployeeUser(ride.empresaId, ride.funcionarioId)
+  private async sendEmployeeRide(ride: CorridaRecord, event: RideNotificationEvent | 'SOLICITADA', affectedIds?: string[]): Promise<void> {
+    const employeeIds = affectedIds ?? [
+      ride.funcionarioId,
+      ...(ride.itinerario?.participantes ?? []).map(p => p.funcionarioId),
+      ...(ride.paradas ?? []).flatMap((stop) => stop.tipo === 'FUNCIONARIO' && stop.funcionarioId ? [stop.funcionarioId] : []),
+    ];
+    const userIds = this.employeeUsers
+      ? (await Promise.all(employeeIds.map((id) => this.employeeUsers!.resolveEmployeeUser(ride.empresaId, id))))
+        .filter((id): id is string => !!id)
       : (await this.database.query<UserRow>(
-        `SELECT f.usuario_id FROM admtaxi.funcionarios f JOIN admtaxi.usuarios u
+        `SELECT DISTINCT f.usuario_id FROM admtaxi.funcionarios f JOIN admtaxi.usuarios u
           ON u.empresa_id=f.empresa_id AND u.id=f.usuario_id
-         WHERE f.empresa_id=$1 AND f.id=$2 AND f.ativo=TRUE AND u.ativo=TRUE`,
-        [ride.empresaId, ride.funcionarioId],
-      )).rows[0]?.usuario_id ?? null;
-    if (!userId) return;
+         WHERE f.empresa_id=$1 AND f.id=ANY($2::uuid[]) AND f.ativo=TRUE AND u.ativo=TRUE`,
+        [ride.empresaId, employeeIds],
+      )).rows.map((row) => row.usuario_id);
+    if (!userIds.length) return;
     const message = event === 'SOLICITADA'
       ? { title: 'Nova corrida solicitada', body: 'Uma nova corrida foi solicitada para voce.' }
       : this.rideMessage(event);
-    await this.sendRecipient({
+    await Promise.all(userIds.map((userId) => this.sendRecipient({
       empresaId: ride.empresaId, usuarioId: userId, corridaId: ride.id,
       event: `FUNCIONARIO_${event}`, title: message.title, body: message.body,
       destination: this.rideUrl(ride.id),
-      dedupeKey: `${ride.empresaId}:${ride.id}:FUNCIONARIO_${event}:${userId}`,
-    });
+      dedupeKey: `${ride.empresaId}:${ride.id}:FUNCIONARIO_${event}:${userId}${this.itineraryDedupe(ride, event)}`,
+    })));
   }
 
   private async sendProviderRide(
@@ -267,7 +289,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     await this.sendRecipient({
       empresaId: ride.empresaId, usuarioId: userId, corridaId: ride.id, event, title, body,
       destination: event === 'REMOVIDA' ? '/app/corridas' : this.rideUrl(ride.id),
-      dedupeKey: `${ride.empresaId}:${ride.id}:${event}:${ride.status}:${ride.prestadorId}`,
+      dedupeKey: `${ride.empresaId}:${ride.id}:${event}:${ride.status}:${ride.prestadorId}${event === 'ALTERADA' && ride.itinerarioVersao ? `:v${ride.itinerarioVersao}` : ''}`,
     });
   }
 
@@ -276,7 +298,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     return this.sendRecipient({
       empresaId: ride.empresaId, usuarioId: userId, corridaId: ride.id,
       event: logEvent, title: message.title, body: message.body, destination: this.rideUrl(ride.id),
-      dedupeKey: `${ride.empresaId}:${ride.id}:${logEvent}:${userId}`,
+      dedupeKey: `${ride.empresaId}:${ride.id}:${logEvent}:${userId}${this.itineraryDedupe(ride, messageEvent)}`,
     });
   }
 
@@ -399,7 +421,13 @@ export class NotificacaoService implements CorridaNotificationPublisher {
       FINALIZADA: { title: 'Corrida finalizada', body: 'A corrida foi finalizada.' },
       CANCELADA: { title: 'Corrida cancelada', body: 'A corrida foi cancelada.' },
       ATRIBUICAO_ALTERADA: { title: 'Corrida atualizada', body: 'O prestador ou veiculo foi alterado.' },
+      ITINERARIO_ALTERADO: { title: 'Itinerario atualizado', body: 'Confira os pontos da sua viagem no aplicativo.' },
+      ETAPA_ATUALIZADA: { title: 'Etapa da viagem atualizada', body: 'Abra a corrida para consultar o atendimento do seu trajeto.' },
     }[event];
+  }
+
+  private itineraryDedupe(ride: CorridaRecord, event: string): string {
+    return ['ITINERARIO_ALTERADO', 'ETAPA_ATUALIZADA'].includes(event) ? `:v${ride.itinerarioVersao}` : '';
   }
 
   private mapDevice(row: SubscriptionRow): PushDevice {

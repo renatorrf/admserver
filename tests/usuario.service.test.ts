@@ -71,6 +71,25 @@ const hasher: PasswordHasher = { hash: (password) => Promise.resolve(`argon:${pa
 const auth: AuthContext = { usuarioId: GESTOR, empresaId: EMPRESA, perfil: 'GESTOR' };
 
 describe('UsuarioService', () => {
+  it('nao permite remover o ultimo gestor ativo, mesmo com request autorizado anteriormente', async () => {
+    const store = new UserStore();
+    store.user.perfil = 'GESTOR';
+    const database = fakeDatabase();
+    vi.mocked(database.query).mockResolvedValue({ rows: [{ total: '1' }], rowCount: 1 } as never);
+    const audit = new UserAudit();
+    const service = new UsuarioService(database, audit, hasher, store);
+    await expect(service.setActive(auth, OUTRO, false, {})).rejects.toMatchObject({ statusCode: 409 });
+    expect(store.user.ativo).toBe(true);
+    expect(audit.entries).toHaveLength(0);
+    expect(database.query).toHaveBeenCalledWith(expect.stringContaining('FOR UPDATE'), [EMPRESA]);
+  });
+
+  it('nao permite ao gestor alterar usuario de outra empresa', async () => {
+    const service = new UsuarioService(fakeDatabase(), new UserAudit(), hasher, new UserStore());
+    await expect(service.setActive({ ...auth, empresaId: 'outra' }, OUTRO, false, {}))
+      .rejects.toMatchObject({ statusCode: 404 });
+  });
+
   it('cria usuario com hash e nunca inclui senha na auditoria', async () => {
     const store = new UserStore();
     const audit = new UserAudit();

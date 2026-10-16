@@ -17,6 +17,7 @@ import type { AuthApplication } from './modules/auth/auth.service';
 import type { TokenService } from './modules/auth/token-service';
 import { AppError } from './shared/errors/app-error';
 import { createErrorHandler, notFoundHandler } from './shared/http/error-handler';
+import { authenticatedRateKey } from './shared/http/rate-key';
 
 export type AppDependencies = {
   config: AppConfig;
@@ -58,6 +59,8 @@ export function createApp(dependencies: AppDependencies): Express {
   app.use(rateLimit({
     windowMs: 60_000,
     limit: 200,
+    keyGenerator: authenticatedRateKey(tokens),
+    message: { erro: { codigo: 'LIMITE_EXCEDIDO', mensagem: 'Muitas requisicoes. Aguarde um minuto e tente novamente.' } },
     standardHeaders: 'draft-8',
     legacyHeaders: false,
   }));

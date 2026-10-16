@@ -17,6 +17,9 @@ import type {
   EventoListQuery,
 } from './corrida.schemas';
 import { assertTransition, isActiveRide } from './state-machine';
+import { employeeRide } from './corrida-visibility';
+import { advanceItinerary, itineraryResolved, itinerarySchema, type ItineraryAction, type ItineraryInput } from './itinerary';
+import { commandHash, ItineraryRepository } from './itinerary.repository';
 import type {
   CorridaEventoRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida,
 } from './corrida.types';
@@ -30,6 +33,7 @@ export interface CorridaAuditWriter {
 }
 
 export interface CorridaStore {
+  assertVehicleCapacity?(executor: QueryExecutor, empresaId: string, ride: CorridaRecord, veiculoId: string): Promise<void>;
   list(empresaId: string, scope: CorridaScope, query: CorridaListQuery): Promise<PaginatedResult<CorridaRecord>>;
   findAccessible(executor: QueryExecutor, empresaId: string, id: string, scope: CorridaScope): Promise<CorridaRecord | null>;
   findForUpdate(executor: QueryExecutor, empresaId: string, id: string, scope: CorridaScope): Promise<CorridaRecord | null>;
@@ -49,6 +53,9 @@ export interface CorridaStore {
     executor: QueryExecutor, empresaId: string, prestadorId: string, veiculoId: string | null, requireAvailable: boolean,
   ): Promise<boolean>;
   validateEmployeeAndCenter(executor: QueryExecutor, empresaId: string, funcionarioId: string, centroCustoId: string): Promise<boolean>;
+  validateEmployeeStops?(
+    executor: QueryExecutor, empresaId: string, funcionarioIds: string[], centroCustoId: string,
+  ): Promise<boolean>;
   managerCanAccessCenter(executor: QueryExecutor, empresaId: string, usuarioId: string, centroCustoId: string): Promise<boolean>;
   setProviderAvailability(executor: QueryExecutor, empresaId: string, prestadorId: string, available: boolean): Promise<PrestadorContext | null>;
   hasActiveRide(executor: QueryExecutor, empresaId: string, prestadorId: string): Promise<boolean>;
@@ -76,13 +83,16 @@ export class CorridaService {
   }
 
   async list(auth: AuthContext, query: CorridaListQuery): Promise<PaginatedResult<CorridaRecord>> {
-    return this.repository.list(auth.empresaId, await this.resolveScope(auth), query);
+    const scope = await this.resolveScope(auth);
+    const result = await this.repository.list(auth.empresaId, scope, query);
+    return scope.kind === 'FUNCIONARIO' ? { ...result, data: result.data.map(ride => employeeRide(ride, scope.funcionarioId)) } : result;
   }
 
   async get(auth: AuthContext, id: string): Promise<CorridaRecord> {
-    const ride = await this.repository.findAccessible(this.database, auth.empresaId, id, await this.resolveScope(auth));
+    const scope = await this.resolveScope(auth);
+    const ride = await this.repository.findAccessible(this.database, auth.empresaId, id, scope);
     if (!ride) throw notFound('Corrida');
-    return ride;
+    return scope.kind === 'FUNCIONARIO' ? employeeRide(ride, scope.funcionarioId) : ride;
   }
 
   async listEvents(
@@ -91,21 +101,54 @@ export class CorridaService {
     query: EventoListQuery,
   ): Promise<PaginatedResult<CorridaEventoRecord>> {
     await this.get(auth, id);
-    return this.repository.listEvents(auth.empresaId, id, query);
+    const result = await this.repository.listEvents(auth.empresaId, id, query);
+    return auth.perfil === 'FUNCIONARIO' ? { ...result, data: result.data.map(event => ({
+      ...event, usuarioId: null, descricao: 'Viagem atualizada.', metadata: {},
+    })) } : result;
   }
 
   create(auth: AuthContext, input: CorridaCreateInput, metadata: AuditMetadata): Promise<CorridaRecord> {
-    if (auth.perfil === 'PRESTADOR') throw forbidden();
-    if (input.tipo === 'AGENDADA' && input.agendadaPara && input.agendadaPara.getTime() <= Date.now()) {
+    if (!['GESTOR', 'GERENTE'].includes(auth.perfil)) throw forbidden();
+    if (!input.chaveSolicitacao && input.tipo === 'AGENDADA' && input.agendadaPara && input.agendadaPara.getTime() <= Date.now()) {
       throw conflict('A corrida agendada deve possuir data futura.');
     }
+    let createdNow = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const scope = await this.scopeResolver.resolve(auth, client);
       if (!centerAllowed(scope, input.centroCustoId)) {
         throw forbidden('Voce nao possui permissao para solicitar corridas para este funcionario ou centro de custo.');
       }
+      if (input.chaveSolicitacao) {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))',
+          [auth.empresaId, `${auth.usuarioId}:${input.chaveSolicitacao}`]);
+        const previous = await client.query<{ id: string; solicitacao_hash: string }>(
+          `SELECT id,solicitacao_hash FROM admtaxi.corridas WHERE empresa_id=$1
+            AND solicitante_usuario_id=$2 AND solicitacao_chave=$3`, [auth.empresaId, auth.usuarioId, input.chaveSolicitacao]);
+        if (previous.rows[0]) {
+          if (previous.rows[0].solicitacao_hash !== commandHash(input)) throw conflict('Esta chave de solicitacao ja foi usada com outros dados.');
+          createdNow = false;
+          return this.requireLockedRide(client, auth, previous.rows[0].id);
+        }
+      }
+      if (input.tipo === 'AGENDADA' && input.agendadaPara && input.agendadaPara.getTime() <= Date.now()) {
+        throw conflict('A corrida agendada deve possuir data futura.');
+      }
+      if (input.itinerario) await this.validateItinerary(client, auth, input.itinerario, input.funcionarioId, input.centroCustoId);
       if (!await this.repository.validateEmployeeAndCenter(client, auth.empresaId, input.funcionarioId, input.centroCustoId)) {
         throw invalidReference('Funcionario e centro de custo devem estar ativos, vinculados e pertencer a mesma empresa.');
+      }
+      const employeeStopIds = (input.paradas ?? [])
+        .filter((stop) => stop.tipo === 'FUNCIONARIO')
+        .map((stop) => stop.funcionarioId);
+      if (employeeStopIds.includes(input.funcionarioId) || new Set(employeeStopIds).size !== employeeStopIds.length) {
+        throw invalidReference('Nao repita funcionarios no itinerario.');
+      }
+      if (input.quantidadePassageiros < employeeStopIds.length + 1) {
+        throw invalidReference('A quantidade de passageiros deve incluir os funcionarios adicionais.');
+      }
+      if (employeeStopIds.length && (!this.repository.validateEmployeeStops
+        || !await this.repository.validateEmployeeStops(client, auth.empresaId, employeeStopIds, input.centroCustoId))) {
+        throw invalidReference('Funcionarios adicionais devem estar ativos, pertencer ao centro de custo e possuir endereco padrao localizado.');
       }
       const created = await this.repository.create(client, auth.empresaId, auth.usuarioId, input);
       await this.repository.createEvent(
@@ -114,7 +157,7 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, created, 'CRIAR', null, created);
       return created;
-    }), ride => this.notifications?.publishRideCreated(ride));
+    }), ride => { if (createdNow) this.notifications?.publishRideCreated(ride); });
   }
 
   assign(auth: AuthContext, id: string, input: CorridaAssignInput, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -131,6 +174,7 @@ export class CorridaService {
       if (!await this.repository.validateProviderAndVehicle(client, auth.empresaId, input.prestadorId, vehicleId, true)) {
         throw invalidReference('Prestador ou veiculo invalido, inativo, indisponivel ou pertencente a outra empresa.');
       }
+      if (vehicleId) await this.repository.assertVehicleCapacity?.(client, auth.empresaId, current, vehicleId);
 
       let updated: CorridaRecord;
       if (current.status === 'SOLICITADA') {
@@ -178,12 +222,17 @@ export class CorridaService {
 
   accept(auth: AuthContext, id: string, input: CorridaAcceptInput, metadata: AuditMetadata): Promise<CorridaRecord> {
     this.requireProvider(auth);
+    let changed = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
+      const provider = await this.requireProviderContext(client, auth, true);
+      if (current.prestadorId === provider.id && current.aceitaEm && (!input.veiculoId || input.veiculoId === current.veiculoId)) {
+        changed = false;
+        return current;
+      }
       if (current.status !== 'SOLICITADA' && current.status !== 'OFERTADA') {
         throw conflict('Esta corrida já foi aceita por outro prestador.');
       }
-      const provider = await this.requireProviderContext(client, auth, true);
       if (!provider.disponivel || await this.repository.hasActiveRide(client, auth.empresaId, provider.id)) {
         throw conflict('O prestador nao esta disponivel para aceitar outra corrida.');
       }
@@ -196,6 +245,7 @@ export class CorridaService {
       )) {
         throw invalidReference('Selecione um veiculo ativo vinculado ao prestador.');
       }
+      await this.repository.assertVehicleCapacity?.(client, auth.empresaId, current, vehicleId);
 
       let offered = current;
       if (current.status === 'SOLICITADA') {
@@ -220,7 +270,7 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, accepted, 'ACEITAR', current, accepted);
       return accepted;
-    }), ride => this.notifications?.publishRideUpdate(ride, 'ACEITA'));
+    }), ride => { if (changed) this.notifications?.publishRideUpdate(ride, 'ACEITA'); });
   }
 
   refuse(auth: AuthContext, id: string, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -258,6 +308,7 @@ export class CorridaService {
       const current = await this.requireLockedRide(client, auth, id);
       const provider = await this.requireProviderContext(client, auth, true);
       if (current.prestadorId !== provider.id) throw forbidden();
+      if (current.itinerarioVersao) throw conflict('Confirme cada desembarque no itinerario individual.');
       if (current.status !== 'EM_CORRIDA') throw conflict('O desembarque so pode ser confirmado durante a corrida.');
       if (current.desembarqueEm) return current;
       const updated = await this.repository.markDisembark(client, auth.empresaId, id);
@@ -272,10 +323,20 @@ export class CorridaService {
 
   finish(auth: AuthContext, id: string, input: CorridaFinishInput, metadata: AuditMetadata): Promise<CorridaRecord> {
     this.requireProvider(auth);
+    let changed = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
       const provider = await this.requireProviderContext(client, auth, true);
       if (current.prestadorId !== provider.id) throw forbidden();
+      if (current.status === 'FINALIZADA') {
+        if (Number(current.valorFinal) !== Number(input.valorFinal)
+          || (current.observacaoPrestador ?? null) !== (input.observacaoPrestador ?? null)) throw conflict('A corrida ja foi finalizada com outros dados.');
+        changed = false;
+        return current;
+      }
+      if (current.itinerarioVersao && !itineraryResolved(await new ItineraryRepository().load(client, auth.empresaId, id, current.itinerarioVersao))) {
+        throw conflict('Conclua todas as paradas e resolva todos os passageiros antes de finalizar.');
+      }
       if (!current.desembarqueEm) throw conflict('Confirme o desembarque antes de finalizar a corrida.');
       assertTransition(current.status, 'FINALIZADA');
       const finished = await this.repository.changeStatus(client, auth.empresaId, id, 'FINALIZADA', {
@@ -289,13 +350,19 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, finished, 'FINALIZAR', current, finished);
       return finished;
-    }), ride => this.notifications?.publishRideUpdate(ride, 'FINALIZADA'));
+    }), ride => { if (changed) this.notifications?.publishRideUpdate(ride, 'FINALIZADA'); });
   }
 
   cancel(auth: AuthContext, id: string, input: CorridaCancelInput, metadata: AuditMetadata): Promise<CorridaRecord> {
-    if (auth.perfil === 'PRESTADOR') throw forbidden();
+    if (!['GESTOR', 'GERENTE'].includes(auth.perfil)) throw forbidden();
+    let changed = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
+      if (current.status === 'CANCELADA') {
+        if (current.motivoCancelamento !== input.motivo) throw conflict('Corrida ja cancelada com outro motivo.');
+        changed = false;
+        return current;
+      }
       if (auth.perfil === 'GERENTE') {
         if (current.status !== 'SOLICITADA' && current.status !== 'OFERTADA') {
           throw conflict('O gerente so pode cancelar corridas solicitadas ou ofertadas.');
@@ -304,6 +371,10 @@ export class CorridaService {
         throw conflict('A corrida nao pode mais ser cancelada.');
       }
       assertTransition(current.status, 'CANCELADA');
+      if (current.itinerarioVersao) {
+        await client.query(`UPDATE admtaxi.corrida_participacoes SET estado='CANCELADO',motivo=$3
+          WHERE empresa_id=$1 AND corrida_id=$2 AND estado='AGUARDANDO'`, [auth.empresaId, id, input.motivo]);
+      }
       const cancelled = await this.repository.changeStatus(client, auth.empresaId, id, 'CANCELADA', {
         motivoCancelamento: input.motivo,
       });
@@ -317,6 +388,7 @@ export class CorridaService {
       await this.recordAudit(client, auth, metadata, cancelled, 'CANCELAR', current, cancelled);
       return cancelled;
     }), ride => {
+      if (!changed) return;
       this.notifications?.publishProviderRide(ride, 'CANCELADA');
       this.notifications?.publishRideUpdate(ride, 'CANCELADA');
     });
@@ -358,10 +430,13 @@ export class CorridaService {
     metadata: AuditMetadata,
   ): Promise<CorridaRecord> {
     this.requireProvider(auth);
+    let changed = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
       const provider = await this.requireProviderContext(client, auth, true);
       if (current.prestadorId !== provider.id) throw forbidden();
+      if (current.itinerarioVersao) throw conflict('Execute as acoes na proxima parada do itinerario.');
+      if (current.status === target) { changed = false; return current; }
       assertTransition(current.status, target);
       const updated = await this.repository.changeStatus(client, auth.empresaId, id, target);
       await this.repository.createEvent(
@@ -377,8 +452,79 @@ export class CorridaService {
         PASSAGEIRO_EMBARCOU: 'CORRIDA_INICIADA',
       } as const;
       const event = notificationEvents[eventType as keyof typeof notificationEvents];
-      if (event) this.notifications?.publishRideUpdate(ride, event);
+      if (event && changed) this.notifications?.publishRideUpdate(ride, event);
     });
+  }
+
+  editItinerary(auth: AuthContext, id: string, version: number, input: ItineraryInput, metadata: AuditMetadata): Promise<CorridaRecord> {
+    if (!['GESTOR', 'GERENTE'].includes(auth.perfil)) throw forbidden();
+    return this.withRealtime(withTransaction(this.database, async client => {
+      const ride = await this.requireLockedRide(client, auth, id);
+      if (!ride.itinerarioVersao || ride.itinerarioVersao !== version) throw conflict('Itinerario desatualizado. Recarregue a viagem.');
+      if (!['SOLICITADA', 'OFERTADA'].includes(ride.status)) throw conflict('Edicao permitida somente antes do aceite.');
+      await this.validateItinerary(client, auth, input, ride.funcionarioId, ride.centroCustoId);
+      const store = new ItineraryRepository();
+      const previous = await store.load(client, auth.empresaId, id, version);
+      if (previous.participantes.some(p => !input.participantes.some(next => next.funcionarioId === p.funcionarioId))) {
+        throw conflict('Reassocie os passageiros; nao remova participacoes silenciosamente. Para cancelar a viagem, use cancelamento com motivo.');
+      }
+      await store.replace(client, auth.empresaId, id, input);
+      const updated = await this.requireLockedRide(client, auth, id);
+      if (ride.veiculoId) await this.repository.assertVehicleCapacity?.(client, auth.empresaId, updated, ride.veiculoId);
+      await this.repository.createEvent(client, auth.empresaId, id, auth.usuarioId, 'ITINERARIO_EDITADO', ride.status, ride.status,
+        'Itinerario atualizado antes do aceite.', { versao: version + 1 });
+      await this.audit.record(client, { ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
+        entidade: 'corrida', entidadeId: id, acao: 'EDITAR_ITINERARIO', dadosAnteriores: previous, dadosNovos: input });
+      return updated;
+    }), ride => this.notifications?.publishItineraryUpdate?.(ride));
+  }
+
+  executeItinerary(auth: AuthContext, id: string, action: ItineraryAction, metadata: AuditMetadata): Promise<CorridaRecord> {
+    this.requireProvider(auth);
+    let changed = false;
+    return this.withRealtime(withTransaction(this.database, async client => {
+      let ride = await this.requireLockedRide(client, auth, id);
+      const provider = await this.requireProviderContext(client, auth, true);
+      if (ride.prestadorId !== provider.id) throw forbidden();
+      const hash = commandHash({ usuarioId: auth.usuarioId, ...action });
+      const previous = await client.query<{ comando_hash: string }>(
+        'SELECT comando_hash FROM admtaxi.corrida_comandos WHERE empresa_id=$1 AND corrida_id=$2 AND chave=$3',
+        [auth.empresaId, id, action.chave]);
+      if (previous.rows[0]) {
+        if (previous.rows[0].comando_hash !== hash) throw conflict('Chave de operacao ja utilizada com outros dados.');
+        return ride;
+      }
+      if (!ride.itinerarioVersao || !isActiveRide(ride.status)) throw conflict('Esta viagem nao permite executar paradas.');
+      const store = new ItineraryRepository();
+      const current = await store.load(client, auth.empresaId, id, ride.itinerarioVersao);
+      const next = advanceItinerary(current, action, new Date().toISOString());
+      if (ride.veiculoId) await this.repository.assertVehicleCapacity?.(client, auth.empresaId, ride, ride.veiculoId);
+      await store.saveExecution(client, auth.empresaId, id, next);
+      const previousStatus = ride.status;
+      if (ride.status === 'ACEITA' && action.acao === 'INICIAR') ride = await this.repository.changeStatus(client, auth.empresaId, id, 'EM_DESLOCAMENTO');
+      if (ride.status === 'EM_DESLOCAMENTO' && action.acao === 'CHEGAR') ride = await this.repository.changeStatus(client, auth.empresaId, id, 'AGUARDANDO_PASSAGEIRO');
+      if (ride.status === 'AGUARDANDO_PASSAGEIRO' && ['EMBARCAR', 'CONCLUIR'].includes(action.acao)) ride = await this.repository.changeStatus(client, auth.empresaId, id, 'EM_CORRIDA');
+      if (itineraryResolved(next)) ride = await this.repository.markDisembark(client, auth.empresaId, id);
+      await client.query(`INSERT INTO admtaxi.corrida_comandos (empresa_id,corrida_id,chave,comando_hash,versao)
+        VALUES ($1,$2,$3,$4,$5)`, [auth.empresaId, id, action.chave, hash, next.versao]);
+      await this.repository.createEvent(client, auth.empresaId, id, auth.usuarioId, `PARADA_${action.acao}`,
+        previousStatus, ride.status, 'Etapa do itinerario atualizada.',
+        { paradaId: action.paradaId, funcionarioId: action.funcionarioId, versao: next.versao });
+      await this.audit.record(client, { ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
+        entidade: 'corrida', entidadeId: id, acao: `PARADA_${action.acao}`, dadosAnteriores: current, dadosNovos: next });
+      changed = true;
+      return ride;
+    }), ride => { if (changed) this.notifications?.publishItineraryUpdate?.(ride, action); });
+  }
+
+  private async validateItinerary(client: QueryExecutor, auth: AuthContext, input: ItineraryInput, primary: string, center: string): Promise<void> {
+    itinerarySchema.parse(input);
+    if (!input.participantes.some(p => p.funcionarioId === primary)) throw invalidReference('Mantenha o funcionario principal entre os participantes.');
+    for (const participant of input.participantes) {
+      if (!await this.repository.validateEmployeeAndCenter(client, auth.empresaId, participant.funcionarioId, center)) {
+        throw invalidReference('Todos os participantes devem estar ativos e vinculados ao centro autorizado desta viagem.');
+      }
+    }
   }
 
   private async withRealtime(

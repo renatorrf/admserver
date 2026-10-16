@@ -1,3 +1,5 @@
+import type { ItinerarySnapshot } from './itinerary';
+
 export const statusCorrida = [
   'SOLICITADA',
   'OFERTADA',
@@ -14,6 +16,18 @@ export type StatusCorrida = (typeof statusCorrida)[number];
 
 export const tiposCorrida = ['IMEDIATA', 'AGENDADA'] as const;
 export type TipoCorrida = (typeof tiposCorrida)[number];
+
+export type CorridaParadaRecord = {
+  id: string;
+  ordem: number;
+  tipo: 'FUNCIONARIO' | 'MANUAL';
+  funcionarioId: string | null;
+  funcionarioNome: string | null;
+  funcionarioMatricula: string | null;
+  descricao: string;
+  latitude: number;
+  longitude: number;
+};
 
 export type CorridaRecord = Record<string, unknown> & {
   id: string;
@@ -35,6 +49,9 @@ export type CorridaRecord = Record<string, unknown> & {
   prestadorTelefone?: string | null;
   veiculoPlaca?: string | null;
   veiculoDescricao?: string | null;
+  paradas?: CorridaParadaRecord[];
+  itinerarioVersao?: number;
+  itinerario?: ItinerarySnapshot | null;
 };
 
 export type CorridaEventoRecord = {

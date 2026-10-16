@@ -10,6 +10,7 @@ import { auditMetadataFromRequest } from '../auditoria/audit.types';
 import { createCorridaRouter } from './corrida.routes';
 import { disponibilidadeSchema, type DisponibilidadeInput } from './corrida.schemas';
 import { CorridaService } from './corrida.service';
+import { RideRouteService } from './route.service';
 import type { RealtimeBus } from '../../realtime/realtime-bus';
 import { createLocalizacaoRouter } from '../localizacoes/localizacao.routes';
 import { LocalizacaoService } from '../localizacoes/localizacao.service';
@@ -56,7 +57,7 @@ export function createOperationalRouter(
     createOperacaoRouter(new OperacaoService(new OperacaoRepository(pool))),
   );
   router.use('/corridas/:id/localizacoes', createAuthenticate(tokens), createLocalizacaoRouter(locations));
-  router.use('/corridas', createAuthenticate(tokens), createCorridaRouter(service));
+  router.use('/corridas', createAuthenticate(tokens), createCorridaRouter(service, new RideRouteService(geoapifyApiKey)));
   router.use('/enderecos', createAuthenticate(tokens), createEnderecoRouter(new EnderecoService(pool, geoapifyApiKey)));
   router.use('/push', createNotificacaoRouter(notifications, tokens));
   router.use('/dispositivos', createAuthenticate(tokens), createDispositivoRouter(new DispositivoService(pool)));

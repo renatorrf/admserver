@@ -30,4 +30,26 @@ describe('schemas de corridas', () => {
     expect(corridaFinishSchema.parse({ valorFinal: '123,45' }).valorFinal).toBe('123.45');
     expect(corridaFinishSchema.safeParse({ valorFinal: '12.345' }).success).toBe(false);
   });
+
+  it('valida paradas, funcionarios repetidos e quantidade de passageiros', () => {
+    const additionalEmployee = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    expect(corridaCreateSchema.safeParse({
+      ...baseRide,
+      quantidadePassageiros: 2,
+      paradas: [
+        { tipo: 'FUNCIONARIO', funcionarioId: additionalEmployee },
+        { tipo: 'MANUAL', descricao: 'Avenida Central, 300', latitude: -23.51, longitude: -46.61 },
+      ],
+    }).success).toBe(true);
+    expect(corridaCreateSchema.safeParse({
+      ...baseRide,
+      quantidadePassageiros: 1,
+      paradas: [{ tipo: 'FUNCIONARIO', funcionarioId: additionalEmployee }],
+    }).success).toBe(false);
+    expect(corridaCreateSchema.safeParse({
+      ...baseRide,
+      quantidadePassageiros: 2,
+      paradas: [{ tipo: 'FUNCIONARIO', funcionarioId: baseRide.funcionarioId }],
+    }).success).toBe(false);
+  });
 });

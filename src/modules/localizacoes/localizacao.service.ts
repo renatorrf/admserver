@@ -3,6 +3,7 @@ import { withTransaction } from '../../db/pool';
 import type { LocalizacaoRealtimePublisher } from '../../realtime/realtime-bus';
 import { conflict, forbidden, notFound } from '../../shared/errors/app-error';
 import type { PaginatedResult } from '../../shared/pagination/pagination';
+import { paginate } from '../../shared/pagination/pagination';
 import type { AuthContext } from '../auth/auth.types';
 import type { CorridaService } from '../corridas/corrida.service';
 import { LocalizacaoRepository, type LocalizacaoStore } from './localizacao.repository';
@@ -46,6 +47,10 @@ export class LocalizacaoService {
     query: LocalizacaoListQuery,
   ): Promise<PaginatedResult<LocalizacaoRecord>> {
     await this.rideAccess.get(auth, corridaId);
+    if (auth.perfil === 'FUNCIONARIO') {
+      const latest = await this.repository.latest(this.database, auth.empresaId, corridaId);
+      return paginate(query.pagina === 1 && latest ? [latest] : [], latest ? 1 : 0, query);
+    }
     return this.repository.list(auth.empresaId, corridaId, query);
   }
 

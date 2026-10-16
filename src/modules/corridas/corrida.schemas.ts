@@ -3,12 +3,13 @@ import { z } from 'zod';
 import { paginationSchema } from '../../shared/pagination/pagination';
 import { optionalText } from '../../shared/validation/common.schemas';
 import { statusCorrida, tiposCorrida } from './corrida.types';
+import { coordinate, itinerarySchema } from './itinerary';
 
 const decimalMoney = z.union([z.string(), z.number()]).transform((value) => String(value).replace(',', '.'))
   .pipe(z.string().regex(/^\d{1,10}(\.\d{1,2})?$/, 'Informe um valor monetario valido.'));
 const optionalCoordinate = z.preprocess(
   (value) => value === '' ? null : value,
-  z.coerce.number().nullable().optional(),
+  coordinate.nullable().optional(),
 );
 const coordinatePairValid = (latitude?: number | null, longitude?: number | null): boolean => {
   const latitudeEmpty = latitude === undefined || latitude === null;
@@ -16,8 +17,24 @@ const coordinatePairValid = (latitude?: number | null, longitude?: number | null
   return latitudeEmpty === longitudeEmpty;
 };
 const isNil = (value: number | null | undefined): value is null | undefined => value === null || value === undefined;
+const latitude = coordinate.pipe(z.number().min(-90).max(90));
+const longitude = coordinate.pipe(z.number().min(-180).max(180));
+const corridaParadaSchema = z.discriminatedUnion('tipo', [
+  z.object({
+    tipo: z.literal('FUNCIONARIO'),
+    funcionarioId: z.string().uuid('Funcionario adicional invalido.'),
+  }).strict(),
+  z.object({
+    tipo: z.literal('MANUAL'),
+    descricao: z.string().trim().min(3, 'Informe o endereco da parada.').max(1000),
+    latitude,
+    longitude,
+  }).strict(),
+]);
 
 export const corridaCreateSchema = z.object({
+  chaveSolicitacao: z.string().uuid().optional(),
+  itinerario: itinerarySchema.optional(),
   funcionarioId: z.string().uuid('Funcionario invalido.'),
   centroCustoId: z.string().uuid('Centro de custo invalido.'),
   tipo: z.enum(tiposCorrida),
@@ -31,11 +48,20 @@ export const corridaCreateSchema = z.object({
   destinoLongitude: optionalCoordinate.refine((value) => isNil(value) || (value >= -180 && value <= 180), 'Longitude de destino invalida.'),
   observacaoSolicitante: optionalText(2000),
   valorEstimado: decimalMoney.nullable().optional(),
+  paradas: z.array(corridaParadaSchema).max(10, 'Informe no maximo 10 paradas.').optional(),
 }).strict().superRefine((value, context) => {
+  if (value.itinerario) {
+    if (!value.chaveSolicitacao) context.addIssue({ code: 'custom', path: ['chaveSolicitacao'], message: 'Informe a chave unica desta solicitacao.' });
+    if (value.paradas?.length) context.addIssue({ code: 'custom', path: ['paradas'], message: 'Use apenas itinerario no modo individual.' });
+    if (!value.itinerario.participantes.some(p => p.funcionarioId === value.funcionarioId)
+      || value.quantidadePassageiros !== value.itinerario.participantes.length) {
+      context.addIssue({ code: 'custom', path: ['itinerario', 'participantes'], message: 'Inclua o funcionario principal e informe a quantidade exata de participantes.' });
+    }
+  }
   if (value.tipo === 'AGENDADA' && !value.agendadaPara) {
     context.addIssue({ code: 'custom', path: ['agendadaPara'], message: 'Informe a data da corrida agendada.' });
   }
-  if (value.tipo === 'AGENDADA' && value.agendadaPara && value.agendadaPara.getTime() <= Date.now()) {
+  if (!value.chaveSolicitacao && value.tipo === 'AGENDADA' && value.agendadaPara && value.agendadaPara.getTime() <= Date.now()) {
     context.addIssue({ code: 'custom', path: ['agendadaPara'], message: 'O horario da corrida agendada deve ser posterior ao horario atual.' });
   }
   if (value.tipo === 'IMEDIATA' && value.agendadaPara) {
@@ -46,6 +72,15 @@ export const corridaCreateSchema = z.object({
   }
   if (!coordinatePairValid(value.destinoLatitude, value.destinoLongitude)) {
     context.addIssue({ code: 'custom', path: ['destinoLatitude'], message: 'Informe as coordenadas de destino juntas.' });
+  }
+  const employeeIds = (value.paradas ?? [])
+    .filter((stop) => stop.tipo === 'FUNCIONARIO')
+    .map((stop) => stop.funcionarioId);
+  if (new Set(employeeIds).size !== employeeIds.length || employeeIds.includes(value.funcionarioId)) {
+    context.addIssue({ code: 'custom', path: ['paradas'], message: 'Nao repita funcionarios no itinerario.' });
+  }
+  if (value.quantidadePassageiros < employeeIds.length + 1) {
+    context.addIssue({ code: 'custom', path: ['quantidadePassageiros'], message: 'A quantidade de passageiros deve incluir os funcionarios adicionais.' });
   }
 });
 

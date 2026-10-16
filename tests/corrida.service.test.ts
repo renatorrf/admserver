@@ -20,6 +20,7 @@ const VEICULO = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const CORRIDA = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 const CENTRO = '12121212-1212-4212-8212-121212121212';
 const FUNCIONARIO = '34343434-3434-4434-8434-343434343434';
+const FUNCIONARIO_ADICIONAL = '45454545-4545-4454-8454-454545454545';
 
 function fakeDatabase(centerIds: string[] = [CENTRO]): Database {
   const query = vi.fn().mockResolvedValue({
@@ -43,6 +44,8 @@ class RideStore implements CorridaStore {
   events: Array<{ type: string; from: StatusCorrida | null; to: StatusCorrida | null }> = [];
   scopes: CorridaScope[] = [];
   employeeValid = true;
+  employeeStopsValid = true;
+  lastCreateInput: CorridaCreateInput | null = null;
   managerAccess = true;
   providerVehicleValid = true;
   activeRide = false;
@@ -54,6 +57,7 @@ class RideStore implements CorridaStore {
   findAccessible(): Promise<CorridaRecord> { return Promise.resolve(this.current); }
   findForUpdate(): Promise<CorridaRecord> { return Promise.resolve(this.current); }
   create(_e: QueryExecutor, empresaId: string, usuarioId: string, input: CorridaCreateInput): Promise<CorridaRecord> {
+    this.lastCreateInput = input;
     this.current = { ...ride(), empresaId, solicitanteUsuarioId: usuarioId, funcionarioId: input.funcionarioId, centroCustoId: input.centroCustoId, tipo: input.tipo };
     return Promise.resolve(this.current);
   }
@@ -83,6 +87,7 @@ class RideStore implements CorridaStore {
   getEmployeeByUser(): Promise<FuncionarioContext> { return Promise.resolve({ id: FUNCIONARIO, usuarioId: '78787878-7878-4787-8787-787878787878', ativo: true }); }
   validateProviderAndVehicle(): Promise<boolean> { return Promise.resolve(this.providerVehicleValid); }
   validateEmployeeAndCenter(): Promise<boolean> { return Promise.resolve(this.employeeValid); }
+  validateEmployeeStops(): Promise<boolean> { return Promise.resolve(this.employeeStopsValid); }
   managerCanAccessCenter(): Promise<boolean> { return Promise.resolve(this.managerAccess); }
   setProviderAvailability(_e: QueryExecutor, _empresaId: string, _id: string, available: boolean): Promise<PrestadorContext> {
     this.provider = { ...this.provider, disponivel: available };
@@ -145,6 +150,35 @@ describe('CorridaService', () => {
     expect(store.events.map((event) => event.type)).toEqual(['CORRIDA_REIVINDICADA', 'CORRIDA_ACEITA']);
     expect(store.provider.disponivel).toBe(false);
     expect(audit.entries[0]?.acao).toBe('ACEITAR');
+  });
+
+  it('valida e cria o itinerario com funcionario adicional e parada manual', async () => {
+    const store = new RideStore();
+    const service = new CorridaService(fakeDatabase(), new RideAudit(), store);
+    const input: CorridaCreateInput = {
+      funcionarioId: FUNCIONARIO, centroCustoId: CENTRO, tipo: 'IMEDIATA', quantidadePassageiros: 2,
+      origemDescricao: 'Origem', destinoDescricao: 'Destino',
+      paradas: [
+        { tipo: 'FUNCIONARIO', funcionarioId: FUNCIONARIO_ADICIONAL },
+        { tipo: 'MANUAL', descricao: 'Avenida Central, 300', latitude: -18.91, longitude: -48.21 },
+      ],
+    };
+
+    await service.create(gerente, input, {});
+
+    expect(store.lastCreateInput?.paradas).toEqual(input.paradas);
+  });
+
+  it('rejeita funcionario adicional sem endereco padrao localizado', async () => {
+    const store = new RideStore();
+    store.employeeStopsValid = false;
+    const service = new CorridaService(fakeDatabase(), new RideAudit(), store);
+
+    await expect(service.create(gerente, {
+      funcionarioId: FUNCIONARIO, centroCustoId: CENTRO, tipo: 'IMEDIATA', quantidadePassageiros: 2,
+      origemDescricao: 'Origem', destinoDescricao: 'Destino',
+      paradas: [{ tipo: 'FUNCIONARIO', funcionarioId: FUNCIONARIO_ADICIONAL }],
+    }, {})).rejects.toMatchObject({ statusCode: 422 });
   });
 
   it('notifica o solicitante apos aceite e transicoes posteriores', async () => {

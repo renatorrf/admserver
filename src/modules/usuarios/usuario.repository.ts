@@ -171,6 +171,10 @@ export class UsuarioRepository {
         WHERE empresa_id = $1 AND usuario_id = $2`,
       [empresaId, usuarioId],
     );
+    await executor.query(
+      'UPDATE admtaxi.dispositivos_usuario SET ativo=FALSE WHERE empresa_id=$1 AND usuario_id=$2',
+      [empresaId, usuarioId],
+    );
   }
 
   async isLinkedProvider(executor: QueryExecutor, empresaId: string, usuarioId: string): Promise<boolean> {

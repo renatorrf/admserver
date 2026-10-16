@@ -22,9 +22,28 @@ import {
   type EventoListQuery,
 } from './corrida.schemas';
 import type { CorridaService } from './corrida.service';
+import { itineraryActionSchema, itineraryEditSchema } from './itinerary';
+import type { RideRouteService } from './route.service';
+import { unavailable } from '../../shared/errors/app-error';
 
-export function createCorridaRouter(service: CorridaService): Router {
+export function createCorridaRouter(service: CorridaService, routes?: RideRouteService): Router {
   const router = Router();
+  router.get('/:id/rota', authorize('PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR'), validateParams(uuidParamsSchema), asyncHandler(async (request, response) => {
+    const { id } = getValidatedParams<UuidParams>(request);
+    const ride = await service.get(requireAuthContext(request), id);
+    if (!routes) throw unavailable('Calculo de rota indisponivel.');
+    response.json({ data: await routes.calculate(ride) });
+  }));
+
+  router.put('/:id/itinerario', authorize('GERENTE', 'GESTOR'), validateParams(uuidParamsSchema), validateBody(itineraryEditSchema), asyncHandler(async (request, response) => {
+    const { id } = getValidatedParams<UuidParams>(request);
+    const input = itineraryEditSchema.parse(request.body);
+    response.json({ data: await service.editItinerary(requireAuthContext(request), id, input.versao, input.itinerario, auditMetadataFromRequest(request)) });
+  }));
+  router.post('/:id/itinerario/acoes', authorize('PRESTADOR'), validateParams(uuidParamsSchema), validateBody(itineraryActionSchema), asyncHandler(async (request, response) => {
+    const { id } = getValidatedParams<UuidParams>(request);
+    response.json({ data: await service.executeItinerary(requireAuthContext(request), id, itineraryActionSchema.parse(request.body), auditMetadataFromRequest(request)) });
+  }));
 
   router.get('/', authorize('PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR'), validateQuery(corridaListSchema), asyncHandler(async (request, response) => {
     response.status(200).json(await service.list(

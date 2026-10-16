@@ -47,6 +47,15 @@ function mapUser(row: AuthUserRow | null): AuthUserRecord | null {
 export class PgAuthRepository implements AuthRepository {
   constructor(private readonly pool: Pool) {}
 
+  async accessAllowed(auth: AuthContext): Promise<boolean> {
+    const result = await this.pool.query(
+      `SELECT 1 FROM admtaxi.usuarios u JOIN admtaxi.empresas e ON e.id=u.empresa_id
+       WHERE u.id=$1 AND u.empresa_id=$2 AND u.perfil=$3 AND u.ativo=TRUE AND e.ativo=TRUE`,
+      [auth.usuarioId, auth.empresaId, auth.perfil],
+    );
+    return result.rowCount === 1;
+  }
+
   async listActiveCompanies(): Promise<LoginCompany[]> {
     const result = await this.pool.query<{ codigo_acesso: string; nome_fantasia: string }>(`
       SELECT codigo_acesso::text, nome_fantasia

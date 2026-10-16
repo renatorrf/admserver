@@ -29,6 +29,10 @@ export const gerenteCentrosSchema = z.object({
   centroCustoIds: z.array(z.string().uuid('Centro de custo invalido.')).max(100)
     .refine((ids) => new Set(ids).size === ids.length, 'Nao repita centros de custo.'),
 }).strict();
+export const usuarioControleSchema = usuarioListSchema.extend({
+  atividade: z.enum(['RECENTE', 'SEM_ATIVIDADE']).optional(),
+}).strict();
+export type UsuarioControleQuery = z.infer<typeof usuarioControleSchema>;
 export const gerenteEscopoSchema = z.object({
   setorIds: z.array(z.string().uuid('Setor invalido.')).max(100)
     .refine((ids) => new Set(ids).size === ids.length, 'Nao repita setores.'),

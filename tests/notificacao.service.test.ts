@@ -45,6 +45,25 @@ function ride(): CorridaRecord {
 }
 
 describe('NotificacaoService', () => {
+  it('direciona etapa individual apenas ao passageiro afetado com deduplicacao por versao', async () => {
+    const query = vi.fn().mockImplementation((sql: string) => {
+      if (sql.includes('INSERT INTO admtaxi.notificacoes_push')) return Promise.resolve({ rows: [{ id: subscriptionId }], rowCount: 1 });
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    const resolver = { resolveEmployeeUser: vi.fn().mockResolvedValue(auth.usuarioId) };
+    const service = new NotificacaoService({ query } as unknown as Database, undefined, resolver);
+    const current = { ...ride(), itinerarioVersao: 7, itinerario: { versao: 7, paradas: [], participantes: [
+      { funcionarioId: 'affected', funcionarioNome: 'Nome privado', embarqueId: 'a', desembarqueId: 'b', estado: 'EMBARCADO' as const },
+      { funcionarioId: 'other', funcionarioNome: 'Outro nome', embarqueId: 'c', desembarqueId: 'd', estado: 'AGUARDANDO' as const },
+    ] } };
+    service.publishItineraryUpdate(current, { chave: subscriptionId, versao: 6, paradaId: 'a', acao: 'EMBARCAR', funcionarioId: 'affected' });
+    await vi.waitFor(() => expect(query.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO admtaxi.notificacoes_push'))).toBe(true));
+    expect(resolver.resolveEmployeeUser).toHaveBeenCalledTimes(1);
+    expect(resolver.resolveEmployeeUser).toHaveBeenCalledWith(auth.empresaId, 'affected');
+    const insert = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO admtaxi.notificacoes_push'));
+    expect(JSON.stringify(insert)).toContain(':v7');
+    expect(JSON.stringify(insert)).not.toContain('Nome privado');
+  });
   it('registra a inscricao nativa usando empresa e usuario da sessao sem expor chaves', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [subscriptionRow()], rowCount: 1 });
     const service = new NotificacaoService({ query } as unknown as Database, config);

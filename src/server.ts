@@ -24,8 +24,8 @@ import { attachSocketServer } from './realtime/socket-server';
 const config = getConfig();
 const logger = createLogger(config);
 const pool = createPool(config);
-const tokenService = new TokenService(config);
 const authRepository = new PgAuthRepository(pool);
+const tokenService = new TokenService(config, (auth) => authRepository.accessAllowed(auth));
 const authService = new AuthService(
   authRepository,
   tokenService,

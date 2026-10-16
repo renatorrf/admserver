@@ -6,4 +6,5 @@ logs/
 *.log
 dist/
 coverage/
+.artifacts/
 .DS_Store

@@ -6,6 +6,8 @@ import type { AuthContext } from '../auth/auth.types';
 import { CorridaRepository, type CorridaScope } from '../corridas/corrida.repository';
 import type { CorridaListQuery } from '../corridas/corrida.schemas';
 import type { PainelParticipanteQuery } from './painel.schemas';
+import { employeeRide } from '../corridas/corrida-visibility';
+import { operationMonth } from '../../shared/validation/calendar-date';
 
 type SummaryRow = QueryResultRow & {
   total: string; finalizadas: string; canceladas: string; agendadas: string;
@@ -23,23 +25,38 @@ export class PainelParticipanteRepository {
   async get(auth: AuthContext, query: PainelParticipanteQuery) {
     const identity = await this.identity(auth);
     const period = this.period(query);
-    const values: unknown[] = [auth.empresaId, period.inicio, period.fimExclusive];
+    const bounds = await this.database.query<{ inicio: Date; fim: Date }>(
+      `SELECT $1::date::timestamp AT TIME ZONE timezone AS inicio,
+              $2::date::timestamp AT TIME ZONE timezone AS fim
+         FROM admtaxi.empresas WHERE id=$3`, [period.inicio, period.fimExclusive, auth.empresaId]);
+    const interval = bounds.rows[0];
+    if (!interval) throw forbidden();
+    const values: unknown[] = [auth.empresaId, interval.inicio, interval.fim];
     const conditions = [
       'c.empresa_id = $1',
-      'c.solicitada_em >= $2::date',
-      'c.solicitada_em < $3::date',
+      'c.solicitada_em >= $2::timestamptz',
+      'c.solicitada_em < $3::timestamptz',
     ];
     const add = (sql: string, value: unknown): void => {
       values.push(value);
       conditions.push(sql.replace('?', `$${values.length}`));
     };
-    if (identity.scope.kind === 'FUNCIONARIO') add('c.funcionario_id = ?', identity.scope.funcionarioId);
+    if (identity.scope.kind === 'FUNCIONARIO') {
+      values.push(identity.scope.funcionarioId);
+      conditions.push(`(c.funcionario_id=$${values.length} OR EXISTS (
+        SELECT 1 FROM admtaxi.corrida_paradas p WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id=$${values.length}
+      ) OR EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes p WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id=$${values.length}))`);
+    }
     if (identity.scope.kind === 'PRESTADOR') add('c.prestador_id = ?', identity.scope.prestadorId);
     if (query.status) add('c.status = ?', query.status);
-    if (query.solicitanteUsuarioId) add('c.solicitante_usuario_id = ?', query.solicitanteUsuarioId);
+    if (query.solicitanteUsuarioId && identity.scope.kind !== 'FUNCIONARIO') add('c.solicitante_usuario_id = ?', query.solicitanteUsuarioId);
     if (query.prestadorId) add('c.prestador_id = ?', query.prestadorId);
     if (query.centroCustoId) add('c.centro_custo_id = ?', query.centroCustoId);
-    if (query.funcionarioId) add('c.funcionario_id = ?', query.funcionarioId);
+    if (query.funcionarioId && identity.scope.kind !== 'FUNCIONARIO') {
+      values.push(query.funcionarioId);
+      conditions.push(`(c.funcionario_id=$${values.length} OR EXISTS (
+        SELECT 1 FROM admtaxi.corrida_participacoes p WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id=$${values.length}))`);
+    }
 
     const summary = await this.database.query<SummaryRow>(
       `SELECT COUNT(*)::text AS total,
@@ -60,8 +77,8 @@ export class PainelParticipanteRepository {
       status: query.status, centroCustoId: query.centroCustoId,
       funcionarioId: query.funcionarioId, prestadorId: query.prestadorId,
       solicitanteUsuarioId: query.solicitanteUsuarioId,
-      inicio: new Date(`${period.inicio}T00:00:00.000Z`),
-      fim: new Date(new Date(`${period.fimExclusive}T00:00:00.000Z`).getTime() - 1),
+      inicio: interval.inicio,
+      fim: new Date(interval.fim.getTime() - 1),
     };
     const history = await this.rides.list(auth.empresaId, identity.scope, listQuery);
     return {
@@ -71,9 +88,11 @@ export class PainelParticipanteRepository {
       resumo: {
         total: Number(row.total), finalizadas: Number(row.finalizadas), canceladas: Number(row.canceladas),
         agendadas: Number(row.agendadas), emAndamento: Number(row.em_andamento), recusadas: Number(row.recusadas),
-        proximas: Number(row.proximas), valorTotal: row.valor_total, valorMedio: row.valor_medio,
+        proximas: Number(row.proximas), valorTotal: auth.perfil === 'FUNCIONARIO' ? null : row.valor_total,
+        valorMedio: auth.perfil === 'FUNCIONARIO' ? null : row.valor_medio,
       },
-      corridas: history,
+      corridas: identity.scope.kind === 'FUNCIONARIO' ? { ...history,
+        data: history.data.map(ride => employeeRide(ride, (identity.scope as { funcionarioId: string }).funcionarioId)) } : history,
     };
   }
 
@@ -105,13 +124,9 @@ export class PainelParticipanteRepository {
   }
 
   private period(query: PainelParticipanteQuery): { inicio: string; fim: string; fimExclusive: string } {
-    const today = new Date();
-    const year = today.getUTCFullYear();
-    const month = today.getUTCMonth();
-    const defaultStart = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
-    const defaultEnd = new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10);
-    const inicio = query.inicio ?? defaultStart;
-    const fim = query.fim ?? defaultEnd;
+    const defaults = operationMonth();
+    const inicio = query.inicio ?? defaults.inicio;
+    const fim = query.fim ?? defaults.fim;
     const end = new Date(`${fim}T00:00:00.000Z`);
     end.setUTCDate(end.getUTCDate() + 1);
     return { inicio, fim, fimExclusive: end.toISOString().slice(0, 10) };

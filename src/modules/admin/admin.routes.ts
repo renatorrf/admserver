@@ -19,6 +19,11 @@ import { PrestadorUnificadoService } from '../prestadores/prestador-unificado.se
 import { setorCreateSchema, setorDefinition, setorListSchema, setorUpdateSchema } from '../setores/setor.catalog';
 import { createUsuarioRouter } from '../usuarios/usuario.routes';
 import { UsuarioService } from '../usuarios/usuario.service';
+import { UsuarioControleService } from '../usuarios/usuario-controle.service';
+import { usuarioControleSchema, type UsuarioControleQuery } from '../usuarios/usuario.schemas';
+import { getValidatedQuery, validateQuery } from '../../shared/validation/validate';
+import { requireAuthContext } from '../auth/auth.middleware';
+import { asyncHandler } from '../../shared/http/async-handler';
 import { veiculoCreateSchema, veiculoDefinition, veiculoListSchema, veiculoUpdateSchema } from '../veiculos/veiculo.catalog';
 
 export function createAdminRouter(pool: Pool, tokens: TokenService): Router {
@@ -27,6 +32,10 @@ export function createAdminRouter(pool: Pool, tokens: TokenService): Router {
 
   router.use(createAuthenticate(tokens), authorize('GESTOR'));
   router.use('/empresas', createEmpresaRouter(new EmpresaService(pool, audit)));
+  const userControl = new UsuarioControleService(pool);
+  router.get('/usuarios/controle', validateQuery(usuarioControleSchema), asyncHandler(async (request, response) => {
+    response.json(await userControl.list(requireAuthContext(request), getValidatedQuery<UsuarioControleQuery>(request)));
+  }));
   router.use('/usuarios', createUsuarioRouter(new UsuarioService(pool, audit)));
   router.use('/cadastros-unificados', createPrestadorUnificadoRouter(new PrestadorUnificadoService(pool, audit)));
   router.use('/cadastros-unificados/funcionarios', createFuncionarioUnificadoRouter(new FuncionarioUnificadoService(pool, audit)));

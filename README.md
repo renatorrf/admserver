@@ -1,5 +1,16 @@
 # ADM Taxi Backend
 
+## Revisao geral de 2026-10-15
+
+Itinerarios individuais, isolamento de passageiros, idempotencia e testes com PostgreSQL
+descartavel: veja `../docs/revisao-geral/RELATORIO_FINAL.md`. A migration `013` precisa ser
+homologada antes de publicar esta versao. Nenhuma migration remota ou deploy foi feito nesta revisao.
+
+`npm run test:review:integration` inicia um PostgreSQL privado em loopback, gera dados sinteticos,
+aplica migrations e encerra o processo. Ignora `DATABASE_URL`; os clusters ficam em `.artifacts/`
+(ignorado pelo Git). Usa a dependencia de desenvolvimento `embedded-postgres`; nao e banco de producao.
+Executar com `npm ci` previamente e espaco em disco para os binarios/cluster.
+
 API REST multiempresa do ADM Taxi. A API usa Node.js, TypeScript, Express e PostgreSQL sem ORM.
 
 ## Requisitos

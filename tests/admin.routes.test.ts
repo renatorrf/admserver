@@ -32,21 +32,21 @@ function app() {
 describe('rotas administrativas', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('bloqueia gerente antes de consultar o banco', async () => {
+  it.each(['/api/v1/usuarios', '/api/v1/usuarios/controle'])('bloqueia gerente em %s antes de consultar o banco', async (path) => {
     const token = tokens.issueTokens({
       usuarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       empresaId: '11111111-1111-4111-8111-111111111111',
       perfil: 'GERENTE',
     }).accessToken;
 
-    const response = await request(app()).get('/api/v1/usuarios').set('Authorization', `Bearer ${token}`);
+    const response = await request(app()).get(path).set('Authorization', `Bearer ${token}`);
 
     expect(response.status).toBe(403);
     expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('controle_acesso'), expect.any(Array));
     expect(pool.query).not.toHaveBeenCalledWith(expect.stringContaining('SELECT'), expect.anything());
   });
 
-  it('rejeita empresa_id informado pelo cliente', async () => {
+  it.each(['/api/v1/usuarios', '/api/v1/usuarios/controle'])('rejeita empresa_id informado pelo cliente em %s', async (path) => {
     const token = tokens.issueTokens({
       usuarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       empresaId: '11111111-1111-4111-8111-111111111111',
@@ -54,7 +54,7 @@ describe('rotas administrativas', () => {
     }).accessToken;
 
     const response = await request(app())
-      .get('/api/v1/usuarios?empresaId=22222222-2222-4222-8222-222222222222')
+      .get(`${path}?empresaId=22222222-2222-4222-8222-222222222222`)
       .set('Authorization', `Bearer ${token}`);
 
     expect(response.status).toBe(422);

@@ -38,15 +38,16 @@ type ClientToServerEvents = {
   'localizacao:enviar': (payload: unknown, ack?: RealtimeAck) => void;
 };
 
+type RideInvalidation = Pick<CorridaRecord, 'id' | 'empresaId' | 'status' | 'itinerarioVersao' | 'atualizadoEm'>;
 type ServerToClientEvents = {
-  'corrida:atualizada': (ride: CorridaRecord) => void;
-  'corrida:criada': (ride: CorridaRecord) => void;
-  'corrida:ofertada': (ride: CorridaRecord) => void;
-  'corrida:aceita': (ride: CorridaRecord) => void;
-  'corrida:status-alterado': (ride: CorridaRecord) => void;
-  'corrida:finalizada': (ride: CorridaRecord) => void;
-  'corrida:cancelada': (ride: CorridaRecord) => void;
-  'corrida:valor-alterado': (ride: CorridaRecord) => void;
+  'corrida:atualizada': (ride: RideInvalidation) => void;
+  'corrida:criada': (ride: RideInvalidation) => void;
+  'corrida:ofertada': (ride: RideInvalidation) => void;
+  'corrida:aceita': (ride: RideInvalidation) => void;
+  'corrida:status-alterado': (ride: RideInvalidation) => void;
+  'corrida:finalizada': (ride: RideInvalidation) => void;
+  'corrida:cancelada': (ride: RideInvalidation) => void;
+  'corrida:valor-alterado': (ride: RideInvalidation) => void;
   'corrida:lista-invalidada': (payload: { corridaId: string }) => void;
   'faturamento:criado': (payload: FaturamentoRealtimePayload) => void;
   'faturamento:cancelado': (payload: FaturamentoRealtimePayload) => void;
@@ -112,7 +113,7 @@ export function attachSocketServer(
     cors: { origin: config.appOrigins, credentials: true },
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token = tokenFromSocket(socket);
     if (!token) {
       next(new Error('NAO_AUTORIZADO'));
@@ -120,6 +121,7 @@ export function attachSocketServer(
     }
     try {
       const session = tokens.verifyAccessSession(token);
+      await tokens.authenticateAccess(token);
       socket.data.auth = session.auth;
       socket.data.accessToken = token;
       socket.data.accessTokenExpiresAt = session.expiresAt.getTime();
@@ -137,11 +139,21 @@ export function attachSocketServer(
       if (socket.connected) socket.emit('sessao:expirando');
     }, Math.max(0, expiresIn - refreshLeadTime));
     const expirationTimer = setTimeout(() => socket.disconnect(true), expiresIn + 250);
+    let validatingAccess = false;
+    const accessTimer = setInterval(() => {
+      if (validatingAccess || !socket.connected) return;
+      validatingAccess = true;
+      void tokens.authenticateAccess(socket.data.accessToken)
+        .catch(() => socket.disconnect(true))
+        .finally(() => { validatingAccess = false; });
+    }, 15_000);
+    accessTimer.unref();
     warningTimer.unref();
     expirationTimer.unref();
     socket.once('disconnect', () => {
       clearTimeout(warningTimer);
       clearTimeout(expirationTimer);
+      clearInterval(accessTimer);
     });
 
     void socket.join(userRoom(socket.data.auth.empresaId, socket.data.auth.usuarioId));
@@ -175,7 +187,7 @@ export function attachSocketServer(
       void (async () => {
         const startedAt = Date.now();
         try {
-          tokens.verifyAccess(socket.data.accessToken);
+          await tokens.authenticateAccess(socket.data.accessToken);
           const { corridaId } = acompanharCorridaSchema.parse(raw);
           const snapshot = await locations.snapshot(socket.data.auth, corridaId);
           await socket.join(rideRoom(socket.data.auth.empresaId, corridaId));
@@ -204,7 +216,7 @@ export function attachSocketServer(
     socket.on('localizacao:enviar', (raw: unknown, ack?: RealtimeAck) => {
       void (async () => {
         try {
-          tokens.verifyAccess(socket.data.accessToken);
+          await tokens.authenticateAccess(socket.data.accessToken);
           assertSocketRate(socket);
           const input = enviarLocalizacaoSocketSchema.parse(raw);
           const { corridaId, ...location } = input;
@@ -218,7 +230,18 @@ export function attachSocketServer(
   });
 
   realtime.onLocation((location) => {
-    io.to(rideRoom(location.empresaId, location.corridaId)).emit('localizacao:atualizada', location);
+    const room = rideRoom(location.empresaId, location.corridaId);
+    // Assignment and sector membership can change while a socket remains open.
+    void (async () => {
+      const watchers = await io.in(room).fetchSockets();
+      await Promise.all(watchers.map(async watcher => {
+        try {
+          await tokens.authenticateAccess(watcher.data.accessToken);
+          await locations.snapshot(watcher.data.auth, location.corridaId);
+          if (watcher.rooms.has(room)) watcher.emit('localizacao:atualizada', location);
+        } catch { await watcher.leave(room); }
+      }));
+    })().catch(() => logger.warn({ corridaId: location.corridaId }, 'Falha ao distribuir localizacao autorizada'));
   });
   realtime.onRide((ride, event) => {
     void (async () => {
@@ -231,17 +254,27 @@ export function attachSocketServer(
         const users = await database.query<{ funcionario_usuario_id: string | null; prestador_usuario_id: string | null }>(
           `SELECT f.usuario_id AS funcionario_usuario_id,p.usuario_id AS prestador_usuario_id
            FROM admtaxi.corridas c
-           JOIN admtaxi.funcionarios f ON f.empresa_id=c.empresa_id AND f.id=c.funcionario_id
+           JOIN admtaxi.funcionarios f ON f.empresa_id=c.empresa_id AND (
+             f.id=c.funcionario_id OR EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes cp
+               WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND cp.funcionario_id=f.id) OR EXISTS (
+               SELECT 1 FROM admtaxi.corrida_paradas cp
+                WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND cp.funcionario_id=f.id
+             )
+           )
            LEFT JOIN admtaxi.prestadores p ON p.empresa_id=c.empresa_id AND p.id=c.prestador_id
            WHERE c.empresa_id=$1 AND c.id=$2`, [ride.empresaId, ride.id],
         );
-        const audience = users.rows[0];
-        if (audience?.funcionario_usuario_id) rooms.add(userRoom(ride.empresaId, audience.funcionario_usuario_id));
-        if (audience?.prestador_usuario_id) rooms.add(userRoom(ride.empresaId, audience.prestador_usuario_id));
+        for (const audience of users.rows) {
+          if (audience.funcionario_usuario_id) rooms.add(userRoom(ride.empresaId, audience.funcionario_usuario_id));
+          if (audience.prestador_usuario_id) rooms.add(userRoom(ride.empresaId, audience.prestador_usuario_id));
+        }
       }
       const targets = [...rooms];
-      io.to(targets).emit('corrida:atualizada', ride);
-      io.to(targets).emit(event as CorridaRealtimeEvent, ride);
+      // Rooms carry invalidation only; HTTP/snapshot access resolves personal data per recipient.
+      const update = { id: ride.id, empresaId: ride.empresaId, status: ride.status,
+        itinerarioVersao: ride.itinerarioVersao, atualizadoEm: ride.atualizadoEm };
+      io.to(targets).emit('corrida:atualizada', update);
+      io.to(targets).emit(event as CorridaRealtimeEvent, update);
       if (event === 'corrida:criada' || event === 'corrida:aceita' || event === 'corrida:cancelada') {
         io.to(profileRoom(ride.empresaId, 'PRESTADOR')).emit('corrida:lista-invalidada', { corridaId: ride.id });
       }

@@ -89,6 +89,9 @@ export class UsuarioService {
     return withTransaction(this.pool, async (client) => {
       const current = await this.repository.findById(client, auth.empresaId, id);
       if (!current) throw notFound('Usuario');
+      if (current.perfil === 'GESTOR' && current.ativo && input.perfil && input.perfil !== 'GESTOR') {
+        await this.ensureAnotherManager(client, auth.empresaId);
+      }
       if (current.perfil === 'FUNCIONARIO' && input.perfil !== undefined) {
         throw conflict('O perfil do funcionario deve ser mantido pelo cadastro unificado.');
       }
@@ -140,6 +143,7 @@ export class UsuarioService {
       const current = await this.repository.findById(client, auth.empresaId, id);
       if (!current) throw notFound('Usuario');
       if (current.ativo === ativo) return current;
+      if (!ativo && current.perfil === 'GESTOR') await this.ensureAnotherManager(client, auth.empresaId);
       const updated = await this.repository.setActive(client, auth.empresaId, id, ativo);
       if (!updated) throw notFound('Usuario');
       if (!ativo) await this.repository.revokeSessions(client, auth.empresaId, id);
@@ -188,6 +192,17 @@ export class UsuarioService {
       });
       return updated;
     });
+  }
+
+  private async ensureAnotherManager(client: QueryExecutor, empresaId: string): Promise<void> {
+    await client.query('SELECT id FROM admtaxi.empresas WHERE id=$1 FOR UPDATE', [empresaId]);
+    const result = await client.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total FROM admtaxi.usuarios
+       WHERE empresa_id=$1 AND perfil='GESTOR' AND ativo=TRUE`, [empresaId],
+    );
+    if (Number(result.rows[0]?.total ?? 0) <= 1) {
+      throw conflict('A empresa precisa manter pelo menos um gestor ativo.');
+    }
   }
 
   async getManagerScope(auth: AuthContext, id: string): Promise<GerenteEscopoResumo> {

@@ -62,6 +62,21 @@ describe('Socket.IO', () => {
     expect(snapshot).toHaveBeenCalledTimes(3);
   });
 
+  it('recusa acompanhamento em socket aberto quando a conta e bloqueada', async () => {
+    const allowed = vi.fn().mockResolvedValue(true);
+    const tokens = new TokenService(config, allowed);
+    const snapshot = vi.fn();
+    httpServer = createServer();
+    ioServer = attachSocketServer(httpServer, config, tokens,
+      { snapshot, create: vi.fn() } as unknown as LocalizacaoService, new RealtimeBus(), pino({ level: 'silent' }));
+    client = createClient(await listen(httpServer), { auth: { token: tokens.issueTokens(auth).accessToken }, reconnection: false });
+    await connected(client);
+    allowed.mockResolvedValue(false);
+    const response = await emitWithAck(client, 'corrida:acompanhar', { corridaId });
+    expect(response).toMatchObject({ ok: false, erro: { codigo: 'NAO_AUTORIZADO' } });
+    expect(snapshot).not.toHaveBeenCalled();
+  });
+
   it('recusa conexao sem access token', async () => {
     const tokens = new TokenService(config);
     const locations = { snapshot: vi.fn(), create: vi.fn() } as unknown as LocalizacaoService;
@@ -75,6 +90,29 @@ describe('Socket.IO', () => {
     const error = await new Promise<Error>((resolve) => client!.once('connect_error', resolve));
 
     expect(error.message).toBe('NAO_AUTORIZADO');
+  });
+
+  it('publica somente invalidacao e revalida o escopo antes de enviar GPS', async () => {
+    const tokens = new TokenService(config);
+    const bus = new RealtimeBus();
+    const snapshot = vi.fn().mockResolvedValue({ corrida: { id: corridaId }, localizacaoAtual: null });
+    httpServer = createServer();
+    ioServer = attachSocketServer(httpServer, config, tokens,
+      { snapshot, create: vi.fn() } as unknown as LocalizacaoService, bus, pino({ level: 'silent' }));
+    client = createClient(await listen(httpServer), { auth: { token: tokens.issueTokens(auth).accessToken } });
+    await connected(client);
+    await emitWithAck(client, 'corrida:acompanhar', { corridaId });
+    const update = new Promise<Record<string, unknown>>(resolve => client!.once('corrida:atualizada', resolve));
+    bus.publishRide({ id: corridaId, empresaId: auth.empresaId, status: 'ACEITA',
+      valorFinal: '123.00', origemDescricao: 'Endereco privado', funcionarioNome: 'Nome privado' } as Parameters<RealtimeBus['publishRide']>[0]);
+    expect(await update).toEqual({ id: corridaId, empresaId: auth.empresaId, status: 'ACEITA' });
+    snapshot.mockRejectedValue(new Error('Vinculo revogado'));
+    const received = vi.fn();
+    client.on('localizacao:atualizada', received);
+    bus.publishLocation({ corridaId, empresaId: auth.empresaId, latitude: 0, longitude: 0 } as Parameters<RealtimeBus['publishLocation']>[0]);
+    await vi.waitFor(() => expect(snapshot).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(ioServer!.sockets.adapter.rooms.has(`empresa:${auth.empresaId}:corrida:${corridaId}`)).toBe(false));
+    expect(received).not.toHaveBeenCalled();
   });
 });
 

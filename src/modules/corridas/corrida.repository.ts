@@ -1,10 +1,11 @@
 import type { QueryResultRow } from 'pg';
+import { commandHash, ItineraryRepository } from './itinerary.repository';
 
 import { queryOne, type Database, type QueryExecutor } from '../../db/pool';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
 import type { CorridaCreateInput, CorridaListQuery, EventoListQuery } from './corrida.schemas';
 import type {
-  CorridaEventoRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida,
+  CorridaEventoRecord, CorridaParadaRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida,
 } from './corrida.types';
 
 type CorridaRow = QueryResultRow & {
@@ -27,6 +28,7 @@ type CorridaRow = QueryResultRow & {
   veiculo_placa?: string | null;
   veiculo_descricao?: string | null;
   solicitante_nome?: string;
+  paradas?: CorridaParadaRecord[];
 };
 
 type EventoRow = QueryResultRow & {
@@ -67,7 +69,36 @@ const corridaSelect = `SELECT c.*,
   su.nome AS solicitante_nome,
   p.nome AS prestador_nome, p.telefone AS prestador_telefone,
   v.placa AS veiculo_placa,
-  CASE WHEN v.id IS NULL THEN NULL ELSE v.marca || ' ' || v.modelo || ' - ' || v.cor END AS veiculo_descricao
+  CASE WHEN v.id IS NULL THEN NULL ELSE v.marca || ' ' || v.modelo || ' - ' || v.cor END AS veiculo_descricao,
+  COALESCE((
+    SELECT jsonb_agg(jsonb_build_object(
+      'id', cp.id::text,
+      'ordem', cp.ordem,
+      'tipo', cp.tipo::text,
+      'funcionarioId', cp.funcionario_id::text,
+      'funcionarioNome', pf.nome,
+      'funcionarioMatricula', pf.matricula,
+      'descricao', cp.descricao,
+      'latitude', cp.latitude::float8,
+      'longitude', cp.longitude::float8
+    ) ORDER BY cp.ordem)
+    FROM admtaxi.corrida_paradas cp
+    LEFT JOIN admtaxi.funcionarios pf
+      ON pf.empresa_id = cp.empresa_id AND pf.id = cp.funcionario_id
+    WHERE cp.empresa_id = c.empresa_id AND cp.corrida_id = c.id
+  ), '[]'::jsonb) AS paradas,
+  CASE WHEN c.itinerario_versao > 0 THEN jsonb_build_object(
+    'versao', c.itinerario_versao,
+    'paradas', (SELECT jsonb_agg(jsonb_build_object('id',s.id,'ordem',s.ordem,'descricao',s.descricao,
+      'latitude',s.latitude::float8,'longitude',s.longitude::float8,'estado',s.estado,
+      'chegadaEm',s.chegada_em,'saidaEm',s.saida_em) ORDER BY s.ordem)
+      FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id),
+    'participantes', (SELECT jsonb_agg(jsonb_build_object('funcionarioId',p.funcionario_id,
+      'funcionarioNome',f.nome,'embarqueId',p.embarque_id,'desembarqueId',p.desembarque_id,
+      'estado',p.estado,'motivo',p.motivo,'embarqueEm',p.embarque_em,'desembarqueEm',p.desembarque_em) ORDER BY p.funcionario_id)
+      FROM admtaxi.corrida_participacoes p JOIN admtaxi.funcionarios f ON f.empresa_id=p.empresa_id AND f.id=p.funcionario_id
+      WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id)
+  ) ELSE NULL END AS itinerario
  FROM admtaxi.corridas c
  JOIN admtaxi.funcionarios f ON f.empresa_id = c.empresa_id AND f.id = c.funcionario_id
  JOIN admtaxi.centros_custo cc ON cc.empresa_id = c.empresa_id AND cc.id = c.centro_custo_id
@@ -119,6 +150,9 @@ export function mapCorrida(row: CorridaRow): CorridaRecord {
     veiculoPlaca: row.veiculo_placa,
     veiculoDescricao: row.veiculo_descricao,
     solicitanteNome: row.solicitante_nome,
+    paradas: row.itinerario_versao > 0 ? (row.paradas ?? []).slice(1, -1) : row.paradas ?? [],
+    itinerarioVersao: Number(row.itinerario_versao ?? 0),
+    itinerario: row.itinerario ?? null,
   };
 }
 
@@ -139,6 +173,11 @@ function mapEvento(row: EventoRow): CorridaEventoRecord {
 export class CorridaRepository {
   constructor(private readonly database: Database) {}
 
+  assertVehicleCapacity(executor: QueryExecutor, empresaId: string, ride: CorridaRecord, veiculoId: string): Promise<void> {
+    return new ItineraryRepository().assertCapacity(executor, empresaId, ride.id, veiculoId,
+      Number(ride.quantidadePassageiros), ride.itinerarioVersao ?? 0);
+  }
+
   async list(empresaId: string, scope: CorridaScope, query: CorridaListQuery): Promise<PaginatedResult<CorridaRecord>> {
     const values: unknown[] = [empresaId];
     const conditions = ['c.empresa_id = $1'];
@@ -150,14 +189,25 @@ export class CorridaRepository {
     if (query.status) add('c.status = ?', query.status);
     if (query.tipo) add('c.tipo = ?', query.tipo);
     if (query.centroCustoId) add('c.centro_custo_id = ?', query.centroCustoId);
-    if (query.funcionarioId) add('c.funcionario_id = ?', query.funcionarioId);
+    if (query.funcionarioId && scope.kind !== 'FUNCIONARIO') add(`(c.funcionario_id = ? OR EXISTS (
+      SELECT 1 FROM admtaxi.corrida_participacoes p WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id = ?))`.replace(/\?/g, `$${values.length + 1}`), query.funcionarioId);
     if (query.prestadorId) add('c.prestador_id = ?', query.prestadorId);
-    if (query.solicitanteUsuarioId) add('c.solicitante_usuario_id = ?', query.solicitanteUsuarioId);
+    if (query.solicitanteUsuarioId && scope.kind !== 'FUNCIONARIO') add('c.solicitante_usuario_id = ?', query.solicitanteUsuarioId);
     if (query.inicio) add('c.solicitada_em >= ?', query.inicio);
     if (query.fim) add('c.solicitada_em <= ?', query.fim);
     if (query.busca) {
       values.push(`%${query.busca}%`);
-      conditions.push(`(c.origem_descricao ILIKE $${values.length} OR c.destino_descricao ILIKE $${values.length})`);
+      const searchParam = values.length;
+      if (scope.kind === 'FUNCIONARIO') {
+        values.push(scope.funcionarioId);
+        conditions.push(`((c.itinerario_versao=0 AND (c.destino_descricao ILIKE $${searchParam}
+          OR (c.funcionario_id=$${values.length} AND c.origem_descricao ILIKE $${searchParam})
+          OR EXISTS (SELECT 1 FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id
+            AND s.funcionario_id=$${values.length} AND s.descricao ILIKE $${searchParam})))
+          OR EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes p JOIN admtaxi.corrida_paradas s
+            ON s.empresa_id=p.empresa_id AND s.corrida_id=p.corrida_id AND s.id IN (p.embarque_id,p.desembarque_id)
+            WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id=$${values.length} AND s.descricao ILIKE $${searchParam}))`);
+      } else conditions.push(`(c.origem_descricao ILIKE $${searchParam} OR c.destino_descricao ILIKE $${searchParam})`);
     }
     const where = conditions.join(' AND ');
     const count = await this.database.query<{ total: string }>(
@@ -208,8 +258,9 @@ export class CorridaRepository {
       `INSERT INTO admtaxi.corridas (
          empresa_id, solicitante_usuario_id, funcionario_id, centro_custo_id, tipo, agendada_para,
          quantidade_passageiros, origem_descricao, origem_latitude, origem_longitude,
-         destino_descricao, destino_latitude, destino_longitude, observacao_solicitante, valor_estimado
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         destino_descricao, destino_latitude, destino_longitude, observacao_solicitante, valor_estimado,
+         solicitacao_chave, solicitacao_hash
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING *`,
       [
         empresaId, usuarioId, input.funcionarioId, input.centroCustoId, input.tipo,
@@ -217,11 +268,32 @@ export class CorridaRepository {
         input.origemLatitude ?? null, input.origemLongitude ?? null, input.destinoDescricao,
         input.destinoLatitude ?? null, input.destinoLongitude ?? null,
         input.observacaoSolicitante ?? null, input.valorEstimado ?? null,
+        input.chaveSolicitacao ?? null, input.chaveSolicitacao ? commandHash(input) : null,
       ],
     );
     const row = result.rows[0];
     if (!row) throw new Error('Falha ao solicitar corrida.');
-    return mapCorrida(row);
+    if (input.itinerario) await new ItineraryRepository().replace(executor, empresaId, row.id, input.itinerario);
+    for (const [index, stop] of (input.paradas ?? []).entries()) {
+      if (stop.tipo === 'FUNCIONARIO') {
+        await executor.query(
+          `INSERT INTO admtaxi.corrida_paradas
+             (empresa_id, corrida_id, ordem, tipo, funcionario_id, descricao, latitude, longitude)
+           SELECT $1, $2, $3, 'FUNCIONARIO', f.id, f.endereco_padrao, f.latitude_padrao, f.longitude_padrao
+             FROM admtaxi.funcionarios f
+            WHERE f.empresa_id = $1 AND f.id = $4`,
+          [empresaId, row.id, index + 1, stop.funcionarioId],
+        );
+      } else {
+        await executor.query(
+          `INSERT INTO admtaxi.corrida_paradas
+             (empresa_id, corrida_id, ordem, tipo, descricao, latitude, longitude)
+           VALUES ($1, $2, $3, 'MANUAL', $4, $5, $6)`,
+          [empresaId, row.id, index + 1, stop.descricao, stop.latitude, stop.longitude],
+        );
+      }
+    }
+    return await this.findAccessible(executor, empresaId, row.id, { kind: 'GESTOR' }) ?? mapCorrida(row);
   }
 
   async updateAssignment(
@@ -397,6 +469,26 @@ export class CorridaRepository {
     return result.rowCount === 1;
   }
 
+  async validateEmployeeStops(
+    executor: QueryExecutor,
+    empresaId: string,
+    funcionarioIds: string[],
+    centroCustoId: string,
+  ): Promise<boolean> {
+    const result = await executor.query<{ total: string }>(
+      `SELECT COUNT(DISTINCT f.id)::text AS total
+         FROM admtaxi.funcionarios f
+         JOIN admtaxi.centros_custo c ON c.empresa_id = f.empresa_id AND c.id = f.centro_custo_id
+         JOIN admtaxi.setores s ON s.empresa_id = c.empresa_id AND s.id = c.setor_id
+        WHERE f.empresa_id = $1 AND f.id = ANY($2::uuid[]) AND f.centro_custo_id = $3
+          AND f.ativo = TRUE AND c.ativo = TRUE AND s.ativo = TRUE
+          AND f.endereco_padrao IS NOT NULL
+          AND f.latitude_padrao IS NOT NULL AND f.longitude_padrao IS NOT NULL`,
+      [empresaId, funcionarioIds, centroCustoId],
+    );
+    return Number(result.rows[0]?.total ?? 0) === funcionarioIds.length;
+  }
+
   async managerCanAccessCenter(
     executor: QueryExecutor,
     empresaId: string,
@@ -449,7 +541,14 @@ export class CorridaRepository {
       )`);
     } else if (scope.kind === 'FUNCIONARIO') {
       values.push(scope.funcionarioId);
-      conditions.push(`c.funcionario_id = $${values.length}`);
+      conditions.push(`(c.funcionario_id = $${values.length} OR EXISTS (
+        SELECT 1 FROM admtaxi.corrida_paradas participant_stop
+         WHERE participant_stop.empresa_id = c.empresa_id
+           AND participant_stop.corrida_id = c.id
+           AND participant_stop.funcionario_id = $${values.length}
+      ) OR EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes participant
+        WHERE participant.empresa_id=c.empresa_id AND participant.corrida_id=c.id
+          AND participant.funcionario_id=$${values.length}))`);
     }
   }
 }

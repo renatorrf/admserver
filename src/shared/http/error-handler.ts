@@ -28,9 +28,19 @@ export function createErrorHandler(logger: Logger, auditDatabase?: Pick<Pool, 'q
     }
 
     if (error instanceof ZodError) {
-      const fields = error.issues.map((issue) => ({
-        campo: issue.path.join('.') || 'formulario', mensagem: issue.message,
-      }));
+      const fields = error.issues.map((issue) => {
+        const collection = issue.path.findIndex(part => part === 'paradas' || part === 'participantes');
+        let record: unknown = request.body;
+        if (collection >= 0 && typeof issue.path[collection + 1] === 'number') {
+          for (const part of issue.path.slice(0, collection + 2)) {
+            record = record && typeof record === 'object' ? (record as Record<string, unknown>)[String(part)] : undefined;
+          }
+        } else record = undefined;
+        const stableId = record && typeof record === 'object'
+          ? (record as Record<string, unknown>)[issue.path[collection] === 'paradas' ? 'id' : 'funcionarioId'] : undefined;
+        return { campo: issue.path.join('.') || 'formulario', mensagem: issue.message,
+          ...(typeof stableId === 'string' && /^[0-9a-f-]{36}$/i.test(stableId) ? { objetoId: stableId } : {}) };
+      });
       logger.warn({ requestId: request.id, validationFields: fields }, 'Requisicao rejeitada por dados invalidos');
       response.status(422).json({
         erro: {

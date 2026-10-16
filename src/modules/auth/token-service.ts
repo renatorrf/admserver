@@ -32,7 +32,18 @@ export type VerifiedAccessSession = {
 };
 
 export class TokenService {
-  constructor(private readonly config: TokenConfig) {}
+  constructor(
+    private readonly config: TokenConfig,
+    private readonly accessAllowed?: (auth: AuthContext) => Promise<boolean>,
+  ) {}
+
+  async authenticateAccess(token: string): Promise<AuthContext> {
+    const auth = this.verifyAccess(token);
+    if (this.accessAllowed && !await this.accessAllowed(auth)) {
+      throw unauthorized('Conta bloqueada ou perfil alterado. Entre novamente.');
+    }
+    return auth;
+  }
 
   issueTokens(auth: AuthContext): IssuedTokens {
     const refreshId = randomUUID();
