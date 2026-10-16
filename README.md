@@ -76,6 +76,14 @@ local. Consulte `../OPERACAO_E_DEPLOY.md`. Nenhum seed foi executado no banco re
 
 ## Execucao
 
+### Cloud Run: logs e ambiente
+
+Defina `NODE_ENV=production` nas variaveis de execucao do servico e use `npm start`
+apos o build. Nao envie o `.env` local para a imagem; preserve os segredos no ambiente
+do servico. A API gera logs JSON no Cloud Run (identificado por `K_SERVICE`) e em
+saidas nao interativas. `pino-pretty` e opcional e usado somente no terminal local
+de desenvolvimento, quando instalado. Sua ausencia nao impede a inicializacao.
+
 Desenvolvimento com recarga automatica:
 
 ```powershell
