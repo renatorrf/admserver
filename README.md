@@ -1,5 +1,34 @@
 # ADM Taxi Backend
 
+## Funcionarios vinculados a varias empresas (021)
+
+Migration `021_contas_funcionario` aplicada no banco remoto em 19/10/2026 com autorizacao explicita.
+Verificacao: 4 contas e 4 vinculos; nenhuma divergencia de credenciais; 2 empresas,
+11 usuarios, 4 funcionarios e 7 corridas preservados.
+
+- Aplicar `021_contas_funcionario` antes de publicar este backend e depois atualizar frontend/APK.
+- `contas_funcionario` guarda a credencial unica. `usuarios` e `funcionarios` continuam locais:
+  matricula, centro de custo, endereco, corridas e permissoes nao sao compartilhados entre empresas.
+- O gestor pesquisa o e-mail completo em `GET /api/v1/funcionarios/vinculos`. A resposta contem
+  somente id da conta, nome, e-mail e indicacao de vinculo na empresa atual.
+- Em `POST /api/v1/cadastros-unificados/funcionarios`, `acesso: { contaId, ativo }` vincula uma
+  conta existente; `acesso: { senha, ativo }` cria uma nova. Nao e permitido combinar contaId e senha.
+  O bloco funcionario continua exigindo matricula e centro de custo da empresa autenticada.
+- `POST /api/v1/auth/acesso` valida e-mail/senha e retorna `perfilSelecao: FUNCIONARIO`,
+  `selecaoToken` e apenas os vinculos ativos. `POST /api/v1/auth/funcionario/empresa` revalida a
+  conta, sua versao e o vinculo, emitindo uma sessao restrita a empresa selecionada.
+- A selecao expira em cinco minutos e nao pode ser usada como token de API ou de gestor.
+  Motoristas continuam entrando diretamente, sem selecionar empresa.
+- Senha temporaria continua exigindo troca. Alteracao/recuperacao pessoal revoga as sessoes de
+  todas as empresas; recuperacao aceita apenas e-mail. Gestores nao podem alterar senha/e-mail
+  de uma conta compartilhada. Inativar um cadastro bloqueia somente aquele vinculo.
+- A migracao preserva usuarios, funcionarios, senhas e historicos existentes, sem mesclar contas
+  por e-mail. Identidades antigas ambiguas devem ser regularizadas separadamente; o login por
+  empresa permanece disponivel como compatibilidade. Nao ha rollback destrutivo automatico.
+- Validacao isolada: `npm run test:review:integration` inclui EMPLOYEE-01 a EMPLOYEE-04,
+  sem usar o banco remoto. O teste de navegador esta em `scripts/test-employee-account-ui.cjs`
+  no frontend (API simulada).
+
 ## Conta unica de gestor e multiplas empresas
 
 Migration `016_contas_gestor` aplicada no banco remoto em 19/10/2026 com autorizacao explicita.
@@ -353,3 +382,20 @@ npm run build
 Os testes cobrem autenticacao, rotacao de token, escopo por empresa, autorizacao, cadastros,
 inativacao, auditoria, maquina de estados, fluxos operacionais, geolocalizacao, dashboard,
 relatorios, CSV e protecoes do seed de desenvolvimento.
+
+## Execucao Sequencial do Itinerario
+
+O cliente envia `avancoAutomatico: true` em `/corridas/:id/itinerario/acoes`.
+INICIAR inicia a viagem uma unica vez. Depois de CHEGAR, o ultimo embarque/desembarque
+resolvido conclui a parada e inicia o deslocamento seguinte na mesma transacao.
+Paradas manuais ainda exigem CHEGAR e CONCLUIR. Clientes antigos sem a opcao mantem
+os comandos explicitos. Chave idempotente, versao, escopo e auditoria continuam obrigatorios.
+
+Cada etapa tem descricao e horarios persistidos. O funcionario recebe apenas o proprio
+trajeto e `etapaPassageiro`; `acompanhamentoLiberado` controla GPS por HTTP e Socket.IO.
+O proximo funcionario so recebe GPS quando seu embarque passa a ser a parada atual.
+Depois do desembarque, o GPS deixa de ser entregue a ele. Gestores mantem o acompanhamento.
+
+Nao ha nova migracao para este ajuste. Publicar o backend antes do frontend/APK.
+`npm run test:review:integration` valida a execucao automatica completa e idempotencia
+em PostgreSQL temporario; `tests/socket-server.test.ts` valida a liberacao seletiva do GPS.

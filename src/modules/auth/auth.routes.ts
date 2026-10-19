@@ -16,8 +16,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import type { ManagerLoginService } from './manager-login.service';
 import type { DriverLoginService } from './driver-login.service';
+import type { EmployeeLoginService } from './employee-login.service';
+import { AppError } from '../../shared/errors/app-error';
 
-export function createAuthRouter(auth: AuthApplication, tokens: TokenService, passwords?: PasswordService, managers?: ManagerLoginService, drivers?: DriverLoginService): Router {
+export function createAuthRouter(auth: AuthApplication, tokens: TokenService, passwords?: PasswordService, managers?: ManagerLoginService, drivers?: DriverLoginService, employees?: EmployeeLoginService): Router {
   const router = Router();
   const controller = new AuthController(auth);
   const authenticate = createAuthenticate(tokens, true);
@@ -40,8 +42,18 @@ export function createAuthRouter(auth: AuthApplication, tokens: TokenService, pa
   router.get('/empresas', asyncHandler(controller.companies));
   if (drivers && managers) router.post('/acesso', sensitiveRouteLimiter, validateBody(loginSchema.omit({ empresa: true })), asyncHandler(async (req, res) => {
     const session = await drivers.identify(req.body);
-    res.json({ data: session ? { sessao: session } : await managers.identify(req.body) });
+    if (session) { res.json({ data: { sessao: session } }); return; }
+    try {
+      res.json({ data: await managers.identify(req.body) });
+    } catch (error) {
+      if (!employees || !(error instanceof AppError) || error.statusCode !== 401) throw error;
+      res.json({ data: await employees.identify(req.body) });
+    }
   }));
+  if (employees) router.post('/funcionario/empresa', sensitiveRouteLimiter,
+    validateBody(z.object({ selecaoToken: z.string().min(1).max(4096), empresaId: z.string().uuid() }).strict()), asyncHandler(async (req, res) => {
+      res.json({ data: await employees.select(req.body) });
+    }));
   if (managers) {
     router.post('/gestor/login', sensitiveRouteLimiter, validateBody(loginSchema.omit({ empresa: true })), asyncHandler(async (req, res) => {
       res.json({ data: await managers.identify(req.body) });

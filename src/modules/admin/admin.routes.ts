@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { createDriverLinkRouter } from '../prestadores/driver-link.routes';
 import { DriverLinkService } from '../prestadores/driver-link.service';
+import { createEmployeeLinkRouter } from '../funcionarios/employee-link.routes';
 import type { Pool } from 'pg';
 
 import { createAuthenticate, authorize } from '../auth/auth.middleware';
@@ -34,6 +35,7 @@ export function createAdminRouter(pool: Pool, tokens: TokenService): Router {
 
   router.use(createAuthenticate(tokens), authorize('GESTOR'));
   router.use('/motoristas/vinculos', createDriverLinkRouter(new DriverLinkService(pool)));
+  router.use('/funcionarios/vinculos', createEmployeeLinkRouter(pool));
   router.use('/empresas', createEmpresaRouter(new EmpresaService(pool, audit)));
   const userControl = new UsuarioControleService(pool);
   router.get('/usuarios/controle', validateQuery(usuarioControleSchema), asyncHandler(async (request, response) => {

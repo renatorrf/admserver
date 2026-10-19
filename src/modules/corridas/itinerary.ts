@@ -60,6 +60,7 @@ export const itineraryActionSchema = z.object({
   chave: z.string().uuid(), versao: z.number().int().min(1), paradaId: z.string().uuid(),
   acao: z.enum(['INICIAR', 'CHEGAR', 'EMBARCAR', 'DESEMBARCAR', 'AUSENTE', 'CANCELAR_PASSAGEIRO', 'CONCLUIR']),
   funcionarioId: z.string().uuid().optional(), motivo: z.string().trim().min(5).max(1000).optional(),
+  avancoAutomatico: z.boolean().optional(),
 }).strict();
 export type ItineraryAction = z.infer<typeof itineraryActionSchema>;
 
@@ -117,6 +118,18 @@ export function advanceItinerary(snapshot: ItinerarySnapshot, action: ItineraryA
           passenger.estado = action.acao === 'AUSENTE' ? 'AUSENTE' : 'CANCELADO'; passenger.motivo = action.motivo;
         }
       }
+    }
+  }
+  // Older installed clients still send explicit CONCLUIR/INICIAR commands.
+  if (action.avancoAutomatico) {
+    const pending = next.participantes.some(p => (p.embarqueId === stop.id && p.estado === 'AGUARDANDO')
+      || (p.desembarqueId === stop.id && p.estado === 'EMBARCADO'));
+    if (stop.estado === 'CHEGADA' && action.acao !== 'CHEGAR' && !pending) {
+      stop.estado = 'CONCLUIDA'; stop.saidaEm = now;
+    }
+    if (stop.estado === 'CONCLUIDA') {
+      const following = next.paradas.find(p => p.estado !== 'CONCLUIDA');
+      if (following?.estado === 'PENDENTE') following.estado = 'EM_DESLOCAMENTO';
     }
   }
   next.versao++;

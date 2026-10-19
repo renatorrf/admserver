@@ -49,8 +49,9 @@ export class LocalizacaoService {
     query: LocalizacaoListQuery,
   ): Promise<PaginatedResult<LocalizacaoRecord>> {
     auth = await driverRideContext(this.database, auth, corridaId);
-    await this.rideAccess.get(auth, corridaId);
+    const ride = await this.rideAccess.get(auth, corridaId);
     if (auth.perfil === 'FUNCIONARIO') {
+      if (ride.acompanhamentoLiberado === false) return paginate([], 0, query);
       const latest = await this.repository.latest(this.database, auth.empresaId, corridaId);
       return paginate(query.pagina === 1 && latest ? [latest] : [], latest ? 1 : 0, query);
     }
@@ -60,7 +61,8 @@ export class LocalizacaoService {
   async snapshot(auth: AuthContext, corridaId: string): Promise<AcompanhamentoSnapshot> {
     auth = await driverRideContext(this.database, auth, corridaId);
     const corrida = await this.rideAccess.get(auth, corridaId);
-    const localizacaoAtual = await this.repository.latest(this.database, auth.empresaId, corridaId);
+    const localizacaoAtual = auth.perfil === 'FUNCIONARIO' && corrida.acompanhamentoLiberado === false
+      ? null : await this.repository.latest(this.database, auth.empresaId, corridaId);
     return { corrida, localizacaoAtual };
   }
 }

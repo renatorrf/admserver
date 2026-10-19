@@ -67,6 +67,9 @@ async function main(): Promise<void> {
     await pool.query('BEGIN');
     await pool.query(await readFile('src/db/migrations/020_contas_motorista.up.sql','utf8'));
     await pool.query('COMMIT');
+    await pool.query('BEGIN');
+    await pool.query(await readFile('src/db/migrations/021_contas_funcionario.up.sql','utf8'));
+    await pool.query('COMMIT');
 
     const repository = new PgAuthRepository(pool);
     const tokens = new TokenService({ jwtAccessSecret:randomUUID()+randomUUID(),jwtRefreshSecret:randomUUID()+randomUUID(),
@@ -137,7 +140,7 @@ async function main(): Promise<void> {
     await assert.rejects(new PasswordService(pool,logger).requestReset({empresa:'TEST',email:'any@example.test'}),{statusCode:503});
     ok('SMTP failure invalidates link and missing configuration fails explicitly');
 
-    await pool.query('UPDATE admtaxi.usuarios SET senha_hash=$2,deve_alterar_senha=TRUE WHERE id=$1',[fresh,initialHash]);
+    await pool.query('UPDATE admtaxi.usuarios SET senha_hash=$2,deve_alterar_senha=TRUE WHERE id=$1',[fresh,await argon2.hash('123456')]);
     await assert.rejects(tokens.authenticateAccess(recovered.accessToken),{statusCode:401});
     const temporary=await authService.login({empresa:'TEST',email:'fresh@example.test',senha:'123456'});
     assert.equal(temporary.usuario.deveAlterarSenha,true);

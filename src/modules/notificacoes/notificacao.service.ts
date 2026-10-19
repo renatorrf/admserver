@@ -8,6 +8,7 @@ import { forbidden, notFound, unavailable } from '../../shared/errors/app-error'
 import type { AuthContext } from '../auth/auth.types';
 import type { CorridaRecord } from '../corridas/corrida.types';
 import type { ItineraryAction } from '../corridas/itinerary';
+import { employeeRide } from '../corridas/corrida-visibility';
 import type { PushSubscriptionInput } from './notificacao.schemas';
 
 type SubscriptionRow = {
@@ -187,11 +188,12 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   }
 
   publishItineraryUpdate(ride: CorridaRecord, action?: ItineraryAction): void {
-    if (action?.acao === 'CONCLUIR') return;
     const event = action ? 'ETAPA_ATUALIZADA' : 'ITINERARIO_ALTERADO';
+    const next = ride.itinerario?.paradas.find(p => p.estado !== 'CONCLUIDA');
     const affected = (ride.itinerario?.participantes ?? []).filter(p => !action
-      || (action.funcionarioId ? p.funcionarioId === action.funcionarioId
-        : p.embarqueId === action.paradaId || p.desembarqueId === action.paradaId)).map(p => p.funcionarioId);
+      || action.acao === 'INICIAR' || p.funcionarioId === action.funcionarioId
+      || p.embarqueId === action.paradaId || p.desembarqueId === action.paradaId
+      || (p.estado === 'AGUARDANDO' && p.embarqueId === next?.id)).map(p => p.funcionarioId);
     void Promise.all([
       this.sendRequesterRide(ride, event), this.sendGestorsRide(ride, event), this.sendEmployeeRide(ride, event, affected),
       ...(!action ? [this.sendProviderRide(ride, 'ALTERADA')] : []),
@@ -254,25 +256,29 @@ export class NotificacaoService implements CorridaNotificationPublisher {
       ...(ride.itinerario?.participantes ?? []).map(p => p.funcionarioId),
       ...(ride.paradas ?? []).flatMap((stop) => stop.tipo === 'FUNCIONARIO' && stop.funcionarioId ? [stop.funcionarioId] : []),
     ];
-    const userIds = this.employeeUsers
-      ? (await Promise.all(employeeIds.map((id) => this.employeeUsers!.resolveEmployeeUser(ride.empresaId, id))))
-        .filter((id): id is string => !!id)
-      : (await this.database.query<UserRow>(
-        `SELECT DISTINCT f.usuario_id FROM admtaxi.funcionarios f JOIN admtaxi.usuarios u
+    const recipients = this.employeeUsers
+      ? await Promise.all([...new Set(employeeIds)].map(async id => ({ funcionario_id: id,
+        usuario_id: await this.employeeUsers!.resolveEmployeeUser(ride.empresaId, id) })))
+      : (await this.database.query<UserRow & { funcionario_id: string }>(
+        `SELECT DISTINCT f.usuario_id,f.id AS funcionario_id FROM admtaxi.funcionarios f JOIN admtaxi.usuarios u
           ON u.empresa_id=f.empresa_id AND u.id=f.usuario_id
          WHERE f.empresa_id=$1 AND f.id=ANY($2::uuid[]) AND f.ativo=TRUE AND u.ativo=TRUE`,
         [ride.empresaId, employeeIds],
-      )).rows.map((row) => row.usuario_id);
-    if (!userIds.length) return;
+      )).rows;
+    if (!recipients.length) return;
     const message = event === 'SOLICITADA'
       ? { title: 'Nova corrida solicitada', body: 'Uma nova corrida foi solicitada para voce.' }
       : this.rideMessage(event);
-    await Promise.all(userIds.map((userId) => this.sendRecipient({
+    await Promise.all(recipients.filter(p => !!p.usuario_id).map((recipient) => {
+      const userId = recipient.usuario_id!;
+      const stage = event === 'ETAPA_ATUALIZADA' ? employeeRide(ride, recipient.funcionario_id).etapaPassageiro : null;
+      return this.sendRecipient({
       empresaId: ride.empresaId, usuarioId: userId, corridaId: ride.id,
-      event: `FUNCIONARIO_${event}`, title: message.title, body: message.body,
+      event: `FUNCIONARIO_${event}`, title: message.title, body: typeof stage === 'string' ? stage : message.body,
       destination: this.rideUrl(ride.id),
       dedupeKey: `${ride.empresaId}:${ride.id}:FUNCIONARIO_${event}:${userId}${this.itineraryDedupe(ride, event)}`,
-    })));
+      });
+    }));
   }
 
   private async sendProviderRide(

@@ -18,6 +18,36 @@ const command = (s: ItinerarySnapshot, acao: ItineraryAction['acao'], index: num
   advanceItinerary(s, { chave: randomUUID(), versao: s.versao, paradaId: stops[index]!.id, acao, funcionarioId, motivo }, '2026-10-15T12:00:00Z');
 
 describe('Itinerario individual', () => {
+  it('inicia uma vez, conclui atendimentos e libera o GPS do proximo embarque', () => {
+    let s = snapshot();
+    const execute = (acao: ItineraryAction['acao'], index: number, funcionarioId?: string) => {
+      s = advanceItinerary(s, { chave: randomUUID(), versao: s.versao, paradaId: stops[index]!.id,
+        acao, funcionarioId, avancoAutomatico: true }, '2026-10-19T12:00:00Z');
+    };
+    const visible = (index: number) => employeeRide({ itinerario: s, status: 'EM_CORRIDA' } as CorridaRecord, people[index]!.funcionarioId);
+    execute('INICIAR', 0);
+    expect(visible(0).acompanhamentoLiberado).toBe(true);
+    expect(visible(1).acompanhamentoLiberado).toBe(false);
+    expect(visible(1).etapaPassageiro).toBe('Em deslocamento');
+    for (let i = 0; i < 4; i++) {
+      expect(s.paradas[i]!.estado).toBe('EM_DESLOCAMENTO');
+      execute('CHEGAR', i);
+      execute(i < 2 ? 'EMBARCAR' : 'DESEMBARCAR', i, people[i < 2 ? i : i - 2]!.funcionarioId);
+      expect(s.paradas[i]!.estado).toBe('CONCLUIDA');
+      expect(s.paradas[i]!.saidaEm).toBeTruthy();
+      if (i === 0) expect(visible(1).acompanhamentoLiberado).toBe(true);
+      if (i === 2) expect(visible(0).acompanhamentoLiberado).toBe(false);
+    }
+    expect(itineraryResolved(s)).toBe(true);
+  });
+  it('nao avanca enquanto outro passageiro do mesmo embarque aguarda', () => {
+    const s = snapshot(); s.participantes[1]!.embarqueId = stops[0]!.id;
+    const arrived = command(command(s, 'INICIAR', 0), 'CHEGAR', 0);
+    const next = advanceItinerary(arrived, { chave: randomUUID(), versao: arrived.versao, acao: 'EMBARCAR',
+      paradaId: stops[0]!.id, funcionarioId: people[0]!.funcionarioId, avancoAutomatico: true }, '2026-10-19T12:00:00Z');
+    expect(next.paradas[0]!.estado).toBe('CHEGADA');
+    expect(next.paradas[1]!.estado).toBe('PENDENTE');
+  });
   it('TRIP-02 calcula lotacao e executa A embarca Ana, B embarca Bruno, C/D desembarcam', () => {
     expect(peakOccupancy(plan)).toBe(2);
     let s = snapshot();

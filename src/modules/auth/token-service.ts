@@ -127,6 +127,20 @@ export class TokenService {
     } catch { throw unauthorized('Selecao expirada. Informe seu email e senha novamente.'); }
   }
 
+  issueEmployeeSelection(accountId: string, version: number): string {
+    return jwt.sign({ sub: accountId, versao: version, tipo: 'employee-company-selection' }, this.config.jwtAccessSecret,
+      { expiresIn: 300, issuer: 'adm-taxi', audience: 'adm-taxi-employee-selection', jwtid: randomUUID() });
+  }
+
+  verifyEmployeeSelection(token: string): { sub: string; versao: number } {
+    try {
+      return z.object({ tipo: z.literal('employee-company-selection'),
+        sub: z.string().uuid(), versao: z.number().int().nonnegative(),
+      }).parse(jwt.verify(token, this.config.jwtAccessSecret,
+        { algorithms: ['HS256'], issuer: 'adm-taxi', audience: 'adm-taxi-employee-selection' }));
+    } catch { throw unauthorized('Selecao expirada. Informe seu email e senha novamente.'); }
+  }
+
   private verify(token: string, secret: string, expectedType: 'access' | 'refresh'): z.infer<typeof tokenPayloadSchema> {
     try {
       const decoded = jwt.verify(token, secret, { issuer: 'adm-taxi', audience: 'adm-taxi-api' });

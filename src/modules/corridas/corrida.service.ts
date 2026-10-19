@@ -574,12 +574,32 @@ export class CorridaService {
       if (ride.status === 'ACEITA' && action.acao === 'INICIAR') ride = await this.repository.changeStatus(client, auth.empresaId, id, 'EM_DESLOCAMENTO');
       if (ride.status === 'EM_DESLOCAMENTO' && action.acao === 'CHEGAR') ride = await this.repository.changeStatus(client, auth.empresaId, id, 'AGUARDANDO_PASSAGEIRO');
       if (ride.status === 'AGUARDANDO_PASSAGEIRO' && ['EMBARCAR', 'CONCLUIR'].includes(action.acao)) ride = await this.repository.changeStatus(client, auth.empresaId, id, 'EM_CORRIDA');
+      if (action.avancoAutomatico && ride.status === 'AGUARDANDO_PASSAGEIRO'
+        && next.paradas.find(p => p.estado !== 'CONCLUIDA')?.estado === 'EM_DESLOCAMENTO') {
+        ride = await this.repository.changeStatus(client, auth.empresaId, id, 'EM_CORRIDA');
+      }
       if (itineraryResolved(next)) ride = await this.repository.markDisembark(client, auth.empresaId, id);
       await client.query(`INSERT INTO admtaxi.corrida_comandos (empresa_id,corrida_id,chave,comando_hash,versao)
         VALUES ($1,$2,$3,$4,$5)`, [auth.empresaId, id, action.chave, hash, next.versao]);
+      const stop = next.paradas.find(p => p.id === action.paradaId)!;
+      const passenger = next.participantes.find(p => p.funcionarioId === action.funcionarioId);
+      const descriptions: Record<ItineraryAction['acao'], string> = {
+        INICIAR: previousStatus === 'ACEITA' ? 'Corrida iniciada' : 'Deslocamento iniciado',
+        CHEGAR: 'Chegada registrada', EMBARCAR: 'Embarque confirmado', DESEMBARCAR: 'Desembarque confirmado',
+        AUSENTE: 'Ausencia registrada', CANCELAR_PASSAGEIRO: 'Participacao cancelada', CONCLUIR: 'Atendimento concluido',
+      };
       await this.repository.createEvent(client, auth.empresaId, id, auth.usuarioId, `PARADA_${action.acao}`,
-        previousStatus, ride.status, 'Etapa do itinerario atualizada.',
+        previousStatus, ride.status, `${descriptions[action.acao]}${passenger ? `: ${passenger.funcionarioNome}` : ''}. Parada ${stop.ordem}: ${stop.descricao}`,
         { paradaId: action.paradaId, funcionarioId: action.funcionarioId, versao: next.versao });
+      if (action.avancoAutomatico && stop.estado === 'CONCLUIDA') {
+        if (action.acao !== 'CONCLUIR') await this.repository.createEvent(client, auth.empresaId, id, auth.usuarioId,
+          'PARADA_CONCLUIR', ride.status, ride.status, `Atendimento concluido. Parada ${stop.ordem}: ${stop.descricao}`,
+          { paradaId: stop.id, versao: next.versao });
+        const following = next.paradas.find(p => p.estado === 'EM_DESLOCAMENTO');
+        if (following) await this.repository.createEvent(client, auth.empresaId, id, auth.usuarioId,
+          'PARADA_INICIAR', ride.status, ride.status, `A caminho da parada ${following.ordem}: ${following.descricao}`,
+          { paradaId: following.id, versao: next.versao });
+      }
       await this.audit.record(client, { ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
         entidade: 'corrida', entidadeId: id, acao: `PARADA_${action.acao}`, dadosAnteriores: current, dadosNovos: next });
       changed = true;

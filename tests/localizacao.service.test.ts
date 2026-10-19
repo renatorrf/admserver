@@ -68,6 +68,17 @@ function rideAccess(): CorridaAccess {
 }
 
 describe('LocalizacaoService', () => {
+  it('nao entrega GPS por lista ou snapshot antes da vez do passageiro', async () => {
+    const access = rideAccess();
+    vi.mocked(access.get).mockResolvedValue({ acompanhamentoLiberado: false } as CorridaRecord);
+    const store = new LocationStore();
+    const latest = vi.spyOn(store, 'latest');
+    const service = new LocalizacaoService(fakeDatabase(), access, undefined, store);
+    const employee = { ...gestor, perfil: 'FUNCIONARIO' as const };
+    expect((await service.list(employee, CORRIDA, { pagina: 1, limite: 50 })).data).toEqual([]);
+    expect((await service.snapshot(employee, CORRIDA)).localizacaoAtual).toBeNull();
+    expect(latest).not.toHaveBeenCalled();
+  });
   it('registra e publica localizacao do prestador durante corrida ativa', async () => {
     const store = new LocationStore();
     const realtime: LocalizacaoRealtimePublisher = { publishLocation: vi.fn() };

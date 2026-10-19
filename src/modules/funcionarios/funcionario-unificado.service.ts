@@ -2,7 +2,7 @@ import argon2 from 'argon2';
 import type { QueryResultRow } from 'pg';
 
 import { queryOne, type Database, type QueryExecutor, withTransaction } from '../../db/pool';
-import { invalidReference, notFound } from '../../shared/errors/app-error';
+import { conflict, forbidden, invalidReference, notFound } from '../../shared/errors/app-error';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditMetadata } from '../auditoria/audit.types';
 import type { AuditRepository } from '../auditoria/audit.repository';
@@ -26,14 +26,31 @@ export class FuncionarioUnificadoService {
   ) {}
 
   async create(auth: AuthContext, input: FuncionarioUnificadoCreateInput, metadata: AuditMetadata) {
-    const passwordHash = await this.hashPassword(input.acesso.senha);
+    const passwordHash = 'senha' in input.acesso ? await this.hashPassword(input.acesso.senha) : null;
     return withTransaction(this.database, async (client) => {
       await funcionarioDefinition.validateReferences?.(client, auth.empresaId, input.funcionario);
+      let accountId: string | null = null;
+      let hash = passwordHash;
+      if ('contaId' in input.acesso) {
+        if (auth.perfil !== 'GESTOR') throw forbidden();
+        accountId = input.acesso.contaId;
+        const account = (await client.query<{ email: string; senha_hash: string }>(
+          `SELECT c.email::text,c.senha_hash FROM admtaxi.contas_funcionario c WHERE c.id=$1
+           AND EXISTS(SELECT 1 FROM admtaxi.usuarios u JOIN admtaxi.empresas e ON e.id=u.empresa_id
+             JOIN admtaxi.funcionarios f ON f.usuario_id=u.id AND f.empresa_id=u.empresa_id
+             WHERE u.conta_funcionario_id=c.id AND u.ativo AND e.ativo AND f.ativo AND u.perfil='FUNCIONARIO') FOR UPDATE OF c`, [accountId])).rows[0];
+        if (!account) throw notFound('Funcionario ativo');
+        if (input.funcionario.email?.toLowerCase() !== account.email.toLowerCase()) throw invalidReference('O e-mail deve corresponder a conta selecionada.');
+        if ((await client.query('SELECT id FROM admtaxi.usuarios WHERE conta_funcionario_id=$1 AND empresa_id=$2', [accountId, auth.empresaId])).rowCount) {
+          throw conflict('Este funcionario ja esta vinculado a esta empresa. Localize o cadastro nos ativos ou inativos para editar.');
+        }
+        hash = account.senha_hash;
+      }
       const user = await client.query<{ id: string }>(
-        `INSERT INTO admtaxi.usuarios (empresa_id, nome, email, telefone, senha_hash, perfil, ativo)
-         VALUES ($1, $2, $3, $4, $5, 'FUNCIONARIO', $6) RETURNING id`,
+        `INSERT INTO admtaxi.usuarios (empresa_id, nome, email, telefone, senha_hash, perfil, ativo, conta_funcionario_id)
+         VALUES ($1, $2, $3, $4, $5, 'FUNCIONARIO', $6, $7) RETURNING id`,
         [auth.empresaId, input.funcionario.nome, input.funcionario.email!, input.funcionario.telefone ?? null,
-          passwordHash, input.acesso.ativo],
+          hash, input.acesso.ativo, accountId],
       );
       const userId = user.rows[0]?.id;
       if (!userId) throw new Error('Falha ao criar usuario do funcionario.');
@@ -51,8 +68,8 @@ export class FuncionarioUnificadoService {
       if (!employeeId) throw new Error('Falha ao criar funcionario.');
       await this.audit.record(client, {
         ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId, entidade: 'cadastro_unificado',
-        entidadeId: employeeId, acao: 'CRIAR_FUNCIONARIO_ACESSO',
-        dadosNovos: { funcionarioId: employeeId, usuarioId: userId, perfil: 'FUNCIONARIO' },
+        entidadeId: employeeId, acao: accountId ? 'VINCULAR_CONTA_FUNCIONARIO' : 'CRIAR_FUNCIONARIO_ACESSO',
+        dadosNovos: { funcionarioId: employeeId, usuarioId: userId, perfil: 'FUNCIONARIO', contaId: accountId },
       });
       return this.getFrom(client, auth.empresaId, employeeId);
     });

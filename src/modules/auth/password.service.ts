@@ -27,23 +27,23 @@ export class PasswordService {
         `SELECT u.id,u.empresa_id,u.email::text FROM admtaxi.usuarios_autenticacao u
          JOIN admtaxi.empresas e ON e.id=u.empresa_id
          WHERE ($1::text IS NULL OR e.codigo_acesso=$1) AND u.email=$2 AND u.ativo AND e.ativo
-           AND ($1::text IS NOT NULL OR u.conta_gestor_id IS NOT NULL OR u.conta_motorista_id IS NOT NULL)
+           AND ($1::text IS NOT NULL OR u.conta_gestor_id IS NOT NULL OR u.conta_motorista_id IS NOT NULL OR u.conta_funcionario_id IS NOT NULL)
          ORDER BY u.id`, [input.empresa ?? null, input.email]);
       const user = result.rows[0];
       if (!user) return null;
       const account = await lockCredentials(client, user.id, user.empresa_id);
       if (!input.empresa) {
-        const identities = await client.query('SELECT id FROM admtaxi.contas_gestor WHERE email=$1 UNION ALL SELECT id FROM admtaxi.contas_motorista WHERE email=$1', [input.email]);
+        const identities = await client.query('SELECT id FROM admtaxi.contas_gestor WHERE email=$1 UNION ALL SELECT id FROM admtaxi.contas_motorista WHERE email=$1 UNION ALL SELECT id FROM admtaxi.contas_funcionario WHERE email=$1', [input.email]);
         if (identities.rowCount !== 1) return null;
       }
       const attempts = await client.query<{ total: string; recente: boolean }>(
         `SELECT COUNT(*)::text AS total, COALESCE(MAX(criado_em) > CURRENT_TIMESTAMP - INTERVAL '60 seconds', FALSE) AS recente
          FROM admtaxi.recuperacoes_senha WHERE usuario_id IN
-           (SELECT id FROM admtaxi.usuarios WHERE id=$1 OR ($2::uuid IS NOT NULL AND (conta_gestor_id=$2 OR conta_motorista_id=$2)))
+           (SELECT id FROM admtaxi.usuarios WHERE id=$1 OR ($2::uuid IS NOT NULL AND (conta_gestor_id=$2 OR conta_motorista_id=$2 OR conta_funcionario_id=$2)))
          AND criado_em > CURRENT_TIMESTAMP - INTERVAL '1 hour'`, [user.id, account]);
       if (attempts.rows[0]?.recente || Number(attempts.rows[0]?.total) >= 5) return null;
       await client.query(`UPDATE admtaxi.recuperacoes_senha SET usado_em=COALESCE(usado_em,CURRENT_TIMESTAMP)
-        WHERE usuario_id IN (SELECT id FROM admtaxi.usuarios WHERE id=$1 OR ($2::uuid IS NOT NULL AND (conta_gestor_id=$2 OR conta_motorista_id=$2)))`, [user.id, account]);
+        WHERE usuario_id IN (SELECT id FROM admtaxi.usuarios WHERE id=$1 OR ($2::uuid IS NOT NULL AND (conta_gestor_id=$2 OR conta_motorista_id=$2 OR conta_funcionario_id=$2)))`, [user.id, account]);
       await client.query(`INSERT INTO admtaxi.recuperacoes_senha(token_hash,empresa_id,usuario_id,expira_em)
         VALUES($1,$2,$3,CURRENT_TIMESTAMP + $4::int * INTERVAL '1 minute')`,
       [hash, user.empresa_id, user.id, this.mail!.resetTtlMinutes]);

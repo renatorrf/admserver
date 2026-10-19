@@ -37,6 +37,7 @@ import { PrestadorUnificadoService } from '../src/modules/prestadores/prestador-
 import { prestadorUnificadoCreateSchema } from '../src/modules/prestadores/prestador-unificado.schemas';
 import { createPrestadorUnificadoRouter } from '../src/modules/prestadores/prestador-unificado.routes';
 import { testSharedDriverAccounts } from './test-shared-driver-accounts';
+import { testSharedEmployeeAccounts } from './test-shared-employee-accounts';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -116,6 +117,8 @@ async function main(): Promise<void> {
       assert.equal(result.status, 0, result.stderr || result.stdout);
     };
     migrate(); migrate();
+    assert.equal((await pool.query(`SELECT count(*) FROM admtaxi.usuarios u JOIN admtaxi.contas_funcionario c ON c.id=u.conta_funcionario_id
+      WHERE u.perfil='FUNCIONARIO' AND (u.senha_hash<>c.senha_hash OR u.senha_versao<>c.senha_versao OR u.deve_alterar_senha<>c.deve_alterar_senha)`)).rows[0].count, '0');
     assert.equal((await pool.query('SELECT COUNT(*) FROM admtaxi.schema_migrations WHERE versao=18')).rows[0].count, '1');
     const companies = new EmpresaService(pool, new AuditRepository(pool));
     const operations = new OperacaoRepository(pool);
@@ -268,12 +271,14 @@ async function main(): Promise<void> {
     await assert.rejects(service.finish(driver, a.id, { valorFinal: '20.00' }, {}), { statusCode: 409 });
     ok('TRIP-09/10 cannot bypass individual execution or edit accepted ride');
     for (let i = 0; i < stops.length; i++) {
-      const actions: Array<[ItineraryAction['acao'], string?]> = [['INICIAR'], ['CHEGAR'],
-        [i < 2 ? 'EMBARCAR' : 'DESEMBARCAR', employeeIds[i < 2 ? i : i - 2]], ['CONCLUIR']];
+      const actions: Array<[ItineraryAction['acao'], string?]> = [ ...(i === 0 ? [['INICIAR'] as [ItineraryAction['acao']]] : []), ['CHEGAR'],
+        [i < 2 ? 'EMBARCAR' : 'DESEMBARCAR', employeeIds[i < 2 ? i : i - 2]]];
       for (const [acao, funcionarioId] of actions) {
-        const command: ItineraryAction = { chave: randomUUID(), versao: ride.itinerarioVersao!, paradaId: stops[i]!.id, acao, funcionarioId };
+        const command: ItineraryAction = { chave: randomUUID(), versao: ride.itinerarioVersao!, paradaId: stops[i]!.id, acao, funcionarioId, avancoAutomatico: true };
         ride = await service.executeItinerary(driver, a.id, command, {});
         if (i === 0 && acao === 'INICIAR') {
+          assert.equal((await service.get(employees[0]!, a.id)).acompanhamentoLiberado, true);
+          assert.equal((await service.get(employees[1]!, a.id)).acompanhamentoLiberado, false);
           const calls = optimizationCalls;
           await assert.rejects(service.optimizeRoute(driver, a.id, { ...optimizationPosition, versao: ride.itinerarioVersao! }, optimizer, {}), { statusCode: 409 });
           assert.equal(optimizationCalls, calls);
@@ -282,7 +287,14 @@ async function main(): Promise<void> {
         assert.equal(retry.itinerarioVersao, ride.itinerarioVersao);
         await assert.rejects(service.executeItinerary(driver, a.id, { ...command, acao: acao === 'CHEGAR' ? 'INICIAR' : 'CHEGAR' }, {}), { statusCode: 409 });
       }
+      assert.equal(ride.itinerario!.paradas[i]!.estado, 'CONCLUIDA');
+      if (i === 0) assert.equal((await service.get(employees[1]!, a.id)).acompanhamentoLiberado, true);
     }
+    const executionEvents = await service.listEvents(manager, a.id, { pagina: 1, limite: 100 });
+    assert.equal(executionEvents.data.filter(e => e.tipoEvento === 'PARADA_CONCLUIR').length, 4);
+    assert.equal(executionEvents.data.filter(e => e.tipoEvento === 'PARADA_INICIAR').length, 4);
+    assert(executionEvents.data.some(e => e.descricao?.includes('Embarque confirmado: Passageiro sintetico')));
+    ok('EXECUTION-01 automatic stages persisted, deduplicated and passenger GPS released sequentially');
     assert(ride.itinerario!.participantes.every(p => p.estado === 'DESEMBARCADO'));
     assert(ride.desembarqueEm);
     ok('TRIP-02/11 individual journey and command deduplication');
@@ -469,7 +481,7 @@ async function main(): Promise<void> {
       for (const field of ['nome', 'email', 'telefone']) {
         const value = field === 'nome' ? `Nome exclusivo ${table}` : field === 'email' ? `${table}@example.test` : '31912345678';
         await pool.query(`UPDATE admtaxi.${table} SET ${field}=$3 WHERE empresa_id=$1 AND id=$2`, [company, ids[0], value]);
-        await assert.rejects(pool.query(`UPDATE admtaxi.${table} SET ${field}=$3 WHERE empresa_id=$1 AND id=$2`, [company, ids[1], value]), { code: '23505' });
+        await assert.rejects(pool.query(`UPDATE admtaxi.${table} SET ${field}=$3 WHERE empresa_id=$1 AND id=$2`, [company, ids[1], value]), { code: table === 'usuarios' && field === 'email' ? 'P2101' : '23505' });
         await pool.query(`UPDATE admtaxi.${table} SET ${field}=$3 WHERE empresa_id=$1 AND id=$2`, [company, ids[0], value]);
       }
     }
@@ -479,6 +491,7 @@ async function main(): Promise<void> {
     assert.equal(concurrent.filter(r => r.status === 'rejected').length, 1);
     ok('DUPLICATES normalized names/phones/emails/plates, inactive records, tenant scope, unchanged edits, atomic rollback and concurrent writes');
     await testSharedDriverAccounts(pool, ok);
+    await testSharedEmployeeAccounts(pool, ok);
     console.log(JSON.stringify({ result: 'passed', checks, database: 'temporary PostgreSQL 18, loopback only', remoteDatabaseUsed: false }));
   } finally {
     await pool?.end();

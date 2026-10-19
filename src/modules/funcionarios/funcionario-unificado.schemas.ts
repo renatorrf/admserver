@@ -6,7 +6,10 @@ import { funcionarioCreateSchema, funcionarioUpdateSchema } from './funcionario.
 const senha = passwordSchema;
 
 export const funcionarioUnificadoCreateSchema = z.object({
-  acesso: z.object({ senha, ativo: z.boolean().default(true) }).strict(),
+  acesso: z.union([
+    z.object({ senha, ativo: z.boolean().default(true) }).strict(),
+    z.object({ contaId: z.string().uuid(), ativo: z.boolean().default(true) }).strict(),
+  ]),
   funcionario: funcionarioCreateSchema,
 }).strict().superRefine((value, context) => {
   if (!value.funcionario.email) {

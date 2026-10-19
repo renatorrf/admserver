@@ -251,7 +251,8 @@ export function attachSocketServer(
       await Promise.all(watchers.map(async watcher => {
         try {
           await tokens.authenticateAccess(watcher.data.accessToken);
-          await locations.snapshot(watcher.data.auth, location.corridaId);
+          const snapshot = await locations.snapshot(watcher.data.auth, location.corridaId);
+          if (watcher.data.auth.perfil === 'FUNCIONARIO' && snapshot.corrida.acompanhamentoLiberado === false) return;
           if (watcher.rooms.has(room)) watcher.emit('localizacao:atualizada', location);
         } catch { await watcher.leave(room); }
       }));

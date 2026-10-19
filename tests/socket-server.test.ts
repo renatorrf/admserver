@@ -92,6 +92,26 @@ describe('Socket.IO', () => {
     expect(error.message).toBe('NAO_AUTORIZADO');
   });
 
+  it('mantem passageiro na room mas libera GPS apenas na sua vez', async () => {
+    const tokens = new TokenService(config); const bus = new RealtimeBus();
+    const employee = { ...auth, perfil: 'FUNCIONARIO' as const };
+    const snapshot = vi.fn().mockResolvedValue({ corrida: { id: corridaId, empresaId: auth.empresaId, acompanhamentoLiberado: false }, localizacaoAtual: null });
+    httpServer = createServer();
+    ioServer = attachSocketServer(httpServer, config, tokens,
+      { snapshot, create: vi.fn() } as unknown as LocalizacaoService, bus, pino({ level: 'silent' }));
+    client = createClient(await listen(httpServer), { auth: { token: tokens.issueTokens(employee).accessToken } });
+    await connected(client); await emitWithAck(client, 'corrida:acompanhar', { corridaId });
+    const received = vi.fn(); client.on('localizacao:atualizada', received);
+    const location = { id: 'before', corridaId, empresaId: auth.empresaId, latitude: 0, longitude: 0 } as Parameters<RealtimeBus['publishLocation']>[0];
+    bus.publishLocation(location);
+    await vi.waitFor(() => expect(snapshot).toHaveBeenCalledTimes(2));
+    snapshot.mockResolvedValue({ corrida: { id: corridaId, empresaId: auth.empresaId, acompanhamentoLiberado: true }, localizacaoAtual: location });
+    bus.publishLocation({ ...location, id: 'after' });
+    await vi.waitFor(() => expect(received).toHaveBeenCalledTimes(1));
+    expect(received.mock.calls[0]![0].id).toBe('after');
+    expect(ioServer.sockets.adapter.rooms.has(`empresa:${auth.empresaId}:corrida:${corridaId}`)).toBe(true);
+  });
+
   it('publica somente invalidacao e revalida o escopo antes de enviar GPS', async () => {
     const tokens = new TokenService(config);
     const bus = new RealtimeBus();
