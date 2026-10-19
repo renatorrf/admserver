@@ -186,6 +186,27 @@ export const openApiDocument = {
         },
       },
     },
+    '/auth/gestor/login': {
+      post: {
+        tags: ['Auth'], summary: 'Valida a conta do gestor antes da escolha da empresa',
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', additionalProperties: false, required: ['email', 'senha'],
+          properties: { email: { type: 'string', format: 'email' }, senha: { type: 'string', format: 'password', maxLength: 200 } },
+        } } } },
+        responses: { '200': { description: 'data.selecaoToken (5 minutos, sem acesso a API) e data.empresas (empresaId, codigoAcesso, nomeFantasia)' },
+          '401': { description: 'Credenciais invalidas ou nenhum vinculo ativo' }, '409': { description: 'Contas legadas ambiguas' }, '429': { description: 'Muitas tentativas' } },
+      },
+    },
+    '/auth/gestor/empresa': {
+      post: {
+        tags: ['Auth'], summary: 'Revalida vinculo do gestor e abre sessao na empresa escolhida',
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', additionalProperties: false, required: ['selecaoToken', 'empresaId'],
+          properties: { selecaoToken: { type: 'string', maxLength: 4096 }, empresaId: { type: 'string', format: 'uuid' } },
+        } } } },
+        responses: { '200': { description: 'Sessao empresarial com tokens e usuario do vinculo' }, '401': { description: 'Selecao expirada/revogada ou empresa sem vinculo ativo' } },
+      },
+    },
     '/auth/empresas': {
       get: {
         tags: ['Auth'],
@@ -267,6 +288,17 @@ export const openApiDocument = {
         responses: { '200': { description: 'Senha alterada e novo token emitido' }, '401': { description: 'Senha atual incorreta' } },
       },
     },
+    '/master/gestores': {
+      get: {
+        tags: ['Master'], summary: 'Pesquisa contas de gestores para vincular a nova empresa', security: [{ masterBearer: [] }],
+        parameters: [
+          { name: 'busca', in: 'query', schema: { type: 'string', maxLength: 100 } },
+          { name: 'pagina', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 } },
+          { name: 'limite', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+        ],
+        responses: { '200': { description: 'data.itens (contaId, nome, email, telefone, empresas) e data.total' }, '401': { description: 'Master nao autenticado' } },
+      },
+    },
     '/master/empresas': {
       get: {
         tags: ['Master'], summary: 'Lista empresas da plataforma', security: [{ masterBearer: [] }],
@@ -276,7 +308,13 @@ export const openApiDocument = {
         tags: ['Master'], summary: 'Cria empresa e seu primeiro gestor', security: [{ masterBearer: [] }],
         requestBody: {
           required: true,
-          content: { 'application/json': { schema: { $ref: '#/components/schemas/ProvisionamentoInput' } } },
+          content: { 'application/json': { schema: { oneOf: [
+            { $ref: '#/components/schemas/ProvisionamentoInput' },
+            { type: 'object', additionalProperties: false, required: ['empresa', 'gestor'], properties: {
+              empresa: { $ref: '#/components/schemas/ProvisionamentoInput/properties/empresa' },
+              gestor: { type: 'object', additionalProperties: false, required: ['contaId'], properties: { contaId: { type: 'string', format: 'uuid' } } },
+            } },
+          ] } } },
         },
         responses: { '201': { description: 'Empresa provisionada de forma transacional' }, '409': { description: 'Registro duplicado ou troca de senha pendente' } },
       },
@@ -712,7 +750,17 @@ export const openApiDocument = {
       parameters: [idParameter],
       patch: {
         tags: ['Faturamentos'], summary: 'Corrige o valor final com justificativa', security: bearerSecurity,
-        description: 'Exclusivo do GESTOR. Bloqueado enquanto a corrida participar de fechamento ativo.',
+        description: 'Exclusivo do GESTOR. Bloqueado enquanto a corrida participar de fechamento ativo. Em corridas com custos individuais, informe todos os participantes e a soma dos valores.',
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', additionalProperties: false, required: ['valorFinal', 'justificativa'], properties: {
+            valorFinal: { type: 'string' }, justificativa: { type: 'string', minLength: 5, maxLength: 1000 },
+            participantes: { type: 'array', minItems: 1, maxItems: 99, items: {
+              type: 'object', additionalProperties: false, required: ['funcionarioId', 'valor'], properties: {
+                funcionarioId: { type: 'string', format: 'uuid' }, valor: { type: 'string' },
+              },
+            } },
+          },
+        } } } },
         responses: { '200': { description: 'Valor corrigido e auditado' }, '409': { description: 'Corrida faturada ou nao finalizada' } },
       },
     },
@@ -851,6 +899,8 @@ export const openApiDocument = {
           participantes: { type: 'array', minItems: 1, maxItems: 99, items: {
             type: 'object', additionalProperties: false, required: ['funcionarioId', 'embarqueId', 'desembarqueId'], properties: {
               funcionarioId: { type: 'string', format: 'uuid' }, embarqueId: { type: 'string', format: 'uuid' }, desembarqueId: { type: 'string', format: 'uuid' },
+              centroCustoId: { type: 'string', format: 'uuid', description: 'Centro de cobranca do funcionario, validado no escopo empresarial.' },
+              valor: { type: 'string', pattern: '^\\d{1,10}(\\.\\d{1,2})?$', description: 'Valor individual. Se informado, todos os participantes precisam de valor e centro. O total e calculado no servidor.' },
             },
           } },
         },

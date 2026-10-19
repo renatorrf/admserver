@@ -18,7 +18,7 @@ import type {
 } from './corrida.schemas';
 import { assertTransition, isActiveRide } from './state-machine';
 import { employeeRide } from './corrida-visibility';
-import { advanceItinerary, itineraryResolved, itinerarySchema, type ItineraryAction, type ItineraryInput } from './itinerary';
+import { advanceItinerary, itineraryResolved, itinerarySchema, moneyCents, passengerTotal, type ItineraryAction, type ItineraryInput } from './itinerary';
 import { commandHash, ItineraryRepository } from './itinerary.repository';
 import type {
   CorridaEventoRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida,
@@ -134,7 +134,7 @@ export class CorridaService {
         throw conflict('A corrida agendada deve possuir data futura.');
       }
       if (input.itinerario) await this.validateItinerary(client, auth, input.itinerario, input.funcionarioId, input.centroCustoId);
-      if (!await this.repository.validateEmployeeAndCenter(client, auth.empresaId, input.funcionarioId, input.centroCustoId)) {
+      if (!input.itinerario && !await this.repository.validateEmployeeAndCenter(client, auth.empresaId, input.funcionarioId, input.centroCustoId)) {
         throw invalidReference('Funcionario e centro de custo devem estar ativos, vinculados e pertencer a mesma empresa.');
       }
       const employeeStopIds = (input.paradas ?? [])
@@ -334,8 +334,13 @@ export class CorridaService {
         changed = false;
         return current;
       }
-      if (current.itinerarioVersao && !itineraryResolved(await new ItineraryRepository().load(client, auth.empresaId, id, current.itinerarioVersao))) {
-        throw conflict('Conclua todas as paradas e resolva todos os passageiros antes de finalizar.');
+      if (current.itinerarioVersao) {
+        const itinerary = await new ItineraryRepository().load(client, auth.empresaId, id, current.itinerarioVersao);
+        if (!itineraryResolved(itinerary)) throw conflict('Conclua todas as paradas e resolva todos os passageiros antes de finalizar.');
+        const total = passengerTotal(itinerary);
+        if (total !== undefined && moneyCents(total) !== moneyCents(input.valorFinal)) {
+          throw conflict(`O valor final deve corresponder a soma dos valores individuais: R$ ${total.replace('.', ',')}.`);
+        }
       }
       if (!current.desembarqueEm) throw conflict('Confirme o desembarque antes de finalizar a corrida.');
       assertTransition(current.status, 'FINALIZADA');
@@ -462,9 +467,13 @@ export class CorridaService {
       const ride = await this.requireLockedRide(client, auth, id);
       if (!ride.itinerarioVersao || ride.itinerarioVersao !== version) throw conflict('Itinerario desatualizado. Recarregue a viagem.');
       if (!['SOLICITADA', 'OFERTADA'].includes(ride.status)) throw conflict('Edicao permitida somente antes do aceite.');
-      await this.validateItinerary(client, auth, input, ride.funcionarioId, ride.centroCustoId);
       const store = new ItineraryRepository();
       const previous = await store.load(client, auth.empresaId, id, version);
+      input = { ...input, participantes: input.participantes.map(p => {
+        const old = previous.participantes.find(item => item.funcionarioId === p.funcionarioId);
+        return { ...p, centroCustoId: p.centroCustoId ?? old?.centroCustoId, valor: p.valor ?? old?.valor };
+      }) };
+      await this.validateItinerary(client, auth, input, ride.funcionarioId, ride.centroCustoId);
       if (previous.participantes.some(p => !input.participantes.some(next => next.funcionarioId === p.funcionarioId))) {
         throw conflict('Reassocie os passageiros; nao remova participacoes silenciosamente. Para cancelar a viagem, use cancelamento com motivo.');
       }
@@ -520,9 +529,28 @@ export class CorridaService {
   private async validateItinerary(client: QueryExecutor, auth: AuthContext, input: ItineraryInput, primary: string, center: string): Promise<void> {
     itinerarySchema.parse(input);
     if (!input.participantes.some(p => p.funcionarioId === primary)) throw invalidReference('Mantenha o funcionario principal entre os participantes.');
+    const total = passengerTotal(input);
+    if (total === undefined && input.participantes.some(p => p.centroCustoId && p.centroCustoId !== center)) {
+      throw invalidReference('Informe os valores individuais para utilizar centros de custo diferentes.');
+    }
+    const scope = await this.scopeResolver.resolve(auth, client);
     for (const participant of input.participantes) {
-      if (!await this.repository.validateEmployeeAndCenter(client, auth.empresaId, participant.funcionarioId, center)) {
-        throw invalidReference('Todos os participantes devem estar ativos e vinculados ao centro autorizado desta viagem.');
+      const selectedCenter = participant.centroCustoId ?? center;
+      if (participant.funcionarioId === primary && selectedCenter !== center) throw invalidReference('O centro principal deve corresponder ao primeiro funcionario.');
+      if (!centerAllowed(scope, selectedCenter)) throw forbidden('Centro de custo do participante fora do seu escopo.');
+      if (!participant.centroCustoId) {
+        if (!await this.repository.validateEmployeeAndCenter(client, auth.empresaId, participant.funcionarioId, selectedCenter)) {
+          throw invalidReference('Funcionario e centro de custo devem estar ativos e vinculados.');
+        }
+      } else {
+        const employee = await client.query<{ centro_custo_id: string }>(`SELECT f.centro_custo_id FROM admtaxi.funcionarios f
+          JOIN admtaxi.centros_custo home ON home.empresa_id=f.empresa_id AND home.id=f.centro_custo_id AND home.ativo
+          JOIN admtaxi.setores hs ON hs.empresa_id=home.empresa_id AND hs.id=home.setor_id AND hs.ativo
+          JOIN admtaxi.centros_custo cc ON cc.empresa_id=f.empresa_id AND cc.id=$3 AND cc.ativo
+          JOIN admtaxi.setores s ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id AND s.ativo
+          WHERE f.empresa_id=$1 AND f.id=$2 AND f.ativo`, [auth.empresaId, participant.funcionarioId, selectedCenter]);
+        if (!employee.rows[0]) throw invalidReference('Funcionario e centro de custo devem estar ativos na empresa.');
+        if (!centerAllowed(scope, employee.rows[0].centro_custo_id)) throw forbidden('Funcionario fora do seu escopo.');
       }
     }
   }

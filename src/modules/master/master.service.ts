@@ -3,7 +3,7 @@ import type { Pool, QueryResultRow } from 'pg';
 
 import { withTransaction, type QueryExecutor } from '../../db/pool';
 import { conflict, notFound, unauthorized } from '../../shared/errors/app-error';
-import type { ProvisionamentoInput } from '../provisionamento/provisionamento.schemas';
+import type { MasterCompanyInput } from '../provisionamento/provisionamento.schemas';
 import type { ProvisionamentoMetadata, ProvisionamentoResult, ProvisionamentoService } from '../provisionamento/provisionamento.service';
 import type { MasterCreateInput, MasterLoginInput, MasterPasswordInput } from './master.schemas';
 import { MasterRepository, publicMaster } from './master.repository';
@@ -95,7 +95,7 @@ export class MasterService {
 
   async createCompany(
     context: MasterContext,
-    input: ProvisionamentoInput,
+    input: MasterCompanyInput,
     metadata: ProvisionamentoMetadata,
   ): Promise<ProvisionamentoResult> {
     await this.requireReady(context);
@@ -105,6 +105,19 @@ export class MasterService {
   async listAdministrators(context: MasterContext): Promise<MasterPublic[]> {
     await this.requireReady(context);
     return this.repository.list();
+  }
+
+  async listManagers(context: MasterContext, query: { busca?: string; pagina: number; limite: number }) {
+    await this.requireReady(context);
+    const result = await this.pool.query(
+      `SELECT c.id AS "contaId",c.nome,c.email::text,c.telefone,COUNT(*) OVER()::int AS total,
+        (SELECT string_agg(e.nome_fantasia, ', ' ORDER BY e.nome_fantasia) FROM admtaxi.usuarios u
+         JOIN admtaxi.empresas e ON e.id=u.empresa_id WHERE u.conta_gestor_id=c.id AND u.ativo AND e.ativo) AS empresas
+       FROM admtaxi.contas_gestor c WHERE (c.nome ILIKE $1 OR c.email::text ILIKE $1)
+       AND EXISTS(SELECT 1 FROM admtaxi.usuarios u JOIN admtaxi.empresas e ON e.id=u.empresa_id
+         WHERE u.conta_gestor_id=c.id AND u.ativo AND e.ativo AND u.perfil='GESTOR')
+       ORDER BY c.nome,c.id LIMIT $2 OFFSET $3`, [`%${query.busca ?? ''}%`, query.limite, (query.pagina-1)*query.limite]);
+    return { itens: result.rows.map(({ total: _total, ...row }) => row), total: result.rows[0]?.total ?? 0 };
   }
 
   async createAdministrator(

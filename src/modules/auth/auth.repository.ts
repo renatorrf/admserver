@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 
 import { queryOne, withTransaction } from '../../db/pool';
 import type { AuthContext, AuthUserRecord, LoginCompany, RefreshTokenRecord } from './auth.types';
+import { lockCredentials } from './account-credentials';
 
 type AuthUserRow = {
   id: string;
@@ -53,7 +54,7 @@ export class PgAuthRepository implements AuthRepository {
 
   async accessAllowed(auth: AuthContext): Promise<boolean> {
     const result = await this.pool.query(
-      `SELECT 1 FROM admtaxi.usuarios u JOIN admtaxi.empresas e ON e.id=u.empresa_id
+      `SELECT 1 FROM admtaxi.usuarios_autenticacao u JOIN admtaxi.empresas e ON e.id=u.empresa_id
        WHERE u.id=$1 AND u.empresa_id=$2 AND u.perfil=$3 AND u.ativo=TRUE AND e.ativo=TRUE
          AND u.senha_versao=$4 AND u.deve_alterar_senha=$5`,
       [auth.usuarioId, auth.empresaId, auth.perfil, auth.senhaVersao ?? 0, auth.deveAlterarSenha ?? false],
@@ -79,7 +80,7 @@ export class PgAuthRepository implements AuthRepository {
       this.pool,
       `SELECT u.id, u.empresa_id, u.nome, u.email::text AS email, u.senha_hash,
               u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa, u.senha_versao, u.deve_alterar_senha
-         FROM admtaxi.usuarios u
+         FROM admtaxi.usuarios_autenticacao u
          JOIN admtaxi.empresas e ON e.id = u.empresa_id
         WHERE u.email = $1 AND e.codigo_acesso = $2
         LIMIT 1`,
@@ -88,12 +89,12 @@ export class PgAuthRepository implements AuthRepository {
     return mapUser(row);
   }
 
-  async findById(auth: AuthContext): Promise<AuthUserRecord | null> {
+  async findById(auth: AuthContext, executor: Pool | PoolClient = this.pool): Promise<AuthUserRecord | null> {
     const row = await queryOne<AuthUserRow>(
-      this.pool,
+      executor,
       `SELECT u.id, u.empresa_id, u.nome, u.email::text AS email, u.senha_hash,
               u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa, u.senha_versao, u.deve_alterar_senha
-         FROM admtaxi.usuarios u
+         FROM admtaxi.usuarios_autenticacao u
          JOIN admtaxi.empresas e ON e.id = u.empresa_id
         WHERE u.id = $1 AND u.empresa_id = $2
         LIMIT 1`,
@@ -157,15 +158,16 @@ export class PgAuthRepository implements AuthRepository {
     auth: AuthContext,
   ): Promise<AuthUserRecord | null> {
     // Same lock order as password changes, preventing refresh/reset races.
+    await lockCredentials(client, auth.usuarioId, auth.empresaId);
     const locked = await client.query(
-      'SELECT id FROM admtaxi.usuarios WHERE id=$1 AND empresa_id=$2 AND senha_versao=$3 FOR UPDATE',
+      'SELECT id FROM admtaxi.usuarios_autenticacao WHERE id=$1 AND empresa_id=$2 AND senha_versao=$3',
       [auth.usuarioId, auth.empresaId, auth.senhaVersao ?? 0],
     );
     if (!locked.rowCount) return null;
     const result = await client.query<AuthUserRow>(
       `UPDATE admtaxi.refresh_tokens rt
           SET revogado_em = CURRENT_TIMESTAMP
-         FROM admtaxi.usuarios u, admtaxi.empresas e
+         FROM admtaxi.usuarios_autenticacao u, admtaxi.empresas e
         WHERE rt.token_hash = $1
           AND rt.usuario_id = $2
           AND rt.empresa_id = $3

@@ -2,7 +2,8 @@ import argon2 from 'argon2';
 import type { Pool, QueryResultRow } from 'pg';
 
 import { withTransaction } from '../../db/pool';
-import type { ProvisionamentoInput } from './provisionamento.schemas';
+import type { MasterCompanyInput } from './provisionamento.schemas';
+import { forbidden, notFound } from '../../shared/errors/app-error';
 
 export type ProvisionamentoMetadata = { ip: string | null; userAgent: string | null };
 export type ProvisionamentoResult = {
@@ -19,13 +20,23 @@ export class ProvisionamentoService {
   ) {}
 
   async create(
-    input: ProvisionamentoInput,
+    input: MasterCompanyInput,
     metadata: ProvisionamentoMetadata,
     platformAdministratorId?: string,
   ): Promise<ProvisionamentoResult> {
-    const passwordHash = await this.hashPassword(input.gestor.senha);
+    if ('contaId' in input.gestor && !platformAdministratorId) throw forbidden();
+    const passwordHash = 'senha' in input.gestor ? await this.hashPassword(input.gestor.senha) : null;
     return withTransaction(this.pool, async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('admtaxi_company_provisioning'))");
+      let existing: { id: string; nome: string; email: string; telefone: string | null; senha_hash: string } | undefined;
+      if ('contaId' in input.gestor) {
+        const found = await client.query<{ id: string; nome: string; email: string; telefone: string | null; senha_hash: string }>(
+          `SELECT c.id,c.nome,c.email::text,c.telefone,c.senha_hash FROM admtaxi.contas_gestor c WHERE c.id=$1
+           AND EXISTS(SELECT 1 FROM admtaxi.usuarios u JOIN admtaxi.empresas e ON e.id=u.empresa_id
+             WHERE u.conta_gestor_id=c.id AND u.ativo AND e.ativo AND u.perfil='GESTOR') FOR UPDATE OF c`, [input.gestor.contaId]);
+        existing = found.rows[0];
+        if (!existing) throw notFound('Gestor ativo');
+      }
       const companyResult = await client.query<QueryResultRow>(`
         INSERT INTO admtaxi.empresas
           (codigo_acesso, razao_social, nome_fantasia, cnpj, telefone, email,
@@ -49,15 +60,16 @@ export class ProvisionamentoService {
 
       const userResult = await client.query<QueryResultRow>(`
         INSERT INTO admtaxi.usuarios
-          (empresa_id, nome, email, telefone, senha_hash, perfil)
-        VALUES ($1, $2, $3, $4, $5, 'GESTOR')
+          (empresa_id, nome, email, telefone, senha_hash, perfil, conta_gestor_id)
+        VALUES ($1, $2, $3, $4, $5, 'GESTOR', $6)
         RETURNING id, nome, email::text, perfil::text
       `, [
         company.id,
-        input.gestor.nome,
-        input.gestor.email,
-        input.gestor.telefone ?? null,
-        passwordHash,
+        existing?.nome ?? ('nome' in input.gestor ? input.gestor.nome : ''),
+        existing?.email ?? ('email' in input.gestor ? input.gestor.email : ''),
+        existing?.telefone ?? ('telefone' in input.gestor ? input.gestor.telefone ?? null : null),
+        existing?.senha_hash ?? passwordHash,
+        existing?.id ?? null,
       ]);
       const manager = userResult.rows[0];
       if (!manager) throw new Error('Falha ao criar gestor.');

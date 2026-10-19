@@ -53,6 +53,7 @@ export const faturamentoCancelSchema = z.object({
 
 export const corridaValorAjusteSchema = z.object({
   valorFinal: money,
+  participantes: z.array(z.object({ funcionarioId: z.string().uuid(), valor: money }).strict()).min(1).max(99).optional(),
   justificativa: z.string().trim().min(5, 'Informe a justificativa.').max(1000),
 }).strict();
 

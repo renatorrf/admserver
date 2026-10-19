@@ -7,6 +7,7 @@ import type { AuthContext } from '../auth/auth.types';
 import type { AuditMetadata } from '../auditoria/audit.types';
 import type { AuditRepository } from '../auditoria/audit.repository';
 import { CorridaRepository } from '../corridas/corrida.repository';
+import { moneyCents } from '../corridas/itinerary';
 import type { RealtimeBus } from '../../realtime/realtime-bus';
 import type {
   CorridaValorAjusteInput, FaturamentoCancelInput, FaturamentoCreateInput,
@@ -53,17 +54,18 @@ export class FaturamentoService {
     };
     if (filter.prestadorId) add('c.prestador_id=?', filter.prestadorId);
     if (filter.setorId) add('s.id=?', filter.setorId);
-    if (filter.centroCustoId) add('c.centro_custo_id=?', filter.centroCustoId);
-    if (filter.funcionarioId) add('c.funcionario_id=?', filter.funcionarioId);
+    if (filter.centroCustoId) add('a.centro_custo_id=?', filter.centroCustoId);
+    if (filter.funcionarioId) add('a.funcionario_id=?', filter.funcionarioId);
     if (filter.solicitanteUsuarioId) add('c.solicitante_usuario_id=?', filter.solicitanteUsuarioId);
     const base = `WITH base AS (
-      SELECT c.status::text,c.valor_final,fi.id AS faturamento_item_id,
+      SELECT c.id AS corrida_id,c.status::text,a.valor_final,fi.id AS faturamento_item_id,
         p.id AS prestador_id,p.nome AS prestador_nome,s.id AS setor_id,s.nome AS setor_nome,
         cc.id AS centro_id,cc.codigo AS centro_codigo,cc.nome AS centro_nome,
         fn.id AS funcionario_id,fn.nome AS funcionario_nome
       FROM admtaxi.corridas c
-      JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=c.funcionario_id
-      JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=c.centro_custo_id
+      JOIN admtaxi.corrida_custos a ON a.empresa_id=c.empresa_id AND a.corrida_id=c.id
+      JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=a.funcionario_id
+      JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=a.centro_custo_id
       JOIN admtaxi.setores s ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id
       LEFT JOIN admtaxi.prestadores p ON p.empresa_id=c.empresa_id AND p.id=c.prestador_id
       LEFT JOIN admtaxi.faturamento_itens fi ON fi.empresa_id=c.empresa_id AND fi.corrida_id=c.id AND fi.ativo=TRUE
@@ -73,23 +75,23 @@ export class FaturamentoService {
       this.database.query<{
         quantidade: string; valor_total: string; valor_medio: string; sem_valor_final: string;
         pendentes: string; faturadas: string; canceladas: string;
-      }>(`${base} SELECT COUNT(*)::text AS quantidade,
+      }>(`${base} SELECT COUNT(DISTINCT corrida_id)::text AS quantidade,
         COALESCE(SUM(valor_final) FILTER (WHERE status='FINALIZADA'),0)::text AS valor_total,
-        COALESCE(AVG(valor_final) FILTER (WHERE status='FINALIZADA'),0)::text AS valor_medio,
-        COUNT(*) FILTER (WHERE status='FINALIZADA' AND valor_final IS NULL)::text AS sem_valor_final,
-        COUNT(*) FILTER (WHERE status='FINALIZADA' AND valor_final IS NOT NULL AND faturamento_item_id IS NULL)::text AS pendentes,
-        COUNT(*) FILTER (WHERE status='FINALIZADA' AND faturamento_item_id IS NOT NULL)::text AS faturadas,
-        COUNT(*) FILTER (WHERE status='CANCELADA')::text AS canceladas FROM base`, values),
+        COALESCE(SUM(valor_final) FILTER (WHERE status='FINALIZADA') / NULLIF(COUNT(DISTINCT corrida_id) FILTER (WHERE status='FINALIZADA' AND valor_final IS NOT NULL),0),0)::text AS valor_medio,
+        COUNT(DISTINCT corrida_id) FILTER (WHERE status='FINALIZADA' AND valor_final IS NULL)::text AS sem_valor_final,
+        COUNT(DISTINCT corrida_id) FILTER (WHERE status='FINALIZADA' AND valor_final IS NOT NULL AND faturamento_item_id IS NULL)::text AS pendentes,
+        COUNT(DISTINCT corrida_id) FILTER (WHERE status='FINALIZADA' AND faturamento_item_id IS NOT NULL)::text AS faturadas,
+        COUNT(DISTINCT corrida_id) FILTER (WHERE status='CANCELADA')::text AS canceladas FROM base`, values),
       this.database.query<{ dimensao: string; id: string; codigo: string | null; nome: string; corridas: string; valor: string }>(
         `${base}
         SELECT 'PRESTADOR' AS dimensao,prestador_id AS id,NULL::text AS codigo,prestador_nome AS nome,
-          COUNT(*)::text AS corridas,SUM(valor_final)::text AS valor FROM base
+          COUNT(DISTINCT corrida_id)::text AS corridas,SUM(valor_final)::text AS valor FROM base
           WHERE status='FINALIZADA' AND valor_final IS NOT NULL GROUP BY prestador_id,prestador_nome
-        UNION ALL SELECT 'SETOR',setor_id,NULL::text,setor_nome,COUNT(*)::text,SUM(valor_final)::text FROM base
+        UNION ALL SELECT 'SETOR',setor_id,NULL::text,setor_nome,COUNT(DISTINCT corrida_id)::text,SUM(valor_final)::text FROM base
           WHERE status='FINALIZADA' AND valor_final IS NOT NULL GROUP BY setor_id,setor_nome
-        UNION ALL SELECT 'CENTRO_CUSTO',centro_id,centro_codigo,centro_nome,COUNT(*)::text,SUM(valor_final)::text FROM base
+        UNION ALL SELECT 'CENTRO_CUSTO',centro_id,centro_codigo,centro_nome,COUNT(DISTINCT corrida_id)::text,SUM(valor_final)::text FROM base
           WHERE status='FINALIZADA' AND valor_final IS NOT NULL GROUP BY centro_id,centro_codigo,centro_nome
-        UNION ALL SELECT 'FUNCIONARIO',funcionario_id,NULL::text,funcionario_nome,COUNT(*)::text,SUM(valor_final)::text FROM base
+        UNION ALL SELECT 'FUNCIONARIO',funcionario_id,NULL::text,funcionario_nome,COUNT(DISTINCT corrida_id)::text,SUM(valor_final)::text FROM base
           WHERE status='FINALIZADA' AND valor_final IS NOT NULL GROUP BY funcionario_id,funcionario_nome
         ORDER BY dimensao,nome`, values),
       this.database.query<{ status: string; total: string }>(
@@ -157,6 +159,10 @@ export class FaturamentoService {
            VALUES ($1,$2,$3,$4,$5)`,
           [auth.empresaId, id, ride.id, ride.prestadorId, ride.valorFinal],
         );
+        await client.query(`INSERT INTO admtaxi.faturamento_participacoes(empresa_id,item_id,funcionario_id,centro_custo_id,valor)
+          SELECT fi.empresa_id,fi.id,a.funcionario_id,a.centro_custo_id,a.valor_final
+          FROM admtaxi.faturamento_itens fi JOIN admtaxi.corrida_custos a ON a.empresa_id=fi.empresa_id AND a.corrida_id=fi.corrida_id
+          WHERE fi.empresa_id=$1 AND fi.faturamento_id=$2 AND fi.corrida_id=$3`, [auth.empresaId, id, ride.id]);
       }
       for (const [corridaId, motivo] of exclusions) {
         await client.query(
@@ -210,14 +216,16 @@ export class FaturamentoService {
       `${this.billingSelect()} WHERE f.empresa_id=$1 AND f.id=$2${provider}`, values);
     if (!billing) throw notFound('Faturamento');
     const items = await this.database.query(
-      `SELECT fi.id,fi.corrida_id AS "corridaId",fi.valor_faturado::text AS "valorFaturado",fi.ativo,
+      `SELECT fi.id::text || ':' || a.funcionario_id::text AS id,fi.corrida_id AS "corridaId",
+        a.valor::text AS "valorFaturado",fi.ativo,
         c.finalizada_em AS "finalizadaEm",c.origem_descricao AS "origemDescricao",c.destino_descricao AS "destinoDescricao",
         fn.nome AS "funcionarioNome",cc.codigo AS "centroCustoCodigo",cc.nome AS "centroCustoNome",
         p.nome AS "prestadorNome"
        FROM admtaxi.faturamento_itens fi
        JOIN admtaxi.corridas c ON c.empresa_id=fi.empresa_id AND c.id=fi.corrida_id
-       JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=c.funcionario_id
-       JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=c.centro_custo_id
+       JOIN admtaxi.faturamento_custos a ON a.empresa_id=fi.empresa_id AND a.item_id=fi.id
+       JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=a.funcionario_id
+       JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=a.centro_custo_id
        JOIN admtaxi.prestadores p ON p.empresa_id=fi.empresa_id AND p.id=fi.prestador_id
        WHERE fi.empresa_id=$1 AND fi.faturamento_id=$2 ORDER BY c.finalizada_em,c.id`,
       [auth.empresaId, id],
@@ -255,8 +263,8 @@ export class FaturamentoService {
   async adjustRideValue(auth: AuthContext, corridaId: string, input: CorridaValorAjusteInput, metadata: AuditMetadata) {
     this.requireManager(auth);
     const result = await withTransaction(this.database, async (client) => {
-      const ride = await queryOne<{ id: string; status: string; valor_final: string | null }>(client,
-        `SELECT id,status::text,valor_final::text FROM admtaxi.corridas
+      const ride = await queryOne<{ id: string; status: string; valor_final: string | null; custos_individuais: boolean }>(client,
+        `SELECT id,status::text,valor_final::text,custos_individuais FROM admtaxi.corridas
           WHERE empresa_id=$1 AND id=$2 FOR UPDATE`, [auth.empresaId, corridaId]);
       if (!ride) throw notFound('Corrida');
       if (ride.status !== 'FINALIZADA' || ride.valor_final === null) {
@@ -266,6 +274,22 @@ export class FaturamentoService {
         `SELECT 1 FROM admtaxi.faturamento_itens
           WHERE empresa_id=$1 AND corrida_id=$2 AND ativo=TRUE LIMIT 1`, [auth.empresaId, corridaId]);
       if (billed.rowCount) throw conflict('Cancele o faturamento ativo antes de corrigir o valor desta corrida.');
+      let previousParticipants: unknown;
+      if (ride.custos_individuais) {
+        const current = await client.query<{ funcionario_id: string; valor: string }>(
+          'SELECT funcionario_id,valor::text FROM admtaxi.corrida_participacoes WHERE empresa_id=$1 AND corrida_id=$2', [auth.empresaId, corridaId]);
+        previousParticipants = current.rows;
+        const participants = input.participantes;
+        if (!participants || participants.length !== current.rows.length || new Set(participants.map(p => p.funcionarioId)).size !== participants.length
+          || participants.some(p => !current.rows.some(row => row.funcionario_id === p.funcionarioId))) {
+          throw invalidReference('Informe o valor individual de todos os funcionarios desta corrida.');
+        }
+        if (participants.reduce((sum, p) => sum + moneyCents(p.valor), 0n) !== moneyCents(input.valorFinal)) {
+          throw invalidReference('O total deve ser a soma dos valores individuais.');
+        }
+        for (const p of participants) await client.query(`UPDATE admtaxi.corrida_participacoes SET valor=$4
+          WHERE empresa_id=$1 AND corrida_id=$2 AND funcionario_id=$3`, [auth.empresaId, corridaId, p.funcionarioId, p.valor]);
+      } else if (input.participantes) throw invalidReference('Esta corrida utiliza o valor total historico, sem valores individuais.');
       await client.query('UPDATE admtaxi.corridas SET valor_final=$3 WHERE empresa_id=$1 AND id=$2',
         [auth.empresaId, corridaId, input.valorFinal]);
       await client.query(
@@ -284,8 +308,8 @@ export class FaturamentoService {
       await this.audit.record(client, {
         ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
         entidade: 'corrida', entidadeId: corridaId, acao: 'CORRIGIR_VALOR_FINAL',
-        dadosAnteriores: { valorFinal: ride.valor_final },
-        dadosNovos: { valorFinal: input.valorFinal, justificativa: input.justificativa },
+        dadosAnteriores: { valorFinal: ride.valor_final, participantes: previousParticipants },
+        dadosNovos: { valorFinal: input.valorFinal, justificativa: input.justificativa, participantes: input.participantes },
       });
       return { corridaId, valorAnterior: ride.valor_final, valorFinal: input.valorFinal };
     });
@@ -313,16 +337,24 @@ export class FaturamentoService {
       'fi.id IS NULL',
     ];
     const add = (sql: string, value: unknown): void => { values.push(value); conditions.push(sql.replace('?', `$${values.length}`)); };
-    if (filter.setorId) add('s.id=?', filter.setorId);
-    if (filter.centroCustoId) add('c.centro_custo_id=?', filter.centroCustoId);
-    if (filter.funcionarioId) add('c.funcionario_id=?', filter.funcionarioId);
+    const allocationFilters: string[] = [];
+    for (const [column, value] of [['ac.setor_id', filter.setorId], ['a.centro_custo_id', filter.centroCustoId], ['a.funcionario_id', filter.funcionarioId]]) {
+      if (value) { values.push(value); allocationFilters.push(`${column}=$${values.length}`); }
+    }
+    if (allocationFilters.length) conditions.push(`EXISTS (SELECT 1 FROM admtaxi.corrida_custos a
+      JOIN admtaxi.centros_custo ac ON ac.empresa_id=a.empresa_id AND ac.id=a.centro_custo_id
+      WHERE a.empresa_id=c.empresa_id AND a.corrida_id=c.id AND ${allocationFilters.join(' AND ')})`);
     if (filter.solicitanteUsuarioId) add('c.solicitante_usuario_id=?', filter.solicitanteUsuarioId);
     const result = await executor.query<EligibleRow>(
       `SELECT c.id,c.finalizada_em AS "finalizadaEm",c.funcionario_id AS "funcionarioId",fn.nome AS "funcionarioNome",
         c.prestador_id AS "prestadorId",p.nome AS "prestadorNome",s.id AS "setorId",s.nome AS "setorNome",
         cc.id AS "centroCustoId",cc.codigo AS "centroCustoCodigo",cc.nome AS "centroCustoNome",
         c.solicitante_usuario_id AS "solicitanteUsuarioId",u.nome AS "solicitanteNome",
-        c.origem_descricao AS "origemDescricao",c.destino_descricao AS "destinoDescricao",c.valor_final::text AS "valorFinal"
+        c.origem_descricao AS "origemDescricao",c.destino_descricao AS "destinoDescricao",c.valor_final::text AS "valorFinal",
+        (SELECT json_agg(json_build_object('funcionarioNome',af.nome,'centroCustoCodigo',ac.codigo,'centroCustoNome',ac.nome,'valor',a.valor_final::text) ORDER BY af.nome)
+          FROM admtaxi.corrida_custos a JOIN admtaxi.funcionarios af ON af.empresa_id=a.empresa_id AND af.id=a.funcionario_id
+          JOIN admtaxi.centros_custo ac ON ac.empresa_id=a.empresa_id AND ac.id=a.centro_custo_id
+          WHERE a.empresa_id=c.empresa_id AND a.corrida_id=c.id) AS custos
        FROM admtaxi.corridas c
        JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=c.funcionario_id
        JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=c.centro_custo_id

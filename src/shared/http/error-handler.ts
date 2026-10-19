@@ -76,6 +76,10 @@ export function createErrorHandler(logger: Logger, auditDatabase?: Pick<Pool, 'q
     }
 
     if (typeof error === 'object' && error !== null && 'code' in error) {
+      if (error.code === 'P1601') {
+        response.status(409).json({ erro: { codigo: 'CONTA_GESTOR', mensagem: 'message' in error ? String(error.message) : 'Revise o vinculo da conta de gestor.' }, requisicaoId: request.id });
+        return;
+      }
       if (error.code === '23505') {
         const constraint = 'constraint' in error && typeof error.constraint === 'string' ? error.constraint : '';
         const duplicateFields: Record<string, { campo: string; mensagem: string }> = {

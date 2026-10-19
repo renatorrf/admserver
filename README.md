@@ -1,11 +1,67 @@
 # ADM Taxi Backend
 
+## Conta unica de gestor e multiplas empresas
+
+Migration `016_contas_gestor` aplicada no banco remoto em 19/10/2026 com autorizacao explicita.
+Depois publicar o backend, direcionar todo o
+trafego para a revisao nova e somente entao publicar o frontend. Nao manter revisoes antigas
+atendendo autenticacao apos iniciar o uso de contas compartilhadas.
+O backend verifica a migration 016 na inicializacao. A sintaxe usa `EXECUTE PROCEDURE` para PostgreSQL 9.6.
+
+- Portal master: criar empresa com `gestor: { nome, email, telefone, senha }` ou
+  `gestor: { contaId }`. O segundo formato vincula a conta existente, sem criar outra senha.
+- `GET /api/v1/master/gestores?busca=...&pagina=1&limite=20`: pesquisa paginada restrita ao master.
+- `POST /api/v1/auth/gestor/login` recebe `{ email, senha }` e retorna `{ selecaoToken, empresas }`.
+  Nao cria sessao empresarial. A lista contem somente vinculos ativos em empresas ativas.
+- `POST /api/v1/auth/gestor/empresa` recebe `{ selecaoToken, empresaId }`, revalida o vinculo
+  e retorna a sessao normal, com usuario/perfil/empresa derivados do banco.
+- O token de selecao dura cinco minutos, tem audiencia propria e nao autoriza API nem Socket.IO.
+  O frontend conserva-o apenas em memoria e descarta a senha apos autenticar.
+- `contas_gestor` e a fonte de credenciais; `usuarios` preserva as identidades locais e FKs
+  operacionais de cada empresa. Troca/recuperacao revoga sessoes e links em todos os vinculos.
+- Inativar usuario afeta apenas o vinculo empresarial. Alterar email/senha de uma conta
+  compartilhada pelo cadastro empresarial e bloqueado. O titular usa Minha conta ou recuperacao.
+- Recuperacao do gestor pode enviar apenas `{ email }`, sem empresa. SMTP utiliza as mesmas
+  variaveis ja existentes; nenhuma credencial nova e necessaria.
+- Contas antigas com emails iguais NAO sao mescladas automaticamente. Se houver credenciais
+  ambiguas, o login orienta o acesso por empresa; a regularizacao deve ser analisada pelo master.
+- Funcionarios, gerentes e prestadores continuam usando o acesso por empresa.
+
+Validacao local: `npm run test:password:integration` cobre vinculos, isolamento, credenciais,
+revogacao, recuperacao concorrente e rollback de provisionamento. Nao utiliza `DATABASE_URL`.
+
+## Centro e valor por funcionario
+
+Requer `017_custos_por_passageiro` antes de publicar o backend. Aplicada no banco remoto em
+19/10/2026 com autorizacao especifica, depois dos testes e validacao com rollback completo.
+Backend e frontend ainda precisam ser publicados; direcionar todo o trafego para o backend novo
+antes de publicar o frontend. Nao manter revisoes antigas alterando corridas com custos individuais.
+
+- Cada participante do itinerario recebe `centroCustoId` e `valor` decimal individual.
+  O servidor calcula `valorEstimado` pela soma em centavos, independentemente do total enviado.
+- Um centro de cobranca pode diferir do cadastro do funcionario, desde que ambos estejam
+  ativos na mesma empresa. Gerente precisa de autorizacao para o funcionario e para o centro.
+- O gestor ve toda a empresa. Gerente so acompanha o trajeto completo se possuir acesso a
+  todos os centros envolvidos. Funcionarios recebem apenas os proprios pontos, sem valores.
+- O prestador finaliza pelo total individual contratado. Correcao posterior exige justificativa
+  e todos os valores individuais; faturamento ativo precisa ser cancelado antes da correcao.
+- Relatorios/exportacao mostram lancamentos por funcionario; quantidades e indicadores contam
+  corridas distintas. O fechamento permanece por corrida completa, mesmo quando localizada
+  por filtro de um participante. Cada valor e discriminado por funcionario/centro no detalhe e CSV.
+- Fechamentos congelam os valores individuais. Corrigir uma corrida nao altera um fechamento
+  cancelado anteriormente. Viagens antigas mantem seu centro/valor originais, sem rateio automatico.
+- A tela permite funcionario primeiro, centro, valor e destino, com destino compartilhado,
+  parada manual e rascunho por sessao. Valores de ausentes/cancelados nao sao zerados automaticamente.
+
+Validacao: `npm run test:review:integration` usa PostgreSQL local isolado, incluindo custos,
+escopos, finalizacao, relatórios e preservacao dos snapshots. Nao utiliza o banco remoto.
+
 ## Senhas e recuperacao por email
 
-**Antes de publicar esta alteracao, aplicar as migrations 014 e 015 com autorizacao.**
+**Este fluxo requer as migrations 014, 015 e 016. Consulte o status antes de publicar.**
 Elas adicionam senha temporaria, versao das credenciais, email master e tokens de recuperacao separados.
-Nao foram aplicadas no banco remoto nesta implementacao. Nao executar o backend novo com o schema antigo.
-A inicializacao verifica os registros da 014 e 015 e recusa iniciar sem eles, evitando anunciar uma API saudavel
+Nao executar o backend novo com o schema antigo. Migrations remotas exigem autorizacao explicita.
+A inicializacao verifica os registros da 014, 015 e 016 e recusa iniciar sem eles, evitando anunciar uma API saudavel
 que falharia nas consultas de autenticacao.
 
 - Senhas novas: 6 a 128 caracteres, sem obrigar combinacoes de letras/numeros/simbolos.

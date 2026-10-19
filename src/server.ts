@@ -23,6 +23,7 @@ import { attachSocketServer } from './realtime/socket-server';
 import { PasswordService } from './modules/auth/password.service';
 import { SmtpPasswordMailer } from './modules/auth/password-mailer';
 import { MasterRecoveryService } from './modules/master/master-recovery.service';
+import { ManagerLoginService } from './modules/auth/manager-login.service';
 
 const config = getConfig();
 const logger = createLogger(config);
@@ -51,6 +52,7 @@ const masterRouter = createMasterRouter(
 const app = createApp({
   config, logger, pool, auth: authService, tokens: tokenService, adminRouter, operationalRouter,
   provisioningRouter, masterRouter,
+  managers: new ManagerLoginService(pool, tokenService, config.jwtAccessExpiresInSeconds),
   passwords: new PasswordService(pool, logger, config.mail, config.mail ? new SmtpPasswordMailer(config.mail) : undefined),
 });
 const server = createServer(app);
@@ -59,6 +61,10 @@ const socketLocationService = new LocalizacaoService(pool, socketRideService, re
 const io = attachSocketServer(server, config, tokenService, socketLocationService, realtime, logger, pool);
 
 async function start(): Promise<void> {
+  const accountMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=16');
+  const passengerCostsMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=17');
+  if (!passengerCostsMigration.rowCount) throw new Error('Migration 017_custos_por_passageiro pendente. Aplique antes de publicar este backend.');
+  if (!accountMigration.rowCount) throw new Error('Migration 016_contas_gestor pendente. Aplique antes de publicar este backend.');
   const passwordMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=14');
   if (!passwordMigration.rowCount) {
     throw new Error('Migration 014_recuperacao_senha pendente. Aplique a migration antes de publicar este backend.');

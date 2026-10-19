@@ -95,6 +95,7 @@ const corridaSelect = `SELECT c.*,
       FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id),
     'participantes', (SELECT jsonb_agg(jsonb_build_object('funcionarioId',p.funcionario_id,
       'funcionarioNome',f.nome,'embarqueId',p.embarque_id,'desembarqueId',p.desembarque_id,
+      'centroCustoId',p.centro_custo_id,'valor',p.valor::text,
       'estado',p.estado,'motivo',p.motivo,'embarqueEm',p.embarque_em,'desembarqueEm',p.desembarque_em) ORDER BY p.funcionario_id)
       FROM admtaxi.corrida_participacoes p JOIN admtaxi.funcionarios f ON f.empresa_id=p.empresa_id AND f.id=p.funcionario_id
       WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id)
@@ -188,7 +189,8 @@ export class CorridaRepository {
     };
     if (query.status) add('c.status = ?', query.status);
     if (query.tipo) add('c.tipo = ?', query.tipo);
-    if (query.centroCustoId) add('c.centro_custo_id = ?', query.centroCustoId);
+    if (query.centroCustoId) add(`(c.centro_custo_id = ? OR EXISTS (
+      SELECT 1 FROM admtaxi.corrida_participacoes cp WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND cp.centro_custo_id = ?))`.replace(/\?/g, `$${values.length + 1}`), query.centroCustoId);
     if (query.funcionarioId && scope.kind !== 'FUNCIONARIO') add(`(c.funcionario_id = ? OR EXISTS (
       SELECT 1 FROM admtaxi.corrida_participacoes p WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id = ?))`.replace(/\?/g, `$${values.length + 1}`), query.funcionarioId);
     if (query.prestadorId) add('c.prestador_id = ?', query.prestadorId);
@@ -533,6 +535,10 @@ export class CorridaRepository {
     if (scope.kind === 'GERENTE') {
       values.push(scope.centroCustoIds);
       conditions.push(`c.centro_custo_id = ANY($${values.length}::uuid[])`);
+      conditions.push(`NOT EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes cp
+        JOIN admtaxi.funcionarios cf ON cf.empresa_id=cp.empresa_id AND cf.id=cp.funcionario_id
+        WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id
+        AND (NOT (cp.centro_custo_id=ANY($${values.length}::uuid[])) OR NOT (cf.centro_custo_id=ANY($${values.length}::uuid[]))))`);
     } else if (scope.kind === 'PRESTADOR') {
       values.push(scope.prestadorId, scope.disponivel);
       conditions.push(`(

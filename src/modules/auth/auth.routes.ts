@@ -13,8 +13,10 @@ import { requireAuthContext } from './auth.middleware';
 import { changePasswordSchema, forgotPasswordSchema, resetPasswordSchema } from './password.schemas';
 import { recoveryMessage, type PasswordService } from './password.service';
 import { setTimeout as delay } from 'node:timers/promises';
+import { z } from 'zod';
+import type { ManagerLoginService } from './manager-login.service';
 
-export function createAuthRouter(auth: AuthApplication, tokens: TokenService, passwords?: PasswordService): Router {
+export function createAuthRouter(auth: AuthApplication, tokens: TokenService, passwords?: PasswordService, managers?: ManagerLoginService): Router {
   const router = Router();
   const controller = new AuthController(auth);
   const authenticate = createAuthenticate(tokens, true);
@@ -35,6 +37,14 @@ export function createAuthRouter(auth: AuthApplication, tokens: TokenService, pa
   });
 
   router.get('/empresas', asyncHandler(controller.companies));
+  if (managers) {
+    router.post('/gestor/login', sensitiveRouteLimiter, validateBody(loginSchema.omit({ empresa: true })), asyncHandler(async (req, res) => {
+      res.json({ data: await managers.identify(req.body) });
+    }));
+    router.post('/gestor/empresa', sensitiveRouteLimiter, validateBody(z.object({ selecaoToken: z.string().min(1).max(4096), empresaId: z.string().uuid() }).strict()), asyncHandler(async (req, res) => {
+      res.json({ data: await managers.select(req.body) });
+    }));
+  }
   router.post('/login', sensitiveRouteLimiter, validateBody(loginSchema), asyncHandler(controller.login));
   router.post('/refresh', validateBody(refreshSchema), refreshLimiter, asyncHandler(controller.refresh));
   router.post('/logout', validateBody(refreshSchema), asyncHandler(controller.logout));

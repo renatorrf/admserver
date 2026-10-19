@@ -29,3 +29,8 @@ export const provisionamentoSchema = z.object({
 }).strict();
 
 export type ProvisionamentoInput = z.infer<typeof provisionamentoSchema>;
+
+export const masterCompanySchema = provisionamentoSchema.extend({
+  gestor: z.union([provisionamentoSchema.shape.gestor, z.object({ contaId: z.string().uuid() }).strict()]),
+});
+export type MasterCompanyInput = z.infer<typeof masterCompanySchema>;

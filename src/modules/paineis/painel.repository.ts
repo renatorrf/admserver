@@ -51,7 +51,11 @@ export class PainelParticipanteRepository {
     if (query.status) add('c.status = ?', query.status);
     if (query.solicitanteUsuarioId && identity.scope.kind !== 'FUNCIONARIO') add('c.solicitante_usuario_id = ?', query.solicitanteUsuarioId);
     if (query.prestadorId) add('c.prestador_id = ?', query.prestadorId);
-    if (query.centroCustoId) add('c.centro_custo_id = ?', query.centroCustoId);
+    if (query.centroCustoId) {
+      values.push(query.centroCustoId);
+      conditions.push(`(c.centro_custo_id=$${values.length} OR EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes cp
+        WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND cp.centro_custo_id=$${values.length}))`);
+    }
     if (query.funcionarioId && identity.scope.kind !== 'FUNCIONARIO') {
       values.push(query.funcionarioId);
       conditions.push(`(c.funcionario_id=$${values.length} OR EXISTS (

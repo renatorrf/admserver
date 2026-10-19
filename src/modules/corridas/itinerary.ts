@@ -1,6 +1,20 @@
 import { z } from 'zod';
 import { conflict, invalidReference } from '../../shared/errors/app-error';
 
+export const passengerMoney = z.union([z.string(), z.number()]).transform(value => String(value).replace(',', '.'))
+  .pipe(z.string().regex(/^\d{1,10}(\.\d{1,2})?$/, 'Informe um valor individual valido.'));
+export const moneyCents = (value: string): bigint => {
+  const [integer, fraction = ''] = value.split('.');
+  return BigInt(integer!) * 100n + BigInt(fraction.padEnd(2, '0'));
+};
+export function passengerTotal(input: ItineraryInput): string | undefined {
+  if (!input.participantes.some(p => p.valor !== undefined)) return undefined;
+  if (input.participantes.some(p => p.valor === undefined)) throw invalidReference('Informe o valor de cada funcionario.');
+  const cents = input.participantes.reduce((sum, p) => sum + moneyCents(p.valor!), 0n);
+  if (cents > 999999999999n) throw invalidReference('O total da corrida excede o valor permitido.');
+  return `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`;
+}
+
 export const coordinate = z.union([z.number(), z.string().trim().min(1)])
   .transform(value => Number(value)).pipe(z.number().finite());
 export const itinerarySchema = z.object({
@@ -11,6 +25,7 @@ export const itinerarySchema = z.object({
   }).strict()).min(2).max(32),
   participantes: z.array(z.object({
     funcionarioId: z.string().uuid(), embarqueId: z.string().uuid(), desembarqueId: z.string().uuid(),
+    centroCustoId: z.string().uuid().optional(), valor: passengerMoney.optional(),
   }).strict()).min(1).max(99),
 }).strict().superRefine((value, ctx) => {
   if (new Set(value.paradas.map(p => p.id)).size !== value.paradas.length) {
@@ -20,6 +35,9 @@ export const itinerarySchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['participantes'], message: 'Cada funcionario deve possuir uma unica participacao.' });
   }
   value.participantes.forEach((p, i) => {
+    if (value.participantes.some(item => item.valor !== undefined) && (p.valor === undefined || !p.centroCustoId)) {
+      ctx.addIssue({ code: 'custom', path: ['participantes', i, 'valor'], message: 'Informe centro de custo e valor para cada funcionario.' });
+    }
     const start = value.paradas.findIndex(s => s.id === p.embarqueId);
     const end = value.paradas.findIndex(s => s.id === p.desembarqueId);
     if (start < 0 || end <= start) ctx.addIssue({ code: 'custom', path: ['participantes', i, 'desembarqueId'],

@@ -22,6 +22,7 @@ import { MasterRecoveryService } from '../src/modules/master/master-recovery.ser
 import { MasterTokenService } from '../src/modules/master/master-token.service';
 import { createMasterRouter } from '../src/modules/master/master.routes';
 import { ProvisionamentoService } from '../src/modules/provisionamento/provisionamento.service';
+import { ManagerLoginService } from '../src/modules/auth/manager-login.service';
 
 async function main(): Promise<void> {
   // Never use DATABASE_URL: this test owns an isolated local PostgreSQL cluster.
@@ -56,6 +57,12 @@ async function main(): Promise<void> {
     await pool.query(`INSERT INTO admtaxi.usuarios(id,empresa_id,nome,email,senha_hash,perfil)
       VALUES($1,$2,'Fresh','fresh@example.test',$3,'FUNCIONARIO')`,[fresh,company,initialHash]);
     ok('014 rollback/apply preserves existing users and marks new accounts temporary');
+
+    const accountSql = await readFile('src/db/migrations/016_contas_gestor.up.sql','utf8');
+    await pool.query('BEGIN'); await pool.query(accountSql); await pool.query('ROLLBACK');
+    await pool.query('BEGIN'); await pool.query(accountSql); await pool.query('COMMIT');
+    assert.equal((await pool.query('SELECT senha_versao,deve_alterar_senha FROM admtaxi.contas_gestor WHERE id=$1',[legacy])).rows[0].deve_alterar_senha,false);
+    ok('016 rollback/apply preserves the legacy manager credential and memberships');
 
     const repository = new PgAuthRepository(pool);
     const tokens = new TokenService({ jwtAccessSecret:randomUUID()+randomUUID(),jwtRefreshSecret:randomUUID()+randomUUID(),
@@ -213,6 +220,77 @@ async function main(): Promise<void> {
     const masterAudit=(await pool.query("SELECT acao FROM admtaxi.auditoria_plataforma WHERE acao='RECUPERAR_SENHA'")).rows;
     assert.equal(masterAudit.length,1);
     ok('master SMTP failure invalidates token, missing configuration explicit, recovery audited');
+
+    const managers = new ManagerLoginService(pool,tokens,900);
+    const managerApp = express(); managerApp.use(express.json());
+    managerApp.use('/auth',createAuthRouter(authService,tokens,service,managers));
+    managerApp.get('/protected',createAuthenticate(tokens),(_req,res)=>res.sendStatus(204));
+    managerApp.use(createErrorHandler(logger));
+    const newCompany = { codigoAcesso:'SHARED',razaoSocial:'Shared company',nomeFantasia:'Shared company',cidadePadrao:'Uberlandia',estadoPadrao:'MG',latitudePadrao:-18.9,longitudePadrao:-48.2 };
+    await request(masterApp).get('/master/gestores').expect(401);
+    const found = await masters.listManagers(contextOf(changedEmail),{ busca:'legacy',pagina:1,limite:20 });
+    assert.equal(found.itens[0]!.contaId,legacy);
+    const linked = await masters.createCompany(contextOf(changedEmail),{empresa:newCompany,gestor:{contaId:legacy}},{ip:null,userAgent:null});
+    assert.notEqual(linked.gestor.id,legacy);
+    assert.equal((await pool.query('SELECT COUNT(*)::int AS n FROM admtaxi.contas_gestor WHERE id=$1',[legacy])).rows[0].n,1);
+    const beforeCount = (await pool.query('SELECT COUNT(*)::int AS n FROM admtaxi.empresas')).rows[0].n;
+    await assert.rejects(masters.createCompany(contextOf(changedEmail),{empresa:{...newCompany,codigoAcesso:'INVALID'},gestor:{contaId:randomUUID()}},{ip:null,userAgent:null}),{statusCode:404});
+    assert.equal((await pool.query('SELECT COUNT(*)::int AS n FROM admtaxi.empresas')).rows[0].n,beforeCount);
+    await assert.rejects(new ProvisionamentoService(pool).create({empresa:newCompany,gestor:{contaId:legacy}},{ip:null,userAgent:null}),{statusCode:403});
+    ok('master-only linking reuses one account, keeps origin intact, rolls back invalid links');
+
+    const created = await masters.createCompany(contextOf(changedEmail),{empresa:{...newCompany,codigoAcesso:'NEWACCOUNT'},gestor:{nome:'Novo Gestor',email:'new.manager@example.test',senha:'123456'}},{ip:null,userAgent:null});
+    const createdSession = await authService.login({empresa:'NEWACCOUNT',email:'new.manager@example.test',senha:'123456'});
+    assert.equal(createdSession.usuario.usuarioId,created.gestor.id);
+    assert.equal(createdSession.usuario.deveAlterarSenha,true);
+    const createdAccount = (await pool.query('SELECT conta_gestor_id FROM admtaxi.usuarios WHERE id=$1',[created.gestor.id])).rows[0].conta_gestor_id;
+    assert(createdAccount);
+    await assert.rejects(masters.createCompany(contextOf(changedEmail),{empresa:{...newCompany,codigoAcesso:'DUPACCOUNT'},gestor:{nome:'Duplicado',email:'new.manager@example.test',senha:'123456'}},{ip:null,userAgent:null}),{code:'P1601'});
+    assert.equal((await pool.query("SELECT 1 FROM admtaxi.empresas WHERE codigo_acesso='DUPACCOUNT'")).rowCount,0);
+    ok('new manager provisioning creates one temporary account and duplicate email rolls back company');
+
+    await request(managerApp).post('/auth/gestor/login').send({email:'legacy@example.test',senha:'wrong'}).expect(401);
+    const identified = await managers.identify({email:'legacy@example.test',senha:'123456'});
+    assert.equal(identified.empresas.length,2);
+    await request(managerApp).get('/protected').auth(identified.selecaoToken,{type:'bearer'}).expect(401);
+    await assert.rejects(managers.select({selecaoToken:identified.selecaoToken,empresaId:other}),{statusCode:401});
+    const first = await managers.select({selecaoToken:identified.selecaoToken,empresaId:company});
+    const second = await managers.select({selecaoToken:identified.selecaoToken,empresaId:linked.empresa.id});
+    assert.equal(tokens.verifyAccess(second.accessToken).empresaId,linked.empresa.id);
+    await pool.query('UPDATE admtaxi.usuarios SET ativo=FALSE WHERE id=$1',[linked.gestor.id]);
+    assert.equal((await managers.identify({email:'legacy@example.test',senha:'123456'})).empresas.length,1);
+    await assert.rejects(tokens.authenticateAccess(second.accessToken),{statusCode:401});
+    await assert.rejects(managers.select({selecaoToken:identified.selecaoToken,empresaId:linked.empresa.id}),{statusCode:401});
+    await tokens.authenticateAccess(first.accessToken);
+    await pool.query('UPDATE admtaxi.usuarios SET ativo=TRUE WHERE id=$1',[linked.gestor.id]);
+    ok('credential-first selection does not grant API access or leak unlinked companies; disabled membership is isolated');
+
+    await assert.rejects(pool.query('UPDATE admtaxi.usuarios SET senha_hash=$2 WHERE id=$1',[linked.gestor.id,await argon2.hash('abcdef')]),{code:'P1601'});
+    await assert.rejects(pool.query("UPDATE admtaxi.usuarios SET email='attacker@example.test' WHERE id=$1",[linked.gestor.id]),{code:'P1601'});
+    await service.change(tokens.verifyAccess(first.accessToken),{senhaAtual:'123456',novaSenha:'abcdef'});
+    await assert.rejects(tokens.authenticateAccess(first.accessToken),{statusCode:401});
+    await assert.rejects(tokens.authenticateAccess(second.accessToken),{statusCode:401});
+    await assert.rejects(authService.refresh({refreshToken:second.refreshToken}),{statusCode:401});
+    await assert.rejects(managers.select({selecaoToken:identified.selecaoToken,empresaId:company}),{statusCode:401});
+    await assert.rejects(managers.identify({email:'legacy@example.test',senha:'123456'}),{statusCode:401});
+    const changed = await managers.identify({email:'legacy@example.test',senha:'abcdef'});
+    assert.equal(changed.empresas.length,2);
+    await authService.login({empresa:'SHARED',email:'legacy@example.test',senha:'abcdef'});
+    ok('tenant admins cannot take over shared credentials; personal password change revokes all companies and pending selection');
+
+    failMail=false;
+    await pool.query("UPDATE admtaxi.recuperacoes_senha SET criado_em=CURRENT_TIMESTAMP-INTERVAL '2 minutes' WHERE usuario_id=$1",[legacy]);
+    await service.requestReset({email:'legacy@example.test'});
+    const sharedToken=tokenOf(deliveries.length-1);
+    const sent=deliveries.length;
+    await service.requestReset({empresa:'SHARED',email:'legacy@example.test'});
+    assert.equal(deliveries.length,sent);
+    const sharedReset = await Promise.allSettled([service.reset({token:sharedToken,novaSenha:'ghijkl'}),service.reset({token:sharedToken,novaSenha:'mnopqr'})]);
+    assert.equal(sharedReset.filter(r=>r.status==='fulfilled').length,1);
+    const sharedWinner=sharedReset[0]!.status==='fulfilled'?'ghijkl':'mnopqr';
+    await authService.login({empresa:'TEST',email:'legacy@example.test',senha:sharedWinner});
+    await authService.login({empresa:'SHARED',email:'legacy@example.test',senha:sharedWinner});
+    ok('manager recovery without company shares cooldown and changes the single credential under concurrent requests');
     console.log(`PASSWORD_INTEGRATION_OK checks=${checks}`);
   } finally {
     await pool?.end();

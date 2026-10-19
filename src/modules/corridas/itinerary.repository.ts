@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { QueryExecutor } from '../../db/pool';
 import { conflict, invalidReference } from '../../shared/errors/app-error';
-import { peakOccupancy, type ItineraryInput, type ItinerarySnapshot, type ItineraryStop, type Participation } from './itinerary';
+import { passengerTotal, peakOccupancy, type ItineraryInput, type ItinerarySnapshot, type ItineraryStop, type Participation } from './itinerary';
 
 export const commandHash = (input: unknown): string => createHash('sha256').update(JSON.stringify(input)).digest('hex');
 
@@ -13,12 +13,13 @@ export class ItineraryRepository {
        FROM admtaxi.corrida_paradas WHERE empresa_id=$1 AND corrida_id=$2 ORDER BY ordem`, [empresaId, corridaId]);
     const passengers = await db.query<Participation>(
       `SELECT p.funcionario_id AS "funcionarioId", f.nome AS "funcionarioNome",
+        p.centro_custo_id AS "centroCustoId", p.valor::text AS valor,
         p.embarque_id AS "embarqueId", p.desembarque_id AS "desembarqueId", p.estado, p.motivo,
         p.embarque_em AS "embarqueEm", p.desembarque_em AS "desembarqueEm"
        FROM admtaxi.corrida_participacoes p JOIN admtaxi.funcionarios f
         ON f.empresa_id=p.empresa_id AND f.id=p.funcionario_id
        WHERE p.empresa_id=$1 AND p.corrida_id=$2 ORDER BY p.funcionario_id`, [empresaId, corridaId]);
-    return { versao, paradas: stops.rows, participantes: passengers.rows };
+    return { versao, paradas: stops.rows, participantes: passengers.rows.map(p => ({ ...p, valor: p.valor ?? undefined })) };
   }
 
   async replace(db: QueryExecutor, empresaId: string, corridaId: string, input: ItineraryInput): Promise<void> {
@@ -30,6 +31,13 @@ export class ItineraryRepository {
       'SELECT id FROM admtaxi.corrida_paradas WHERE id=ANY($1::uuid[]) AND NOT (empresa_id=$2 AND corrida_id=$3)',
       [ids, empresaId, corridaId]);
     if (owned.rows.length) throw invalidReference('Identificador de parada indisponivel.');
+    const previous = await db.query<{ funcionario_id: string; centro_custo_id: string; valor: string | null }>(
+      'SELECT funcionario_id,centro_custo_id,valor::text FROM admtaxi.corrida_participacoes WHERE empresa_id=$1 AND corrida_id=$2', [empresaId, corridaId]);
+    const participants = input.participantes.map(p => {
+      const old = previous.rows.find(row => row.funcionario_id === p.funcionarioId);
+      return { ...p, centroCustoId: p.centroCustoId ?? old?.centro_custo_id, valor: p.valor ?? old?.valor ?? undefined };
+    });
+    const total = passengerTotal({ ...input, participantes: participants });
     await db.query('DELETE FROM admtaxi.corrida_participacoes WHERE empresa_id=$1 AND corrida_id=$2', [empresaId, corridaId]);
     // All replacements are atomic; stable IDs survive the delete/reinsert in this transaction.
     if (existing.rows.length) await db.query('DELETE FROM admtaxi.corrida_paradas WHERE empresa_id=$1 AND corrida_id=$2', [empresaId, corridaId]);
@@ -39,19 +47,21 @@ export class ItineraryRepository {
         VALUES ($1,$2,$3,$4,'MANUAL',$5,$6,$7)`,
       [stop.id, empresaId, corridaId, index + 1, stop.descricao, stop.latitude, stop.longitude]);
     }
-    for (const passenger of input.participantes) {
+    for (const passenger of participants) {
       await db.query(`INSERT INTO admtaxi.corrida_participacoes
-        (empresa_id,corrida_id,funcionario_id,embarque_id,desembarque_id) VALUES ($1,$2,$3,$4,$5)`,
-      [empresaId, corridaId, passenger.funcionarioId, passenger.embarqueId, passenger.desembarqueId]);
+        (empresa_id,corrida_id,funcionario_id,embarque_id,desembarque_id,centro_custo_id,valor)
+        SELECT $1,$2,$3,$4,$5,COALESCE($6::uuid,c.centro_custo_id),$7::numeric FROM admtaxi.corridas c WHERE c.empresa_id=$1 AND c.id=$2`,
+      [empresaId, corridaId, passenger.funcionarioId, passenger.embarqueId, passenger.desembarqueId, passenger.centroCustoId ?? null, passenger.valor ?? null]);
     }
     const first = input.paradas[0]!;
     const last = input.paradas[input.paradas.length - 1]!;
     await db.query(`UPDATE admtaxi.corridas SET itinerario_versao=itinerario_versao+1,
       quantidade_passageiros=$3, origem_descricao=$4,origem_latitude=$5,origem_longitude=$6,
-      destino_descricao=$7,destino_latitude=$8,destino_longitude=$9
+      destino_descricao=$7,destino_latitude=$8,destino_longitude=$9,
+      custos_individuais=($10::numeric IS NOT NULL),valor_estimado=COALESCE($10::numeric,valor_estimado)
       WHERE empresa_id=$1 AND id=$2`,
     [empresaId, corridaId, input.participantes.length, first.descricao, first.latitude, first.longitude,
-      last.descricao, last.latitude, last.longitude]);
+      last.descricao, last.latitude, last.longitude, total ?? null]);
   }
 
   async saveExecution(db: QueryExecutor, empresaId: string, corridaId: string, snapshot: ItinerarySnapshot): Promise<void> {

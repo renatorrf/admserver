@@ -19,6 +19,7 @@ import { AppError } from './shared/errors/app-error';
 import { createErrorHandler, notFoundHandler } from './shared/http/error-handler';
 import { authenticatedRateKey } from './shared/http/rate-key';
 import type { PasswordService } from './modules/auth/password.service';
+import type { ManagerLoginService } from './modules/auth/manager-login.service';
 
 export type AppDependencies = {
   config: AppConfig;
@@ -31,6 +32,7 @@ export type AppDependencies = {
   provisioningRouter?: Router;
   masterRouter?: Router;
   passwords?: PasswordService;
+  managers?: ManagerLoginService;
 };
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -87,7 +89,7 @@ export function createApp(dependencies: AppDependencies): Express {
     }
   });
 
-  app.use('/api/v1/auth', createAuthRouter(auth, tokens, dependencies.passwords));
+  app.use('/api/v1/auth', createAuthRouter(auth, tokens, dependencies.passwords, dependencies.managers));
   if (masterRouter) app.use('/api/v1/master', masterRouter);
   if (provisioningRouter) app.use('/api/v1/provisionamento', provisioningRouter);
   if (operationalRouter) app.use('/api/v1', operationalRouter);

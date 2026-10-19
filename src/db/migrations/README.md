@@ -5,6 +5,13 @@ e usa transacao e advisory lock. Consulte o estado com `npm run migrate:status`.
 
 Migrations deste complemento:
 
+- `016_contas_gestor`: credencial unica de gestor e vinculos empresariais, preservando usuarios
+  locais e FKs. Nao mescla emails iguais. Aplicada no banco remoto em 19/10/2026 com autorizacao explicita.
+- `017_custos_por_passageiro`: centro e valor por participante, consulta financeira individual
+  e composicao congelada do faturamento. Preserva a alocacao historica, sem rateio retroativo.
+  Aplicada no banco remoto em 19/10/2026 com autorizacao especifica, apos testes isolados
+  e validacao no banco remoto com rollback completo. Status final: 001 a 017 aplicadas.
+
 - `010_faturamento_valor_final`: faturamentos, itens congelados, exclusoes justificadas e ajustes
   auditaveis do valor final.
 - `011_web_push_vapid`: regiao operacional do prestador, inscricoes Web Push e tentativas por
@@ -12,7 +19,7 @@ Migrations deste complemento:
 - `012_corrida_paradas`: itinerario ordenado com embarques de funcionarios adicionais e paradas
   manuais georreferenciadas.
 - `013_itinerario_individual`: versao, paradas estaveis, participacoes individuais e chaves de
-  idempotencia. Historicos permanecem com versao zero. Criada nesta revisao; NAO aplicada remotamente.
+  idempotencia. Historicos permanecem com versao zero. Status remoto confirmado como aplicada em 19/10/2026.
   O down recusa exclusao destrutiva; consultar, a partir da raiz do backend,
   `../docs/revisao-geral/MIGRACAO_E_COMPATIBILIDADE.md`.
 

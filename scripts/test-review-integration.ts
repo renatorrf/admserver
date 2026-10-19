@@ -20,6 +20,8 @@ import { createAuthenticate } from '../src/modules/auth/auth.middleware';
 import { TokenService } from '../src/modules/auth/token-service';
 import { FaturamentoService } from '../src/modules/faturamentos/faturamento.service';
 import { PainelParticipanteRepository } from '../src/modules/paineis/painel.repository';
+import { RelatorioRepository } from '../src/modules/relatorios/relatorio.repository';
+import { DashboardRepository } from '../src/modules/dashboard/dashboard.repository';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -52,7 +54,7 @@ async function main(): Promise<void> {
     await pool.query(`CREATE TABLE admtaxi.schema_migrations (
       versao INTEGER PRIMARY KEY,nome TEXT NOT NULL,checksum CHAR(64) NOT NULL,aplicada_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)`);
     const files = (await readdir('src/db/migrations')).filter(f => /^\d+_.+\.up\.sql$/.test(f)).sort();
-    for (const file of files.filter(f => !f.startsWith('013_'))) {
+    for (const file of files.filter(f => Number(f.slice(0, 3)) < 13)) {
       const sql = await readFile(path.join('src/db/migrations', file), 'utf8');
       await pool.query(sql);
       await pool.query('INSERT INTO admtaxi.schema_migrations(versao,nome,checksum) VALUES ($1,$2,$3)',
@@ -108,23 +110,38 @@ async function main(): Promise<void> {
     ok('AUTH-01/03 FORM-01 authenticated HTTP authorization and validation');
     assert.equal((await service.get(manager, legacyId)).itinerarioVersao, 0);
     ok('MIG-01 historical ride and repeated migration runner');
+    const secondCenter = randomUUID();
+    await pool.query('INSERT INTO admtaxi.centros_custo(id,empresa_id,setor_id,codigo,nome) VALUES($1,$2,$3,$4,$5)',
+      [secondCenter, company, sector, 'TEST2', 'Segundo centro']);
+    await pool.query('UPDATE admtaxi.funcionarios SET centro_custo_id=$2 WHERE id=$1', [employeeIds[1], secondCenter]);
 
     const stops = Array.from({ length: 4 }, (_, i) => ({ id: randomUUID(), descricao: `Ponto sintetico ${i}`, latitude: i, longitude: i }));
     const input = corridaCreateSchema.parse({ chaveSolicitacao: randomUUID(), funcionarioId: employeeIds[0], centroCustoId: center,
       tipo: 'IMEDIATA', quantidadePassageiros: 2, origemDescricao: 'Inicio sintetico', destinoDescricao: 'Fim sintetico',
       itinerario: { paradas: stops, participantes: [
-        { funcionarioId: employeeIds[0], embarqueId: stops[0]!.id, desembarqueId: stops[2]!.id },
-        { funcionarioId: employeeIds[1], embarqueId: stops[1]!.id, desembarqueId: stops[3]!.id },
+        { funcionarioId: employeeIds[0], embarqueId: stops[0]!.id, desembarqueId: stops[2]!.id, centroCustoId: center, valor: '12.30' },
+        { funcionarioId: employeeIds[1], embarqueId: stops[1]!.id, desembarqueId: stops[3]!.id, centroCustoId: secondCenter, valor: '7.70' },
       ] } });
     const [a, b] = await Promise.all([service.create(manager, input, {}), service.create(manager, input, {})]);
     assert.equal(a.id, b.id);
     assert.equal((await pool.query('SELECT COUNT(*) FROM admtaxi.corrida_eventos WHERE corrida_id=$1', [a.id])).rows[0].count, '1');
     ok('FORM-04 concurrent create retry has one ride/event');
+    assert.equal(a.valorEstimado, '20.00');
+    assert.equal(a.itinerario?.participantes.find(p => p.funcionarioId === employeeIds[1])?.centroCustoId, secondCenter);
+    const limited = new CorridaService(pool, new AuditRepository(pool), undefined, undefined, undefined,
+      { resolve: async () => ({ kind: 'GERENTE', empresaId: company, usuarioId: manager.usuarioId, setorIds: [sector], centroCustoIds: [center] }) });
+    await assert.rejects(limited.create({ ...manager, perfil: 'GERENTE' }, { ...input, chaveSolicitacao: randomUUID() }, {}), { statusCode: 403 });
+    await assert.rejects(limited.get({ ...manager, perfil: 'GERENTE' }, a.id), { statusCode: 404 });
+    const invalidCenter = structuredClone(input);
+    invalidCenter.chaveSolicitacao = randomUUID(); invalidCenter.itinerario!.participantes[1]!.centroCustoId = randomUUID();
+    await assert.rejects(service.create(manager, invalidCenter, {}), { statusCode: 422 });
+    ok('COST-01 individual amounts and centers; manager and foreign-reference boundaries');
     await assert.rejects(service.get({ ...manager, empresaId: otherCompany }, a.id), { statusCode: 404 });
     const privateView = await service.get(employees[1]!, a.id);
     assert.equal(privateView.itinerario?.participantes.length, 1);
     assert.equal(privateView.itinerario?.paradas[0]?.id, stops[1]!.id);
     assert(!('valorFinal' in privateView));
+    assert(!('valor' in privateView.itinerario!.participantes[0]!));
     ok('AUTH-03 cross-company denial and participant projection');
     const edits = await Promise.allSettled([service.editItinerary(manager, a.id, 1, input.itinerario!, {}), service.editItinerary(manager, a.id, 1, input.itinerario!, {})]);
     assert.equal(edits.filter(r => r.status === 'fulfilled').length, 1);
@@ -161,6 +178,7 @@ async function main(): Promise<void> {
     assert(ride.itinerario!.participantes.every(p => p.estado === 'DESEMBARCADO'));
     assert(ride.desembarqueEm);
     ok('TRIP-02/11 individual journey and command deduplication');
+    await assert.rejects(service.finish(driver, a.id, { valorFinal: '21.00' }, {}), { statusCode: 409 });
     await service.finish(driver, a.id, { valorFinal: '20.00' }, {});
     await service.finish(driver, a.id, { valorFinal: '20.00' }, {});
     assert.equal((await pool.query("SELECT COUNT(*) FROM admtaxi.corrida_eventos WHERE corrida_id=$1 AND tipo_evento='CORRIDA_FINALIZADA'", [a.id])).rows[0].count, '1');
@@ -168,7 +186,21 @@ async function main(): Promise<void> {
     ok('MONEY-01 finalization is unique, amount unchanged');
     const billing = new FaturamentoService(pool, new AuditRepository(pool));
     const billingInput = { periodoInicio: '2020-01-01', periodoFim: '2035-12-31', prestadorId: providerIds[winningIndex]!, corridaIds: [a.id], exclusoes: [] };
-    await billing.create(manager, billingInput, {});
+    const closed = await billing.create(manager, billingInput, {});
+    assert.equal(closed.itens.length, 2);
+    assert.equal(closed.valorTotal, '20.00');
+    assert.deepEqual(closed.itens.map(p => p.valorFaturado).sort(), ['12.30', '7.70']);
+    const summary = await billing.summary(manager, { periodoInicio: '2020-01-01', periodoFim: '2035-12-31' });
+    assert.equal(summary.quantidadeCorridas, 1);
+    assert.equal(summary.valorTotal, '20.00');
+    assert.equal(summary.porCentroCusto.find(p => p.id === secondCenter)?.valor, '7.70');
+    const report = await new RelatorioRepository(pool).list(manager, { pagina: 1, limite: 20, centroCustoId: secondCenter });
+    assert.equal(report.resumo.valorFinal, '7.70');
+    assert.equal(report.resumo.corridas, 1);
+    const dashboard = await new DashboardRepository(pool).get(manager);
+    assert.equal(dashboard.custosPorCentro.find(p => p.id === secondCenter)?.valor, '7.70');
+    assert((await billing.csv(manager, closed.id)).includes('Segundo centro'));
+    ok('COST-02 dashboard/report/billing/CSV allocate exact cents without multiplying rides');
     await assert.rejects(billing.create(manager, billingInput, {}));
     assert.equal((await pool.query('SELECT COUNT(*) FROM admtaxi.faturamento_itens WHERE corrida_id=$1 AND ativo=TRUE', [a.id])).rows[0].count, '1');
     ok('MONEY-01 multiple passengers produce one billing item');
@@ -203,6 +235,34 @@ async function main(): Promise<void> {
       await assert.rejects(service.create(manager, { ...retry, chaveSolicitacao: randomUUID() }, {}), { statusCode: 409 });
     } finally { Date.now = clock; }
     ok('FORM-04 scheduled retry remains idempotent after its scheduled time');
+    await assert.rejects(billing.adjustRideValue(manager, a.id, { valorFinal: '21.00', justificativa: 'Teste de bloqueio' }, {}), { statusCode: 409 });
+    await billing.cancel(manager, closed.id, { motivo: 'Correcao de valores individuais' }, {});
+    await assert.rejects(billing.adjustRideValue(manager, a.id, { valorFinal: '21.00', justificativa: 'Teste sem detalhamento' }, {}), { statusCode: 422 });
+    await billing.adjustRideValue(manager, a.id, { valorFinal: '21.00', justificativa: 'Correcao individual aprovada', participantes: [
+      { funcionarioId: employeeIds[0]!, valor: '13.30' }, { funcionarioId: employeeIds[1]!, valor: '7.70' },
+    ] }, {});
+    assert.equal((await service.get(manager, a.id)).valorFinal, '21.00');
+    const historical = await billing.get(manager, closed.id);
+    assert.deepEqual(historical.itens.map(p => p.valorFaturado).sort(), ['12.30', '7.70']);
+    ok('COST-03 corrections require all allocations and preserve closed billing snapshots');
+    const legacyStops = stops.slice(0, 2).map(p => ({ ...p, id: randomUUID() }));
+    const legacyInput = corridaCreateSchema.parse({ ...input, chaveSolicitacao: randomUUID(), funcionarioId: employeeIds[2],
+      valorEstimado: '38.00', itinerario: { paradas: legacyStops, participantes: [employeeIds[2], employeeIds[3]].map(funcionarioId => ({
+        funcionarioId, embarqueId: legacyStops[0]!.id, desembarqueId: legacyStops[1]!.id,
+      })) } });
+    const legacyCreated = await service.create(manager, legacyInput, {});
+    assert.equal(legacyCreated.valorEstimado, '38.00');
+    const allocation = await pool.query('SELECT * FROM admtaxi.corrida_custos WHERE corrida_id=$1', [legacyCreated.id]);
+    assert.equal(allocation.rows.length, 1); assert.equal(allocation.rows[0].valor_estimado, '38.00');
+    await pool.query('DELETE FROM admtaxi.corrida_participacoes WHERE corrida_id=$1 AND funcionario_id=$2', [legacyCreated.id, employeeIds[3]]);
+    await pool.query('INSERT INTO admtaxi.corrida_participacoes(empresa_id,corrida_id,funcionario_id,embarque_id,desembarque_id) VALUES($1,$2,$3,$4,$5)',
+      [company, legacyCreated.id, employeeIds[3], legacyStops[0]!.id, legacyStops[1]!.id]);
+    const oldInsert = await pool.query('SELECT centro_custo_id FROM admtaxi.corrida_participacoes WHERE corrida_id=$1 AND funcionario_id=$2', [legacyCreated.id, employeeIds[3]]);
+    assert.equal(oldInsert.rows[0].centro_custo_id, center);
+    await assert.rejects(pool.query('UPDATE admtaxi.corrida_participacoes SET valor=NULL WHERE corrida_id=$1', [a.id]), { code: '23514' });
+    const secondaryPreview = await billing.preview(manager, { ...billingInput, centroCustoId: secondCenter });
+    assert.equal(secondaryPreview.length, 1); assert.equal(secondaryPreview[0]!.id, a.id); assert.equal(secondaryPreview[0]!.valorFinal, '21.00');
+    ok('COST-04 legacy insert compatibility, no retrospective splitting and secondary-center filter');
     console.log(JSON.stringify({ result: 'passed', checks, database: 'temporary PostgreSQL 18, loopback only', remoteDatabaseUsed: false }));
   } finally {
     await pool?.end();

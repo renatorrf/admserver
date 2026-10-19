@@ -53,11 +53,12 @@ export class DashboardRepository {
         [...values, auth.usuarioId],
       ),
       this.database.query<CostRow>(
-        `SELECT c.centro_custo_id AS id, cc.codigo, cc.nome, COUNT(*)::text AS corridas,
-          COALESCE(SUM(c.valor_final),0)::text AS valor
-         FROM admtaxi.corridas c JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=c.centro_custo_id
+        `SELECT a.centro_custo_id AS id, cc.codigo, cc.nome, COUNT(DISTINCT c.id)::text AS corridas,
+          COALESCE(SUM(a.valor_final),0)::text AS valor
+         FROM admtaxi.corridas c JOIN admtaxi.corrida_custos a ON a.empresa_id=c.empresa_id AND a.corrida_id=c.id
+         JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=a.centro_custo_id
          WHERE ${where} AND c.status='FINALIZADA' AND date_trunc('month',c.finalizada_em)=date_trunc('month',CURRENT_DATE)
-         GROUP BY c.centro_custo_id,cc.codigo,cc.nome ORDER BY valor DESC LIMIT 8`, values,
+         GROUP BY a.centro_custo_id,cc.codigo,cc.nome ORDER BY valor DESC LIMIT 8`, values,
       ),
       this.database.query<CostRow>(
         `SELECT c.prestador_id AS id, COALESCE(p.nome,'Sem prestador') AS nome, COUNT(*)::text AS corridas,
@@ -121,11 +122,19 @@ export class DashboardRepository {
     const values: unknown[] = [scope.empresaId];
     const conditions = ['c.empresa_id=$1'];
     addCenterScope(conditions, values, scope, 'c.centro_custo_id');
+    if (scope.kind === 'GERENTE') conditions.push(this.allCentersScope(values.length));
     return { where: conditions.join(' AND '), values };
   }
 
   private managerJoinScope(scope: OperationalScope, values: unknown[]): string {
     if (scope.kind !== 'GERENTE') return '';
-    return `AND c.centro_custo_id = ANY($${values.length}::uuid[])`;
+    return `AND c.centro_custo_id = ANY($${values.length}::uuid[]) AND ${this.allCentersScope(values.length)}`;
+  }
+
+  private allCentersScope(index: number): string {
+    return `NOT EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes cp
+      JOIN admtaxi.funcionarios cf ON cf.empresa_id=cp.empresa_id AND cf.id=cp.funcionario_id
+      WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND
+      (NOT (cp.centro_custo_id=ANY($${index}::uuid[])) OR NOT (cf.centro_custo_id=ANY($${index}::uuid[]))))`;
   }
 }

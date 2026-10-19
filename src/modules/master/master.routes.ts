@@ -6,8 +6,9 @@ import { resetPasswordSchema } from '../auth/password.schemas';
 
 import { conflict, unauthorized } from '../../shared/errors/app-error';
 import { asyncHandler } from '../../shared/http/async-handler';
-import { getValidatedParams, validateBody, validateParams } from '../../shared/validation/validate';
-import { provisionamentoSchema, type ProvisionamentoInput } from '../provisionamento/provisionamento.schemas';
+import { getValidatedParams, getValidatedQuery, validateBody, validateParams, validateQuery } from '../../shared/validation/validate';
+import { masterCompanySchema, type MasterCompanyInput } from '../provisionamento/provisionamento.schemas';
+import { z } from 'zod';
 import {
   masterActiveSchema,
   masterCreateSchema,
@@ -79,9 +80,13 @@ export function createMasterRouter(service: MasterService, tokens: MasterTokenSe
   router.get('/empresas', authenticate, passwordChanged, asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.listCompanies(request.master!) });
   }));
-  router.post('/empresas', authenticate, passwordChanged, validateBody(provisionamentoSchema), asyncHandler(async (request, response) => {
+  const managerQuery = z.object({ busca: z.string().trim().max(100).optional(), pagina: z.coerce.number().int().min(1).default(1), limite: z.coerce.number().int().min(1).max(100).default(20) }).strict();
+  router.get('/gestores', authenticate, passwordChanged, validateQuery(managerQuery), asyncHandler(async (request, response) => {
+    response.json({ data: await service.listManagers(request.master!, getValidatedQuery<z.infer<typeof managerQuery>>(request)) });
+  }));
+  router.post('/empresas', authenticate, passwordChanged, validateBody(masterCompanySchema), asyncHandler(async (request, response) => {
     response.status(201).json({
-      data: await service.createCompany(request.master!, request.body as ProvisionamentoInput, metadata(request)),
+      data: await service.createCompany(request.master!, request.body as MasterCompanyInput, metadata(request)),
     });
   }));
   router.get('/administradores', authenticate, passwordChanged, asyncHandler(async (request, response) => {

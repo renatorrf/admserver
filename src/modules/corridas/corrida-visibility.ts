@@ -23,7 +23,10 @@ export function employeeRide(ride: CorridaRecord, employeeId: string): CorridaRe
     prestadorNome: ride.prestadorNome, prestadorTelefone: ride.prestadorTelefone,
     veiculoPlaca: ride.veiculoPlaca, veiculoDescricao: ride.veiculoDescricao,
     paradas: [], itinerarioVersao: ride.itinerarioVersao,
-    itinerario: own && ride.itinerario ? { versao: ride.itinerario.versao, participantes: [{ ...own, motivo: null }],
+    itinerario: own && ride.itinerario ? { versao: ride.itinerario.versao, participantes: [{
+      funcionarioId: own.funcionarioId, funcionarioNome: own.funcionarioNome, embarqueId: own.embarqueId,
+      desembarqueId: own.desembarqueId, estado: own.estado, embarqueEm: own.embarqueEm, desembarqueEm: own.desembarqueEm, motivo: null,
+    }],
       paradas: ride.itinerario.paradas.filter(p => p.id === own.embarqueId || p.id === own.desembarqueId) } : null,
   };
 }
