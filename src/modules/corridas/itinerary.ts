@@ -128,6 +128,13 @@ export function advanceItinerary(snapshot: ItinerarySnapshot, action: ItineraryA
       stop.estado = 'CONCLUIDA'; stop.saidaEm = now;
     }
     if (stop.estado === 'CONCLUIDA') {
+      // A no-show has no drop-off. Preserve manual stops and stops still serving another passenger.
+      for (const candidate of next.paradas.filter(p => p.estado === 'PENDENTE')) {
+        const passengers = next.participantes.filter(p => p.embarqueId === candidate.id || p.desembarqueId === candidate.id);
+        if (passengers.length && passengers.every(p => ['AUSENTE', 'CANCELADO'].includes(p.estado))) {
+          candidate.estado = 'CONCLUIDA'; candidate.saidaEm = now;
+        }
+      }
       const following = next.paradas.find(p => p.estado !== 'CONCLUIDA');
       if (following?.estado === 'PENDENTE') following.estado = 'EM_DESLOCAMENTO';
     }

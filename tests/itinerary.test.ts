@@ -18,6 +18,50 @@ const command = (s: ItinerarySnapshot, acao: ItineraryAction['acao'], index: num
   advanceItinerary(s, { chave: randomUUID(), versao: s.versao, paradaId: stops[index]!.id, acao, funcionarioId, motivo }, '2026-10-15T12:00:00Z');
 
 describe('Itinerario individual', () => {
+  const automatic = (s: ItinerarySnapshot, acao: ItineraryAction['acao'], index: number, person?: number) =>
+    advanceItinerary(s, { chave: randomUUID(), versao: s.versao, paradaId: s.paradas[index]!.id, acao,
+      funcionarioId: person === undefined ? undefined : s.participantes[person]!.funcionarioId,
+      motivo: acao === 'AUSENTE' ? 'Nao compareceu ao embarque' : undefined, avancoAutomatico: true }, '2026-10-19T12:00:00Z');
+
+  it('dispensa somente o destino do ausente e segue atendendo o outro funcionario', () => {
+    let s = automatic(automatic(snapshot(), 'INICIAR', 0), 'CHEGAR', 0);
+    s = automatic(s, 'AUSENTE', 0, 0);
+    expect(s.paradas[2]!.estado).toBe('CONCLUIDA'); expect(s.paradas[2]!.chegadaEm).toBeUndefined();
+    expect(s.paradas[1]!.estado).toBe('EM_DESLOCAMENTO');
+    expect(s.participantes[0]!.embarqueEm).toBeUndefined();
+    s = automatic(automatic(s, 'CHEGAR', 1), 'EMBARCAR', 1, 1);
+    expect(s.paradas[3]!.estado).toBe('EM_DESLOCAMENTO');
+    s = automatic(automatic(s, 'CHEGAR', 3), 'DESEMBARCAR', 3, 1);
+    expect(itineraryResolved(s)).toBe(true);
+    expect(s.participantes.map(p => p.estado)).toEqual(['AUSENTE', 'DESEMBARCADO']);
+  });
+
+  it('encerra as etapas quando todos os funcionarios faltam sem inventar desembarques', () => {
+    let s = snapshot();
+    for (let i = 0; i < 2; i++) {
+      if (i === 0) s = automatic(s, 'INICIAR', i);
+      s = automatic(automatic(s, 'CHEGAR', i), 'AUSENTE', i, i);
+    }
+    expect(itineraryResolved(s)).toBe(true);
+    expect(s.participantes.every(p => !p.embarqueEm && !p.desembarqueEm && p.estado === 'AUSENTE')).toBe(true);
+    const own = employeeRide({ status: 'FINALIZADA', itinerario: s } as CorridaRecord, people[0]!.funcionarioId);
+    expect(own.etapaPassageiro).toBe('Funcionario ausente');
+    expect(own.acompanhamentoLiberado).toBe(false);
+    expect(own.itinerario!.participantes).toHaveLength(1);
+  });
+
+  it('preserva embarque e destino compartilhados e paradas manuais', () => {
+    let s = snapshot(); s.participantes[1]!.embarqueId = stops[0]!.id; s.participantes[1]!.desembarqueId = stops[2]!.id;
+    s = automatic(automatic(s, 'INICIAR', 0), 'CHEGAR', 0);
+    s = automatic(s, 'AUSENTE', 0, 0);
+    expect(s.paradas[0]!.estado).toBe('CHEGADA'); expect(s.paradas[2]!.estado).toBe('PENDENTE');
+    s = automatic(s, 'EMBARCAR', 0, 1);
+    expect(s.paradas[1]!.estado).toBe('EM_DESLOCAMENTO');
+    s = automatic(automatic(s, 'CHEGAR', 1), 'CONCLUIR', 1);
+    s = automatic(automatic(s, 'CHEGAR', 2), 'DESEMBARCAR', 2, 1);
+    expect(s.paradas[3]!.estado).toBe('EM_DESLOCAMENTO');
+    expect(itineraryResolved(s)).toBe(false);
+  });
   it('inicia uma vez, conclui atendimentos e libera o GPS do proximo embarque', () => {
     let s = snapshot();
     const execute = (acao: ItineraryAction['acao'], index: number, funcionarioId?: string) => {

@@ -419,6 +419,48 @@ async function main(): Promise<void> {
     assert.equal(afterRace.itinerario!.paradas[0]!.estado, 'EM_DESLOCAMENTO');
     assert.equal(afterRace.valorEstimado, '38.00');
     ok('ROUTE-03 execution during external planning is not overwritten or blocked by database locks');
+    for (const scenario of ['single', 'allAbsent', 'mixed'] as const) {
+      const draft = structuredClone(input); draft.chaveSolicitacao = randomUUID();
+      const itinerary = draft.itinerario!;
+      const ids = new Map(itinerary.paradas.map(p => [p.id, randomUUID()]));
+      itinerary.paradas.forEach(p => p.id = ids.get(p.id)!);
+      itinerary.participantes.forEach(p => { p.embarqueId = ids.get(p.embarqueId)!; p.desembarqueId = ids.get(p.desembarqueId)!; });
+      if (scenario === 'single') {
+        itinerary.participantes = itinerary.participantes.slice(0, 1);
+        itinerary.paradas = itinerary.paradas.filter(p => [itinerary.participantes[0]!.embarqueId, itinerary.participantes[0]!.desembarqueId].includes(p.id));
+        draft.quantidadePassageiros = 1;
+      }
+      const created = await service.create(manager, draft, {});
+      const absentDriver = drivers[1 - winningIndex]!;
+      let current = await service.accept(absentDriver, created.id, { veiculoId: vehicles[1 - winningIndex] }, {});
+      const execute = async (acao: ItineraryAction['acao'], funcionarioId?: string) => {
+        const paradaId = current.itinerario!.paradas.find(p => p.estado !== 'CONCLUIDA')!.id;
+        const command: ItineraryAction = { chave: randomUUID(), versao: current.itinerarioVersao!, paradaId, acao, funcionarioId,
+          motivo: acao === 'AUSENTE' ? 'Nao compareceu ao embarque' : undefined, avancoAutomatico: true };
+        current = await service.executeItinerary(absentDriver, created.id, command, {});
+        const retry = await service.executeItinerary(absentDriver, created.id, command, {});
+        assert.equal(retry.itinerarioVersao, current.itinerarioVersao);
+      };
+      await execute('INICIAR'); await execute('CHEGAR'); await execute('AUSENTE', employeeIds[0]);
+      if (scenario !== 'single') {
+        assert.equal((await service.get(employees[1]!, created.id)).acompanhamentoLiberado, true);
+        await execute('CHEGAR'); await execute(scenario === 'mixed' ? 'EMBARCAR' : 'AUSENTE', employeeIds[1]);
+        if (scenario === 'mixed') { await execute('CHEGAR'); await execute('DESEMBARCAR', employeeIds[1]); }
+      }
+      assert.equal(current.status, 'EM_CORRIDA'); assert(current.desembarqueEm);
+      assert(current.itinerario!.paradas.every(p => p.estado === 'CONCLUIDA'));
+      assert.equal(current.itinerario!.participantes[0]!.estado, 'AUSENTE');
+      assert.equal(current.itinerario!.participantes[0]!.desembarqueEm, null);
+      const history = await service.listEvents(manager, created.id, { pagina: 1, limite: 100 });
+      assert.equal(history.data.filter(e => e.tipoEvento === 'PARADA_DISPENSADA').length, scenario === 'allAbsent' ? 2 : 1);
+      await service.finish(absentDriver, created.id, { valorFinal: created.valorEstimado! }, {});
+      const visible = await service.get(employees[0]!, created.id);
+      assert.equal(visible.etapaPassageiro, 'Funcionario ausente');
+      assert.equal(visible.acompanhamentoLiberado, false);
+      const listed = await service.list(manager, { pagina: 1, limite: 100 });
+      assert.equal(listed.data.find(r => r.id === created.id)!.itinerario!.participantes[0]!.estado, 'AUSENTE');
+    }
+    ok('ABSENCE single/multiple passengers, automatic skipped destinations, persisted history, idempotency and finalization');
     const providers = new PrestadorUnificadoService(pool, new AuditRepository(pool));
     const driverRegistration = prestadorUnificadoCreateSchema.parse({
       acesso: { nome: 'Motorista temporario', email: 'driver.temp@example.test', telefone: '(34) 99999-1234',

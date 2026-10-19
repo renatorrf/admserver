@@ -575,7 +575,7 @@ export class CorridaService {
       if (ride.status === 'EM_DESLOCAMENTO' && action.acao === 'CHEGAR') ride = await this.repository.changeStatus(client, auth.empresaId, id, 'AGUARDANDO_PASSAGEIRO');
       if (ride.status === 'AGUARDANDO_PASSAGEIRO' && ['EMBARCAR', 'CONCLUIR'].includes(action.acao)) ride = await this.repository.changeStatus(client, auth.empresaId, id, 'EM_CORRIDA');
       if (action.avancoAutomatico && ride.status === 'AGUARDANDO_PASSAGEIRO'
-        && next.paradas.find(p => p.estado !== 'CONCLUIDA')?.estado === 'EM_DESLOCAMENTO') {
+        && (next.paradas.find(p => p.estado !== 'CONCLUIDA')?.estado === 'EM_DESLOCAMENTO' || itineraryResolved(next))) {
         ride = await this.repository.changeStatus(client, auth.empresaId, id, 'EM_CORRIDA');
       }
       if (itineraryResolved(next)) ride = await this.repository.markDisembark(client, auth.empresaId, id);
@@ -592,6 +592,11 @@ export class CorridaService {
         previousStatus, ride.status, `${descriptions[action.acao]}${passenger ? `: ${passenger.funcionarioNome}` : ''}. Parada ${stop.ordem}: ${stop.descricao}`,
         { paradaId: action.paradaId, funcionarioId: action.funcionarioId, versao: next.versao });
       if (action.avancoAutomatico && stop.estado === 'CONCLUIDA') {
+        for (const skipped of next.paradas.filter(p => p.id !== stop.id && p.estado === 'CONCLUIDA'
+          && current.paradas.find(before => before.id === p.id)?.estado === 'PENDENTE')) {
+          await this.repository.createEvent(client, auth.empresaId, id, auth.usuarioId, 'PARADA_DISPENSADA', ride.status, ride.status,
+            `Parada ${skipped.ordem} dispensada: sem passageiros a atender. ${skipped.descricao}`, { paradaId: skipped.id, versao: next.versao });
+        }
         if (action.acao !== 'CONCLUIR') await this.repository.createEvent(client, auth.empresaId, id, auth.usuarioId,
           'PARADA_CONCLUIR', ride.status, ride.status, `Atendimento concluido. Parada ${stop.ordem}: ${stop.descricao}`,
           { paradaId: stop.id, versao: next.versao });

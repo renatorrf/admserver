@@ -9,11 +9,12 @@ export function employeeRide(ride: CorridaRecord, employeeId: string): CorridaRe
   const tracking = own ? own.estado === 'EMBARCADO'
     || (own.estado === 'AGUARDANDO' && active?.id === own.embarqueId && active.estado !== 'PENDENTE') : true;
   const underway = ['EM_DESLOCAMENTO', 'AGUARDANDO_PASSAGEIRO', 'EM_CORRIDA'].includes(ride.status);
-  const stage = ride.status === 'CANCELADA' ? 'Corrida cancelada' : ride.status === 'FINALIZADA' ? 'Corrida finalizada'
+  const stage = ride.status === 'CANCELADA' ? 'Corrida cancelada' : own?.estado === 'AUSENTE' ? 'Funcionario ausente'
+    : ride.status === 'FINALIZADA' ? 'Corrida finalizada'
     : own?.estado === 'AGUARDANDO' && underway
     ? !tracking ? 'Em deslocamento' : active?.estado === 'CHEGADA' ? 'Motorista no seu embarque' : 'Motorista a caminho do seu embarque'
     : own?.estado === 'EMBARCADO' ? 'A bordo' : own?.estado === 'DESEMBARCADO' ? 'Desembarque concluido'
-      : own?.estado === 'AUSENTE' ? 'Ausencia registrada' : own?.estado === 'CANCELADO' ? 'Participacao cancelada' : undefined;
+      : own?.estado === 'CANCELADO' ? 'Participacao cancelada' : undefined;
   // An allowlist prevents future financial/personal fields leaking by default.
   return {
     id: ride.id, empresaId: ride.empresaId, solicitanteUsuarioId: '', centroCustoId: '',
