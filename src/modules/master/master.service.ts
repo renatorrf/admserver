@@ -9,6 +9,8 @@ import type { MasterCreateInput, MasterLoginInput, MasterPasswordInput } from '.
 import { MasterRepository, publicMaster } from './master.repository';
 import type { MasterContext, MasterPublic, MasterSession } from './master.types';
 import type { MasterTokenService } from './master-token.service';
+import { empresaFieldColumns, mapEmpresa } from '../empresas/empresa.service';
+import type { EmpresaUpdateInput } from '../empresas/empresa.schemas';
 
 export type PlatformCompany = {
   id: string; codigoAcesso: string; razaoSocial: string; nomeFantasia: string;
@@ -102,6 +104,42 @@ export class MasterService {
     return this.provisioning.create(input, metadata, context.administradorId);
   }
 
+  async getCompany(context: MasterContext, id: string) {
+    await this.requireReady(context);
+    const result = await this.pool.query('SELECT * FROM admtaxi.empresas WHERE id = $1', [id]);
+    if (!result.rows[0]) throw notFound('Empresa');
+    return mapEmpresa(result.rows[0]);
+  }
+
+  async updateCompany(context: MasterContext, id: string, input: EmpresaUpdateInput, metadata: ProvisionamentoMetadata) {
+    return withTransaction(this.pool, async client => {
+      await this.requireReady(context, client, true);
+      const current = await client.query('SELECT * FROM admtaxi.empresas WHERE id = $1 FOR UPDATE', [id]);
+      if (!current.rows[0]) throw notFound('Empresa');
+      const values: unknown[] = [id];
+      const assignments = Object.entries(input).filter(([, value]) => value !== undefined).map(([key, value]) => {
+        values.push(value);
+        return `${empresaFieldColumns[key as keyof EmpresaUpdateInput]} = $${values.length}`;
+      });
+      const result = await client.query(`UPDATE admtaxi.empresas SET ${assignments.join(', ')} WHERE id = $1 RETURNING *`, values);
+      const updated = mapEmpresa(result.rows[0]);
+      await this.audit(client, context.administradorId, 'empresa', id, 'ATUALIZAR', {
+        anterior: mapEmpresa(current.rows[0]), atual: updated,
+      }, metadata);
+      return updated;
+    });
+  }
+
+  async setCompanyActive(context: MasterContext, id: string, active: boolean, metadata: ProvisionamentoMetadata) {
+    return withTransaction(this.pool, async client => {
+      await this.requireReady(context, client, true);
+      const result = await client.query('UPDATE admtaxi.empresas SET ativo = $2 WHERE id = $1 RETURNING id, ativo', [id, active]);
+      if (!result.rows[0]) throw notFound('Empresa');
+      await this.audit(client, context.administradorId, 'empresa', id, active ? 'REATIVAR' : 'INATIVAR', { ativo: active }, metadata);
+      return result.rows[0] as { id: string; ativo: boolean };
+    });
+  }
+
   async listAdministrators(context: MasterContext): Promise<MasterPublic[]> {
     await this.requireReady(context);
     return this.repository.list();
@@ -169,8 +207,8 @@ export class MasterService {
     return master;
   }
 
-  private async requireReady(context: MasterContext): Promise<void> {
-    const master = await this.requireActive(context);
+  private async requireReady(context: MasterContext, executor: QueryExecutor = this.pool, lock = false): Promise<void> {
+    const master = await this.requireActive(context, executor, lock);
     if (master.deveAlterarSenha) {
       throw conflict('Altere a senha inicial antes de continuar.');
     }

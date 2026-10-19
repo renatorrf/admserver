@@ -11,6 +11,9 @@ import type { OperacaoService } from './operacao.service';
 
 export function createOperacaoRouter(service: OperacaoService): Router {
   const router = Router();
+  router.get('/endereco-empresa', authorize('GERENTE', 'GESTOR'), validateQuery(mapLocationQuerySchema), asyncHandler(async (request, response) => {
+    response.json({ data: await service.getCompanyAddress(requireAuthContext(request)) });
+  }));
 
   router.get('/localizacao-padrao', validateQuery(mapLocationQuerySchema), asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.getMapLocation(requireAuthContext(request)) });

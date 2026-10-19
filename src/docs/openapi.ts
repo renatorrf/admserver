@@ -299,6 +299,22 @@ export const openApiDocument = {
         responses: { '200': { description: 'data.itens (contaId, nome, email, telefone, empresas) e data.total' }, '401': { description: 'Master nao autenticado' } },
       },
     },
+    '/master/empresas/{id}': {
+      get: { tags: ['Master'], summary: 'Detalhes da empresa para edicao', security: [{ masterBearer: [] }],
+        parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Cadastro completo da empresa' }, '404': { description: 'Empresa nao encontrada' } } },
+      patch: { tags: ['Master'], summary: 'Editar empresa sem alterar os usuarios vinculados', security: [{ masterBearer: [] }],
+        description: 'Aceita os mesmos campos de PATCH /empresas/atual. Operacao transacional com auditoria da plataforma. Status alterado apenas pelo endpoint /ativo.',
+        parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Empresa atualizada' }, '409': { description: 'Codigo ou CNPJ ja cadastrado' }, '422': { description: 'Campos invalidos' } } },
+    },
+    '/master/empresas/{id}/ativo': {
+      patch: { tags: ['Master'], summary: 'Inativar ou reativar empresa', security: [{ masterBearer: [] }],
+        description: 'Preserva usuarios e historico. Empresa inativa nao pode autenticar nem validar acessos. Exige master ativo com senha inicial alterada.',
+        parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ativo'], properties: { ativo: { type: 'boolean' } } } } } },
+        responses: { '200': { description: 'Status atualizado' }, '404': { description: 'Empresa nao encontrada' } } },
+    },
     '/master/empresas': {
       get: {
         tags: ['Master'], summary: 'Lista empresas da plataforma', security: [{ masterBearer: [] }],
@@ -346,6 +362,7 @@ export const openApiDocument = {
       },
       patch: {
         tags: ['Empresa'], summary: 'Atualiza a empresa autenticada', security: bearerSecurity,
+        description: 'endereco (3 a 500 caracteres), enderecoLatitude (-90 a 90) e enderecoLongitude (-180 a 180) sao opcionais, mas devem ser enviados juntos. Tres valores null removem o destino. Nao alteram latitudePadrao/longitudePadrao do mapa.',
         responses: { '200': { description: 'Empresa atualizada' }, '409': { description: 'Codigo ou CNPJ duplicado' } },
       },
     },
@@ -513,8 +530,27 @@ export const openApiDocument = {
     '/operacao/localizacao-padrao': {
       get: {
         tags: ['Operacao'], summary: 'Coordenadas iniciais do mapa da empresa autenticada', security: bearerSecurity,
-        description: 'Todos os perfis autenticados. A empresa vem exclusivamente do token; nao recebe empresaId. Retorna somente latitudePadrao e longitudePadrao, numericas ou nulas.',
+        description: 'Todos os perfis autenticados. A empresa vem exclusivamente do token; nao recebe empresaId. Prioriza as coordenadas do endereco da empresa; sem endereco georreferenciado valido, usa as coordenadas padrao. Retorna somente latitudePadrao e longitudePadrao, numericas ou nulas, sem alterar o cadastro.',
         responses: { '200': { description: 'Localizacao padrao, sem dados administrativos da empresa' }, '401': { description: 'Autenticacao necessaria' } },
+      },
+    },
+    '/operacao/endereco-empresa': {
+      get: {
+        tags: ['Operacao'], summary: 'Sugestao de destino da empresa autenticada', security: bearerSecurity,
+        description: 'GESTOR ou GERENTE. Nao recebe empresaId. Retorna data como EnderecoSugestao (id, descricao, latitude, longitude e componentes opcionais), ou null se nao cadastrado.',
+        responses: { '200': { description: 'Endereco georreferenciado ou null' }, '403': { description: 'Perfil nao permitido' } },
+      },
+    },
+    '/master/enderecos/autocomplete': {
+      get: {
+        tags: ['Master'], summary: 'Pesquisa endereco para cadastro de empresa', security: [{ masterBearer: [] }],
+        description: 'Exige administrador master ativo com senha inicial alterada. Nao depende de uma empresa existente.',
+        parameters: [
+          { name: 'texto', in: 'query', required: true, schema: { type: 'string', minLength: 3, maxLength: 160 } },
+          { name: 'latitude', in: 'query', schema: { type: 'number', minimum: -90, maximum: 90 } },
+          { name: 'longitude', in: 'query', schema: { type: 'number', minimum: -180, maximum: 180 } },
+        ],
+        responses: { '200': { description: 'Sugestoes do Geoapify' }, '401': { description: 'Master nao autenticado' }, '503': { description: 'Geocodificacao indisponivel' } },
       },
     },
     '/operacao/escopo': {
@@ -991,6 +1027,9 @@ export const openApiDocument = {
               codigoAcesso: { type: 'string', minLength: 2, maxLength: 50, example: 'ADM-BR' },
               razaoSocial: { type: 'string', minLength: 2, maxLength: 200 },
               nomeFantasia: { type: 'string', minLength: 2, maxLength: 150 },
+              endereco: { type: ['string', 'null'], minLength: 3, maxLength: 500, description: 'Endereco de destino. Enviar com as duas coordenadas ou os tres campos null.' },
+              enderecoLatitude: { type: ['number', 'null'], minimum: -90, maximum: 90 },
+              enderecoLongitude: { type: ['number', 'null'], minimum: -180, maximum: 180 },
               cnpj: { type: ['string', 'null'], pattern: '^[0-9]{14}$' },
               telefone: { type: ['string', 'null'], maxLength: 20 },
               email: { type: ['string', 'null'], format: 'email' },

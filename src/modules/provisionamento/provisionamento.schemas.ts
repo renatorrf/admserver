@@ -1,10 +1,12 @@
 import { passwordSchema } from '../../shared/validation/password';
 import { z } from 'zod';
+import { companyAddressFields, validateCompanyAddress } from '../empresas/company-address.schema';
 
 import { digits, optionalEmail, optionalText } from '../../shared/validation/common.schemas';
 
 export const provisionamentoSchema = z.object({
   empresa: z.object({
+    ...companyAddressFields,
     codigoAcesso: z.string().trim().min(2).max(50)
       .regex(/^[A-Za-z0-9][A-Za-z0-9_-]+$/, 'Codigo de acesso invalido.')
       .transform((value) => value.toUpperCase()),
@@ -18,7 +20,7 @@ export const provisionamentoSchema = z.object({
       .regex(/^[A-Za-z]{2}$/, 'Estado invalido.').transform((value) => value.toUpperCase()),
     latitudePadrao: z.coerce.number().min(-90, 'Latitude padrao invalida.').max(90, 'Latitude padrao invalida.'),
     longitudePadrao: z.coerce.number().min(-180, 'Longitude padrao invalida.').max(180, 'Longitude padrao invalida.'),
-  }).strict(),
+  }).strict().superRefine(validateCompanyAddress),
   gestor: z.object({
     nome: z.string().trim().min(2).max(150),
     email: z.string().trim().email('Informe um e-mail valido.').max(254)

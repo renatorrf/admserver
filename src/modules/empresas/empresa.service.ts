@@ -21,9 +21,13 @@ type EmpresaRecord = Record<string, unknown> & {
   latitudePadrao: number | null;
   longitudePadrao: number | null;
   ativo: boolean;
+  endereco: string | null;
+  enderecoLatitude: number | null;
+  enderecoLongitude: number | null;
 };
 
-const fieldColumns: Record<keyof EmpresaUpdateInput, string> = {
+export const empresaFieldColumns: Record<keyof EmpresaUpdateInput, string> = {
+  endereco: 'endereco', enderecoLatitude: 'endereco_latitude', enderecoLongitude: 'endereco_longitude',
   codigoAcesso: 'codigo_acesso',
   razaoSocial: 'razao_social',
   nomeFantasia: 'nome_fantasia',
@@ -37,9 +41,12 @@ const fieldColumns: Record<keyof EmpresaUpdateInput, string> = {
   longitudePadrao: 'longitude_padrao',
 };
 
-function mapEmpresa(row: QueryResultRow): EmpresaRecord {
+export function mapEmpresa(row: QueryResultRow): EmpresaRecord {
   return {
     id: row.id as string,
+    endereco: row.endereco as string | null,
+    enderecoLatitude: row.endereco_latitude == null ? null : Number(row.endereco_latitude),
+    enderecoLongitude: row.endereco_longitude == null ? null : Number(row.endereco_longitude),
     codigoAcesso: row.codigo_acesso as string,
     razaoSocial: row.razao_social as string,
     nomeFantasia: row.nome_fantasia as string,
@@ -74,7 +81,7 @@ export class EmpresaService {
       const values: unknown[] = [auth.empresaId];
       const assignments = entries.map(([key, value]) => {
         values.push(value);
-        return `${fieldColumns[key]} = $${values.length}`;
+        return `${empresaFieldColumns[key]} = $${values.length}`;
       });
       const result = await client.query<QueryResultRow>(
         `UPDATE admtaxi.empresas SET ${assignments.join(', ')} WHERE id = $1 RETURNING *`,

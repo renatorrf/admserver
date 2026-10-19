@@ -24,6 +24,7 @@ import { PasswordService } from './modules/auth/password.service';
 import { SmtpPasswordMailer } from './modules/auth/password-mailer';
 import { MasterRecoveryService } from './modules/master/master-recovery.service';
 import { ManagerLoginService } from './modules/auth/manager-login.service';
+import { EnderecoService } from './modules/enderecos/endereco.service';
 
 const config = getConfig();
 const logger = createLogger(config);
@@ -48,6 +49,7 @@ const masterTokens = new MasterTokenService(config.jwtAccessSecret);
 const masterRouter = createMasterRouter(
   new MasterService(pool, masterTokens, new ProvisionamentoService(pool)), masterTokens,
   new MasterRecoveryService(pool, logger, config.mail, config.mail ? new SmtpPasswordMailer(config.mail) : undefined),
+  new EnderecoService(pool, config.geoapifyApiKey),
 );
 const app = createApp({
   config, logger, pool, auth: authService, tokens: tokenService, adminRouter, operationalRouter,
@@ -61,6 +63,8 @@ const socketLocationService = new LocalizacaoService(pool, socketRideService, re
 const io = attachSocketServer(server, config, tokenService, socketLocationService, realtime, logger, pool);
 
 async function start(): Promise<void> {
+  const addressMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=18');
+  if (!addressMigration.rowCount) throw new Error('Migration 018_endereco_empresa pendente. Aplique antes de publicar este backend.');
   const accountMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=16');
   const passengerCostsMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=17');
   if (!passengerCostsMigration.rowCount) throw new Error('Migration 017_custos_por_passageiro pendente. Aplique antes de publicar este backend.');

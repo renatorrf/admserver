@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { companyAddressFields, validateCompanyAddress } from './company-address.schema';
 
 import { digits, optionalEmail, optionalText } from '../../shared/validation/common.schemas';
 
@@ -8,13 +9,13 @@ const nullableCnpj = z.union([
   z.null(),
 ]).optional();
 
-const nullableCoordinate = (minimum: number, maximum: number, message: string) => z.union([
-  z.coerce.number().min(minimum, message).max(maximum, message),
-  z.literal('').transform(() => null),
-  z.null(),
-]).optional();
+const nullableCoordinate = (minimum: number, maximum: number, message: string) => z.preprocess(
+  value => value === '' ? null : value,
+  z.coerce.number().min(minimum, message).max(maximum, message).nullable().optional(),
+);
 
 export const empresaUpdateSchema = z.object({
+  ...companyAddressFields,
   codigoAcesso: z.string().trim().min(2).max(50)
     .regex(/^[A-Za-z0-9][A-Za-z0-9_-]+$/, 'Codigo de acesso invalido.')
     .transform((value) => value.toUpperCase()).optional(),
@@ -36,6 +37,7 @@ export const empresaUpdateSchema = z.object({
 }).strict().refine((value) => Object.values(value).some((item) => item !== undefined), {
   message: 'Informe ao menos um campo para atualizar.',
 }).superRefine((value, context) => {
+  validateCompanyAddress(value, context);
   const latitudeProvided = value.latitudePadrao !== undefined;
   const longitudeProvided = value.longitudePadrao !== undefined;
   if (latitudeProvided !== longitudeProvided) {

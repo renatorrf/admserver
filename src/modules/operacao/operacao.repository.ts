@@ -1,5 +1,6 @@
 import type { Database } from '../../db/pool';
 import type { AuthContext } from '../auth/auth.types';
+import type { EnderecoSugestao } from '../enderecos/endereco.service';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
 import type { FuncionarioLookupQuery, FuncionarioSearchQuery, PrestadorSearchQuery } from './operacao.schemas';
 import {
@@ -45,15 +46,33 @@ export class OperacaoRepository {
   }
 
   async getMapLocation(auth: AuthContext) {
-    const result = await this.database.query<{ latitude_padrao: string | null; longitude_padrao: string | null }>(
-      'SELECT latitude_padrao, longitude_padrao FROM admtaxi.empresas WHERE id = $1 AND ativo = TRUE',
+    const result = await this.database.query<{
+      latitude_padrao: string | null; longitude_padrao: string | null;
+      endereco: string | null; endereco_latitude: string | null; endereco_longitude: string | null;
+    }>(
+      `SELECT latitude_padrao, longitude_padrao, endereco, endereco_latitude, endereco_longitude
+         FROM admtaxi.empresas WHERE id = $1 AND ativo = TRUE`,
       [auth.empresaId],
     );
     const row = result.rows[0];
+    const addressLatitude = row?.endereco_latitude == null ? NaN : Number(row.endereco_latitude);
+    const addressLongitude = row?.endereco_longitude == null ? NaN : Number(row.endereco_longitude);
+    const hasAddress = Boolean(row?.endereco?.trim())
+      && Number.isFinite(addressLatitude) && Math.abs(addressLatitude) <= 90
+      && Number.isFinite(addressLongitude) && Math.abs(addressLongitude) <= 180;
     return {
-      latitudePadrao: row?.latitude_padrao == null ? null : Number(row.latitude_padrao),
-      longitudePadrao: row?.longitude_padrao == null ? null : Number(row.longitude_padrao),
+      latitudePadrao: hasAddress ? addressLatitude : row?.latitude_padrao == null ? null : Number(row.latitude_padrao),
+      longitudePadrao: hasAddress ? addressLongitude : row?.longitude_padrao == null ? null : Number(row.longitude_padrao),
     };
+  }
+
+  async getCompanyAddress(auth: AuthContext): Promise<EnderecoSugestao | null> {
+    const result = await this.database.query<{ id: string; endereco: string | null; endereco_latitude: string | null; endereco_longitude: string | null }>(
+      'SELECT id, endereco, endereco_latitude, endereco_longitude FROM admtaxi.empresas WHERE id=$1 AND ativo=TRUE', [auth.empresaId]);
+    const row = result.rows[0];
+    if (!row?.endereco || row.endereco_latitude == null || row.endereco_longitude == null) return null;
+    return { id: `empresa:${row.id}`, descricao: row.endereco, latitude: Number(row.endereco_latitude), longitude: Number(row.endereco_longitude),
+      logradouro: null, numero: null, bairro: null, cidade: null, estado: null };
   }
 
   async listSectors(auth: AuthContext): Promise<SetorLookup[]> {

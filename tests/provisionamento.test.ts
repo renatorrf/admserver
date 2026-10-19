@@ -13,6 +13,7 @@ const input = {
     codigoAcesso: 'ADM-BR', razaoSocial: 'ADM Brasil Ltda', nomeFantasia: 'ADM Brasil',
     cidadePadrao: 'Uberlandia', estadoPadrao: 'MG', latitudePadrao: -18.9186, longitudePadrao: -48.2772,
     cnpj: '12345678000199', telefone: '(11) 3000-0000', email: 'contato@adm.example',
+    endereco: 'Rua da Empresa, 100', enderecoLatitude: -18.91, enderecoLongitude: -48.21,
   },
   gestor: {
     nome: 'Gestor Principal', email: 'gestor@adm.example', telefone: '(11) 99999-0000',
@@ -83,6 +84,8 @@ describe('provisionamento de empresa', () => {
     const result = await service.create(input, { ip: '127.0.0.1', userAgent: 'test' });
 
     expect(hasher).toHaveBeenCalledWith(input.gestor.senha);
+    const companyInsert = query.mock.calls.find(([sql]) => sql.includes('INSERT INTO admtaxi.empresas'));
+    expect(companyInsert?.[1]?.slice(-3)).toEqual([input.empresa.endereco, input.empresa.enderecoLatitude, input.empresa.enderecoLongitude]);
     expect(query.mock.calls.map(([sql]) => sql.trim().split(/\s+/)[0])).toEqual([
       'BEGIN', 'SELECT', 'INSERT', 'INSERT', 'INSERT', 'COMMIT',
     ]);

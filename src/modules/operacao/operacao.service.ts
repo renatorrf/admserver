@@ -10,6 +10,8 @@ export class OperacaoService {
     return this.repository.getMapLocation(auth);
   }
 
+  getCompanyAddress(auth: AuthContext) { return this.repository.getCompanyAddress(auth); }
+
   listCenters(auth: AuthContext) {
     if (auth.perfil === 'PRESTADOR') throw forbidden();
     return this.repository.listCenters(auth);

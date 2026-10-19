@@ -3,6 +3,8 @@ import { rateLimit } from 'express-rate-limit';
 import { setTimeout as delay } from 'node:timers/promises';
 import { masterRecoveryMessage, type MasterRecoveryService } from './master-recovery.service';
 import { resetPasswordSchema } from '../auth/password.schemas';
+import type { EnderecoService } from '../enderecos/endereco.service';
+import { enderecoAutocompleteSchema, type EnderecoAutocompleteQuery } from '../enderecos/endereco.schemas';
 
 import { conflict, unauthorized } from '../../shared/errors/app-error';
 import { asyncHandler } from '../../shared/http/async-handler';
@@ -23,12 +25,13 @@ import {
 } from './master.schemas';
 import type { MasterService } from './master.service';
 import type { MasterTokenService } from './master-token.service';
+import { empresaUpdateSchema } from '../empresas/empresa.schemas';
 
 function metadata(request: Request) {
   return { ip: request.ip || null, userAgent: request.get('user-agent') ?? null };
 }
 
-export function createMasterRouter(service: MasterService, tokens: MasterTokenService, recovery?: MasterRecoveryService): Router {
+export function createMasterRouter(service: MasterService, tokens: MasterTokenService, recovery?: MasterRecoveryService, addresses?: EnderecoService): Router {
   const authenticate: RequestHandler = (request, _response, next) => {
     const [scheme, token] = request.header('authorization')?.split(' ') ?? [];
     if (scheme !== 'Bearer' || !token) {
@@ -52,6 +55,11 @@ export function createMasterRouter(service: MasterService, tokens: MasterTokenSe
     message: { erro: { codigo: 'MUITAS_TENTATIVAS', mensagem: 'Aguarde alguns minutos antes de tentar novamente.' } },
   });
   const router = Router();
+  if (addresses) router.get('/enderecos/autocomplete', authenticate, passwordChanged, validateQuery(enderecoAutocompleteSchema), asyncHandler(async (request, response) => {
+    const current = await service.getCurrent(request.master!);
+    if (current.deveAlterarSenha) throw conflict('Altere a senha inicial antes de continuar.');
+    response.json({ data: await addresses.autocompleteForPlatform(getValidatedQuery<EnderecoAutocompleteQuery>(request)) });
+  }));
   if (recovery) {
     const limiter = rateLimit({ windowMs: 15*60_000, limit: 5, standardHeaders:'draft-8', legacyHeaders:false,
       message:{ erro:{ codigo:'MUITAS_TENTATIVAS',mensagem:'Aguarde alguns minutos antes de solicitar outro link.' } } });
@@ -79,6 +87,15 @@ export function createMasterRouter(service: MasterService, tokens: MasterTokenSe
   }));
   router.get('/empresas', authenticate, passwordChanged, asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.listCompanies(request.master!) });
+  }));
+  router.get('/empresas/:id', authenticate, passwordChanged, validateParams(masterIdSchema), asyncHandler(async (request, response) => {
+    response.json({ data: await service.getCompany(request.master!, getValidatedParams<{ id: string }>(request).id) });
+  }));
+  router.patch('/empresas/:id', authenticate, passwordChanged, validateParams(masterIdSchema), validateBody(empresaUpdateSchema), asyncHandler(async (request, response) => {
+    response.json({ data: await service.updateCompany(request.master!, getValidatedParams<{ id: string }>(request).id, request.body, metadata(request)) });
+  }));
+  router.patch('/empresas/:id/ativo', authenticate, passwordChanged, validateParams(masterIdSchema), validateBody(masterActiveSchema), asyncHandler(async (request, response) => {
+    response.json({ data: await service.setCompanyActive(request.master!, getValidatedParams<{ id: string }>(request).id, request.body.ativo, metadata(request)) });
   }));
   const managerQuery = z.object({ busca: z.string().trim().max(100).optional(), pagina: z.coerce.number().int().min(1).default(1), limite: z.coerce.number().int().min(1).max(100).default(20) }).strict();
   router.get('/gestores', authenticate, passwordChanged, validateQuery(managerQuery), asyncHandler(async (request, response) => {

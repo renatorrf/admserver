@@ -5,6 +5,13 @@ e usa transacao e advisory lock. Consulte o estado com `npm run migrate:status`.
 
 Migrations deste complemento:
 
+- `018_endereco_empresa`: endereco e coordenadas de destino separados da centralizacao do mapa.
+  Dados opcionais para empresas existentes, com constraint de preenchimento conjunto.
+  Aplicada no banco remoto em 19/10/2026 com autorizacao especifica, depois dos testes locais
+  e da validacao com rollback completo. Status confirmado: 001 a 018 aplicadas.
+  Publicar o backend antes do frontend. Preencher o endereco no portal master (nova empresa)
+  ou em Minha conta > Dados da empresa (gestor); o chip aparece apenas com endereco cadastrado.
+
 - `016_contas_gestor`: credencial unica de gestor e vinculos empresariais, preservando usuarios
   locais e FKs. Nao mescla emails iguais. Aplicada no banco remoto em 19/10/2026 com autorizacao explicita.
 - `017_custos_por_passageiro`: centro e valor por participante, consulta financeira individual

@@ -51,4 +51,48 @@ describe('Company map location route', () => {
     expect(response.status).toBe(422);
     expect(query).not.toHaveBeenCalled();
   });
+
+  it.each([[-18.923, -48.281], [0, 0]])('prioriza o endereco cadastrado (%s, %s)', async (latitude, longitude) => {
+    query.mockResolvedValue({ rows: [{ latitude_padrao: '-23.55', longitude_padrao: '-46.63',
+      endereco: 'Rua da empresa, 10', endereco_latitude: String(latitude), endereco_longitude: String(longitude) }] });
+    const token = tokens.issueTokens({ empresaId, usuarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', perfil: 'GESTOR' }).accessToken;
+    const response = await request(app).get(path).set('Authorization', `Bearer ${token}`);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: { latitudePadrao: latitude, longitudePadrao: longitude } });
+  });
+
+  it.each([
+    { endereco: null, endereco_latitude: '-19', endereco_longitude: '-48' },
+    { endereco: 'Rua A', endereco_latitude: null, endereco_longitude: '-48' },
+    { endereco: 'Rua A', endereco_latitude: '-19', endereco_longitude: null },
+    { endereco: 'Rua A', endereco_latitude: '91', endereco_longitude: '-48' },
+    { endereco: 'Rua A', endereco_latitude: '-19', endereco_longitude: '181' },
+    { endereco: 'Rua A', endereco_latitude: 'NaN', endereco_longitude: '-48' },
+  ])('usa o par padrao completo se o endereco for incompleto ou invalido: %j', async address => {
+    query.mockResolvedValue({ rows: [{ latitude_padrao: '-18.91', longitude_padrao: '-48.27', ...address }] });
+    const token = tokens.issueTokens({ empresaId, usuarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', perfil: 'GESTOR' }).accessToken;
+    const response = await request(app).get(path).set('Authorization', `Bearer ${token}`);
+    expect(response.body).toEqual({ data: { latitudePadrao: -18.91, longitudePadrao: -48.27 } });
+  });
+
+  it('consulta novamente a empresa do token a cada acesso, sem reutilizar a anterior', async () => {
+    const otherCompany = '22222222-2222-4222-8222-222222222222';
+    query.mockImplementation(async (_sql, values) => ({ rows: [{ endereco: 'Endereco da empresa',
+      endereco_latitude: values[0] === empresaId ? '-18.9' : '-22.9', endereco_longitude: '-48' }] }));
+    for (const id of [empresaId, otherCompany]) {
+      const token = tokens.issueTokens({ empresaId: id, usuarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', perfil: 'GESTOR' }).accessToken;
+      const response = await request(app).get(path).set('Authorization', `Bearer ${token}`);
+      expect(response.body.data.latitudePadrao).toBe(id === empresaId ? -18.9 : -22.9);
+      expect(query).toHaveBeenLastCalledWith(expect.stringContaining('WHERE id = $1 AND ativo = TRUE'), [id]);
+    }
+  });
+
+  it('retorna nulos quando nao ha empresa ativa ou coordenadas cadastradas', async () => {
+    const token = tokens.issueTokens({ empresaId, usuarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', perfil: 'GESTOR' }).accessToken;
+    for (const rows of [[], [{ latitude_padrao: null, longitude_padrao: null }]]) {
+      query.mockResolvedValue({ rows });
+      const response = await request(app).get(path).set('Authorization', `Bearer ${token}`);
+      expect(response.body).toEqual({ data: { latitudePadrao: null, longitudePadrao: null } });
+    }
+  });
 });

@@ -22,6 +22,12 @@ import { FaturamentoService } from '../src/modules/faturamentos/faturamento.serv
 import { PainelParticipanteRepository } from '../src/modules/paineis/painel.repository';
 import { RelatorioRepository } from '../src/modules/relatorios/relatorio.repository';
 import { DashboardRepository } from '../src/modules/dashboard/dashboard.repository';
+import { EmpresaService } from '../src/modules/empresas/empresa.service';
+import { OperacaoRepository } from '../src/modules/operacao/operacao.repository';
+import { MasterService } from '../src/modules/master/master.service';
+import { MasterTokenService } from '../src/modules/master/master-token.service';
+import { ProvisionamentoService } from '../src/modules/provisionamento/provisionamento.service';
+import { PgAuthRepository } from '../src/modules/auth/auth.repository';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -94,6 +100,52 @@ async function main(): Promise<void> {
       assert.equal(result.status, 0, result.stderr || result.stdout);
     };
     migrate(); migrate();
+    assert.equal((await pool.query('SELECT COUNT(*) FROM admtaxi.schema_migrations WHERE versao=18')).rows[0].count, '1');
+    const companies = new EmpresaService(pool, new AuditRepository(pool));
+    const operations = new OperacaoRepository(pool);
+    assert.equal(await operations.getCompanyAddress(manager), null);
+    const companyAddress = { endereco: 'Rua da Empresa, 100', enderecoLatitude: 0, enderecoLongitude: -48.2 };
+    const updatedCompany = await companies.updateCurrent(manager, { ...companyAddress, latitudePadrao: -18.9, longitudePadrao: -48.25 }, { ip: null, userAgent: null });
+    assert.equal(updatedCompany.endereco, companyAddress.endereco);
+    assert.equal(updatedCompany.enderecoLatitude, 0);
+    assert.equal((await operations.getCompanyAddress(manager))?.longitude, -48.2);
+    assert.deepEqual(await operations.getMapLocation(manager), { latitudePadrao: 0, longitudePadrao: -48.2 });
+    assert.equal((await companies.getCurrent(manager)).latitudePadrao, -18.9);
+    assert.equal(await operations.getCompanyAddress({ ...manager, empresaId: otherCompany }), null);
+    await assert.rejects(pool.query('UPDATE admtaxi.empresas SET endereco_latitude=NULL WHERE id=$1', [company]), { code: '23514' });
+    await companies.updateCurrent(manager, { endereco: null, enderecoLatitude: null, enderecoLongitude: null }, { ip: null, userAgent: null });
+    assert.equal(await operations.getCompanyAddress(manager), null);
+    assert.deepEqual(await operations.getMapLocation(manager), { latitudePadrao: -18.9, longitudePadrao: -48.25 });
+    assert.equal((await companies.getCurrent(manager)).latitudePadrao, -18.9);
+    ok('COMPANY-ADDRESS migration, tenant isolation, null/zero coordinates, clearing and independent map position');
+    const masterContext = { administradorId: randomUUID(), usuario: 'test-master', deveAlterarSenha: false, senhaVersao: 0 };
+    await pool.query(`INSERT INTO admtaxi.administradores_plataforma(id,usuario,nome,senha_hash,deve_alterar_senha)
+      VALUES($1,'test-master','Master teste','synthetic-hash',FALSE)`, [masterContext.administradorId]);
+    const masterService = new MasterService(pool, new MasterTokenService(randomUUID() + randomUUID()), new ProvisionamentoService(pool));
+    const authRepository = new PgAuthRepository(pool);
+    const authState = await authRepository.findById(manager);
+    assert(authState);
+    const liveAuth = { ...manager, senhaVersao: authState.senhaVersao, deveAlterarSenha: authState.deveAlterarSenha };
+    const originalCompany = await masterService.getCompany(masterContext, company);
+    await masterService.updateCompany(masterContext, company, { nomeFantasia: 'Empresa editada', ...companyAddress }, { ip: null, userAgent: null });
+    assert.equal((await masterService.getCompany(masterContext, company)).nomeFantasia, 'Empresa editada');
+    assert.equal((await masterService.getCompany(masterContext, otherCompany)).nomeFantasia, 'Empresa sintetica 1');
+    assert(await authRepository.accessAllowed(liveAuth));
+    await masterService.setCompanyActive(masterContext, company, false, { ip: null, userAgent: null });
+    assert.equal(await authRepository.accessAllowed(liveAuth), false);
+    assert(!(await authRepository.listActiveCompanies()).some(e => e.codigoAcesso === originalCompany.codigoAcesso));
+    assert.equal((await masterService.listCompanies(masterContext)).find(e => e.id === company)?.ativo, false);
+    await masterService.setCompanyActive(masterContext, company, true, { ip: null, userAgent: null });
+    assert(await authRepository.accessAllowed(liveAuth));
+    assert.equal((await pool.query('SELECT COUNT(*) FROM admtaxi.auditoria_plataforma WHERE entidade_id=$1', [company])).rows[0].count, '3');
+    await assert.rejects(masterService.updateCompany(masterContext, company, { codigoAcesso: 'test_1', nomeFantasia: 'Nao persistir' }, { ip: null, userAgent: null }), { code: '23505' });
+    assert.equal((await masterService.getCompany(masterContext, company)).nomeFantasia, 'Empresa editada');
+    await assert.rejects(masterService.getCompany(masterContext, randomUUID()));
+    await assert.rejects(masterService.setCompanyActive(masterContext, randomUUID(), false, { ip: null, userAgent: null }));
+    await pool.query('UPDATE admtaxi.administradores_plataforma SET ativo=FALSE WHERE id=$1', [masterContext.administradorId]);
+    await assert.rejects(masterService.setCompanyActive(masterContext, company, false, { ip: null, userAgent: null }));
+    assert.equal((await companies.getCurrent(manager)).ativo, true);
+    ok('MASTER-COMPANY edit/status audit, rollback, tenant preservation and inactive access denial');
     assert.equal((await pool.query('SELECT COUNT(*) FROM admtaxi.schema_migrations WHERE versao=13')).rows[0].count, '1');
     const service = new CorridaService(pool, new AuditRepository(pool));
     const tokens = new TokenService({ jwtAccessSecret: randomUUID() + randomUUID(), jwtRefreshSecret: randomUUID() + randomUUID(),

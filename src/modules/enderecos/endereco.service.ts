@@ -40,9 +40,18 @@ export class EnderecoService {
     const reference = query.latitude === undefined
       ? await this.companyReference(auth.empresaId)
       : { latitude: query.latitude, longitude: query.longitude, cidade: null, estado: null };
+    return this.autocompleteAt(query.texto, reference);
+  }
+
+  autocompleteForPlatform(query: EnderecoAutocompleteQuery): Promise<EnderecoSugestao[]> {
+    this.requireConfigured();
+    return this.autocompleteAt(query.texto, { latitude: query.latitude ?? null, longitude: query.longitude ?? null, cidade: null, estado: null });
+  }
+
+  private autocompleteAt(queryText: string, reference: { latitude: number | null; longitude: number | null | undefined; cidade: string | null; estado: string | null }): Promise<EnderecoSugestao[]> {
     const text = reference.cidade && reference.estado
-      ? `${query.texto}, ${reference.cidade}, ${reference.estado}`
-      : query.texto;
+      ? `${queryText}, ${reference.cidade}, ${reference.estado}`
+      : queryText;
     const parameters = new URLSearchParams({
       text,
       format: 'json',
