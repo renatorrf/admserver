@@ -29,6 +29,13 @@ import { MasterService } from '../src/modules/master/master.service';
 import { MasterTokenService } from '../src/modules/master/master-token.service';
 import { ProvisionamentoService } from '../src/modules/provisionamento/provisionamento.service';
 import { PgAuthRepository } from '../src/modules/auth/auth.repository';
+import { AuthService } from '../src/modules/auth/auth.service';
+import { PasswordService } from '../src/modules/auth/password.service';
+import { ManagerLoginService } from '../src/modules/auth/manager-login.service';
+import { createAuthRouter } from '../src/modules/auth/auth.routes';
+import { PrestadorUnificadoService } from '../src/modules/prestadores/prestador-unificado.service';
+import { prestadorUnificadoCreateSchema } from '../src/modules/prestadores/prestador-unificado.schemas';
+import { createPrestadorUnificadoRouter } from '../src/modules/prestadores/prestador-unificado.routes';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -86,14 +93,21 @@ async function main(): Promise<void> {
       [id, company, employees[i]!.usuarioId, center, `Passageiro sintetico ${i}`, `TEST${i}`]);
     for (const [i, id] of providerIds.entries()) {
       await pool.query(`INSERT INTO admtaxi.prestadores(id,empresa_id,usuario_id,nome,cpf,telefone,numero_cnh,validade_cnh,disponivel)
-        VALUES($1,$2,$3,$4,$5,'11999999999',$6,'2030-01-01',true)`,
-      [id, company, drivers[i]!.usuarioId, `Prestador sintetico ${i}`, `1234567890${i}`, `TEST${i}`]);
+        VALUES($1,$2,$3,$4,$5,$7,$6,'2030-01-01',true)`,
+      [id, company, drivers[i]!.usuarioId, `Prestador sintetico ${i}`, `1234567890${i}`, `TEST${i}`, `1199999999${i}`]);
       await pool.query(`INSERT INTO admtaxi.veiculos(id,empresa_id,prestador_id,placa,marca,modelo,cor,ano,capacidade_passageiros)
         VALUES($1,$2,$3,$4,'Teste','Teste','Teste',2026,4)`, [vehicles[i], company, id, `TST1A0${i}`]);
     }
     const legacyId = randomUUID();
     await pool.query(`INSERT INTO admtaxi.corridas(id,empresa_id,solicitante_usuario_id,funcionario_id,centro_custo_id,tipo,origem_descricao,destino_descricao)
       VALUES($1,$2,$3,$4,$5,'IMEDIATA','Origem historica','Destino historico')`, [legacyId, company, manager.usuarioId, employeeIds[0], center]);
+    await pool.query('BEGIN');
+    await pool.query(`INSERT INTO admtaxi.usuarios(empresa_id,nome,email,senha_hash,perfil)
+      VALUES($1,' USUARIO   SINTETICO 0 ','preflight@example.test','synthetic','FUNCIONARIO')`, [company]);
+    await assert.rejects(pool.query(await readFile('src/db/migrations/019_cadastros_sem_duplicidade.up.sql', 'utf8')), /Migration 019 bloqueada/);
+    await pool.query('ROLLBACK');
+    assert.equal((await pool.query("SELECT count(*) FROM pg_proc WHERE proname='normalizar_cadastro'")).rows[0].count, '0');
+    ok('DUPLICATES migration refuses historical conflicts and rolls back without changing data');
     const migrate = (): void => {
       const result = spawnSync(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'src/db/migrate.ts', 'up'], {
         env: { ...process.env, DATABASE_URL: `postgres://postgres:${password}@127.0.0.1:${port}/postgres?sslmode=disable` }, encoding: 'utf8', windowsHide: true,
@@ -392,6 +406,77 @@ async function main(): Promise<void> {
     assert.equal(afterRace.itinerario!.paradas[0]!.estado, 'EM_DESLOCAMENTO');
     assert.equal(afterRace.valorEstimado, '38.00');
     ok('ROUTE-03 execution during external planning is not overwritten or blocked by database locks');
+    const providers = new PrestadorUnificadoService(pool, new AuditRepository(pool));
+    const driverRegistration = prestadorUnificadoCreateSchema.parse({
+      acesso: { nome: 'Motorista temporario', email: 'driver.temp@example.test', telefone: '(34) 99999-1234',
+        senha: '123456', formaAtivacao: 'SENHA_TEMPORARIA' },
+      prestador: { cpf: '11144477735', numeroCnh: 'TEMP12345', validadeCnh: '2035-01-01', reutilizarDadosAcesso: true },
+      veiculo: { modo: 'NOVO', dados: { placa: 'qat-1b23', marca: 'Teste', modelo: 'Teste', cor: 'Prata', ano: 2026, capacidadePassageiros: 4 } },
+    });
+    const registeredDriver = await providers.create(manager, driverRegistration, {});
+    const loginTokens = new TokenService({ jwtAccessSecret: randomUUID() + randomUUID(), jwtRefreshSecret: randomUUID() + randomUUID(),
+      jwtAccessExpiresInSeconds: 900, jwtRefreshExpiresInSeconds: 3600 }, context => authRepository.accessAllowed(context));
+    const loginApp = express(); loginApp.use(express.json());
+    const passwords = new PasswordService(pool, pino({ level: 'silent' }));
+    loginApp.use('/auth', createAuthRouter(new AuthService(authRepository, loginTokens), loginTokens, passwords,
+      new ManagerLoginService(pool, loginTokens, 900)));
+    loginApp.get('/protected', createAuthenticate(loginTokens), (_req, res) => res.json({ ok: true }));
+    loginApp.use('/cadastros', createAuthenticate(tokens), createPrestadorUnificadoRouter(providers));
+    loginApp.use(createErrorHandler(pino({ level: 'silent' })));
+    await request(loginApp).post('/auth/gestor/login').send({ email: driverRegistration.acesso.email, senha: '123456' }).expect(401);
+    const temporary = await request(loginApp).post('/auth/login')
+      .send({ empresa: 'test_0', email: 'DRIVER.TEMP@example.test', senha: '123456' }).expect(200);
+    assert.equal(temporary.body.data.usuario.perfil, 'PRESTADOR');
+    assert.equal(temporary.body.data.usuario.deveAlterarSenha, true);
+    await request(loginApp).get('/protected').set('Authorization', `Bearer ${temporary.body.data.accessToken}`).expect(403);
+    await request(loginApp).post('/auth/senha').set('Authorization', `Bearer ${temporary.body.data.accessToken}`)
+      .send({ senhaAtual: '123456', novaSenha: '654321' }).expect(204);
+    await request(loginApp).post('/auth/login').send({ empresa: 'TEST_0', email: driverRegistration.acesso.email, senha: '123456' }).expect(401);
+    const personal = await request(loginApp).post('/auth/login').send({ empresa: 'TEST_0', email: driverRegistration.acesso.email, senha: '654321' }).expect(200);
+    assert.equal(personal.body.data.usuario.deveAlterarSenha, false);
+    await request(loginApp).get('/protected').set('Authorization', `Bearer ${personal.body.data.accessToken}`).expect(200);
+    await providers.update(manager, registeredDriver.id, { acesso: { senha: '112233' } }, {});
+    const resetDriver = await request(loginApp).post('/auth/login').send({ empresa: 'TEST_0', email: driverRegistration.acesso.email, senha: '112233' }).expect(200);
+    assert.equal(resetDriver.body.data.usuario.deveAlterarSenha, true);
+    await request(loginApp).get('/protected').set('Authorization', `Bearer ${personal.body.data.accessToken}`).expect(401);
+    ok('DRIVER-LOGIN temporary password, correct company endpoint, mandatory change, administrator reset and session revocation');
+
+    for (const [field, duplicate] of [['nome', '  MOTORISTA   TEMPORARIO  '], ['telefone', '+55 34 99999-1234'], ['email', 'DRIVER.TEMP@EXAMPLE.TEST']] as const) {
+      const candidate = structuredClone(driverRegistration);
+      candidate.acesso.nome = 'Outro motorista'; candidate.acesso.email = 'other.driver@example.test'; candidate.acesso.telefone = '34988881234';
+      candidate.acesso[field] = duplicate;
+      const before = await pool.query('SELECT count(*) FROM admtaxi.usuarios WHERE empresa_id=$1', [company]);
+      const denied = await request(loginApp).post('/cadastros/prestadores').set('Authorization', bearer(manager)).send(candidate).expect(409);
+      assert.equal(denied.body.erro.codigo, 'REGISTRO_DUPLICADO');
+      assert.equal(denied.body.erro.detalhes.campos[0].campo, field);
+      assert(denied.body.erro.mensagem.includes('empresa'));
+      assert.equal((await pool.query('SELECT count(*) FROM admtaxi.usuarios WHERE empresa_id=$1', [company])).rows[0].count, before.rows[0].count);
+    }
+    await providers.update(manager, registeredDriver.id, { acesso: { ativo: false } }, {});
+    await assert.rejects(pool.query(`INSERT INTO admtaxi.usuarios(empresa_id,nome,email,telefone,senha_hash,perfil)
+      VALUES($1,'Novo nome','new.duplicate@example.test','34999991234','synthetic','PRESTADOR')`, [company]), { code: '23505' });
+    await pool.query(`INSERT INTO admtaxi.usuarios(empresa_id,nome,email,telefone,senha_hash,perfil)
+      VALUES($1,'Motorista temporario','driver.temp@example.test','34999991234','synthetic','PRESTADOR')`, [otherCompany]);
+    const plateDuplicate = await request(loginApp).post('/cadastros/prestadores').set('Authorization', bearer(manager)).send({
+      ...driverRegistration, acesso: { ...driverRegistration.acesso, nome: 'Placa duplicada', email: 'plate@example.test', telefone: '34988881234' },
+      prestador: { ...driverRegistration.prestador, cpf: '52998224725', numeroCnh: 'OTHER12345' },
+    }).expect(409);
+    assert.equal(plateDuplicate.body.erro.detalhes.campos[0].campo, 'placa');
+    assert.equal((await pool.query("SELECT count(*) FROM admtaxi.usuarios WHERE email='plate@example.test'")).rows[0].count, '0');
+    for (const table of ['usuarios', 'prestadores', 'funcionarios']) {
+      const ids = (await pool.query(`SELECT id FROM admtaxi.${table} WHERE empresa_id=$1 ORDER BY id LIMIT 2`, [company])).rows.map(row => row.id);
+      for (const field of ['nome', 'email', 'telefone']) {
+        const value = field === 'nome' ? `Nome exclusivo ${table}` : field === 'email' ? `${table}@example.test` : '31912345678';
+        await pool.query(`UPDATE admtaxi.${table} SET ${field}=$3 WHERE empresa_id=$1 AND id=$2`, [company, ids[0], value]);
+        await assert.rejects(pool.query(`UPDATE admtaxi.${table} SET ${field}=$3 WHERE empresa_id=$1 AND id=$2`, [company, ids[1], value]), { code: '23505' });
+        await pool.query(`UPDATE admtaxi.${table} SET ${field}=$3 WHERE empresa_id=$1 AND id=$2`, [company, ids[0], value]);
+      }
+    }
+    const concurrent = await Promise.allSettled([0, 1].map(i => pool!.query(`INSERT INTO admtaxi.usuarios(empresa_id,nome,email,telefone,senha_hash,perfil)
+      VALUES($1,$2,$3,'31988881234','synthetic','FUNCIONARIO')`, [company, `Concorrente ${i}`, `concurrent${i}@example.test`])));
+    assert.equal(concurrent.filter(r => r.status === 'fulfilled').length, 1);
+    assert.equal(concurrent.filter(r => r.status === 'rejected').length, 1);
+    ok('DUPLICATES normalized names/phones/emails/plates, inactive records, tenant scope, unchanged edits, atomic rollback and concurrent writes');
     console.log(JSON.stringify({ result: 'passed', checks, database: 'temporary PostgreSQL 18, loopback only', remoteDatabaseUsed: false }));
   } finally {
     await pool?.end();

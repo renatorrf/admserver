@@ -93,6 +93,16 @@ export function createErrorHandler(logger: Logger, auditDatabase?: Pick<Pool, 'q
           setores_empresa_codigo_unico: { campo: 'codigo', mensagem: 'Este codigo de setor ja esta cadastrado.' },
           empresas_codigo_acesso_key: { campo: 'codigoAcesso', mensagem: 'Este codigo de acesso ja esta cadastrado.' },
         };
+        const entities = { usuarios: 'usuario', prestadores: 'prestador', funcionarios: 'funcionario', veiculos: 'veiculo' };
+        const fieldLabels = { nome: 'nome', telefone: 'telefone', email: 'e-mail', placa: 'placa' };
+        for (const [table, label] of Object.entries(entities)) {
+          for (const [field, fieldLabel] of Object.entries(fieldLabels)) {
+            duplicateFields[`${table}_empresa_${field}_normalizado_unico`] = { campo: field,
+              mensagem: `Ja existe outro ${label} com ${field === 'placa' ? 'esta' : 'este'} ${fieldLabel} nesta empresa. Verifique tambem os cadastros inativos.` };
+          }
+        }
+        duplicateFields.usuarios_empresa_email_unico = { campo: 'email', mensagem: 'Este e-mail ja possui um acesso nesta empresa. Edite o cadastro existente ou utilize outro e-mail. Verifique tambem os inativos.' };
+        duplicateFields.veiculos_empresa_placa_unico = { campo: 'placa', mensagem: 'Esta placa ja esta cadastrada nesta empresa. Selecione o veiculo existente ou revise a placa. Verifique tambem os inativos.' };
         const detail = duplicateFields[constraint];
         response.status(409).json({
           erro: {
