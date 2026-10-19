@@ -1,16 +1,20 @@
 import { Router } from 'express';
 
 import { asyncHandler } from '../../shared/http/async-handler';
-import { getValidatedQuery, validateQuery } from '../../shared/validation/validate';
+import { getValidatedParams, getValidatedQuery, validateParams, validateQuery } from '../../shared/validation/validate';
 import { authorize, requireAuthContext } from '../auth/auth.middleware';
 import {
-  funcionarioLookupSchema, funcionarioSearchSchema, prestadorSearchSchema, mapLocationQuerySchema,
+  funcionarioLookupSchema, funcionarioSearchSchema, prestadorSearchSchema, mapLocationQuerySchema, employeeDestinationParamsSchema,
   type FuncionarioLookupQuery, type FuncionarioSearchQuery, type PrestadorSearchQuery,
 } from './operacao.schemas';
 import type { OperacaoService } from './operacao.service';
 
 export function createOperacaoRouter(service: OperacaoService): Router {
   const router = Router();
+  router.get('/funcionarios/:id/destinos-recentes', authorize('GERENTE', 'GESTOR'),
+    validateParams(employeeDestinationParamsSchema), validateQuery(mapLocationQuerySchema), asyncHandler(async (request, response) => {
+      response.json({ data: await service.recentEmployeeDestinations(requireAuthContext(request), getValidatedParams<{ id: string }>(request).id) });
+    }));
   router.get('/endereco-empresa', authorize('GERENTE', 'GESTOR'), validateQuery(mapLocationQuerySchema), asyncHandler(async (request, response) => {
     response.json({ data: await service.getCompanyAddress(requireAuthContext(request)) });
   }));

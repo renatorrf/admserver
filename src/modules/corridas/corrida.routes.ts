@@ -25,9 +25,16 @@ import type { CorridaService } from './corrida.service';
 import { itineraryActionSchema, itineraryEditSchema } from './itinerary';
 import type { RideRouteService } from './route.service';
 import { unavailable } from '../../shared/errors/app-error';
+import { optimizeRouteSchema, type RideRouteOptimizer } from './route-optimizer';
 
-export function createCorridaRouter(service: CorridaService, routes?: RideRouteService): Router {
+export function createCorridaRouter(service: CorridaService, routes?: RideRouteService, optimizer?: RideRouteOptimizer): Router {
   const router = Router();
+  router.post('/:id/otimizar-trajeto', authorize('PRESTADOR'), validateParams(uuidParamsSchema), validateBody(optimizeRouteSchema), asyncHandler(async (request, response) => {
+    if (!optimizer) throw unavailable('Calculo de trajeto indisponivel.');
+    const { id } = getValidatedParams<UuidParams>(request);
+    response.json({ data: await service.optimizeRoute(requireAuthContext(request), id,
+      optimizeRouteSchema.parse(request.body), optimizer, auditMetadataFromRequest(request)) });
+  }));
   router.get('/:id/rota', authorize('PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR'), validateParams(uuidParamsSchema), asyncHandler(async (request, response) => {
     const { id } = getValidatedParams<UuidParams>(request);
     const ride = await service.get(requireAuthContext(request), id);

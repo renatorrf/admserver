@@ -23,7 +23,7 @@ export class ItineraryRepository {
   }
 
   async replace(db: QueryExecutor, empresaId: string, corridaId: string, input: ItineraryInput): Promise<void> {
-    // Caller holds the parent ride lock and permits this only before acceptance.
+    // Caller holds the parent ride lock; edits precede acceptance, route optimization precedes execution.
     const existing = await db.query<{ id: string }>(
       'SELECT id FROM admtaxi.corrida_paradas WHERE empresa_id=$1 AND corrida_id=$2', [empresaId, corridaId]);
     const ids = input.paradas.map(p => p.id);

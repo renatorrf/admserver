@@ -8,6 +8,7 @@ import EmbeddedPostgres from 'embedded-postgres';
 import { Pool } from 'pg';
 import { AuditRepository } from '../src/modules/auditoria/audit.repository';
 import { CorridaService } from '../src/modules/corridas/corrida.service';
+import { RideRouteOptimizer } from '../src/modules/corridas/route-optimizer';
 import { corridaCreateSchema } from '../src/modules/corridas/corrida.schemas';
 import type { AuthContext } from '../src/modules/auth/auth.types';
 import type { ItineraryAction } from '../src/modules/corridas/itinerary';
@@ -212,6 +213,41 @@ async function main(): Promise<void> {
     await service.accept(driver, a.id, { veiculoId: vehicles[winningIndex] }, {});
     assert.equal((await pool.query("SELECT COUNT(*) FROM admtaxi.corrida_eventos WHERE corrida_id=$1 AND tipo_evento='CORRIDA_ACEITA'", [a.id])).rows[0].count, '1');
     ok('TRIP-12 concurrent accept and same-driver retry');
+    const optimizationPosition = { latitude: -18.91, longitude: -48.27, versao: ride.itinerarioVersao! };
+    let optimizationCalls = 0;
+    let beforePlan: (() => Promise<void>) | undefined;
+    let stopOrder = [stops[1]!.id, stops[3]!.id, stops[0]!.id, stops[2]!.id];
+    const optimizer = new RideRouteOptimizer('synthetic-key', async () => {
+      optimizationCalls++;
+      await beforePlan?.();
+      const actions = stopOrder.flatMap(id => ride.itinerario!.participantes.flatMap((p, shipment_index) =>
+        p.embarqueId === id ? [{ type: 'pickup', shipment_index }] : p.desembarqueId === id ? [{ type: 'delivery', shipment_index }] : []));
+      return new Response(JSON.stringify({ features: [{ properties: { agent_index: 0, actions } }] }));
+    });
+    await assert.rejects(service.optimizeRoute(manager, a.id, optimizationPosition, optimizer, {}), { statusCode: 403 });
+    await assert.rejects(service.optimizeRoute(drivers[1 - winningIndex]!, a.id, optimizationPosition, optimizer, {}));
+    await assert.rejects(service.optimizeRoute({ ...driver, empresaId: otherCompany }, a.id, optimizationPosition, optimizer, {}));
+    assert.equal(optimizationCalls, 0);
+    const originalParticipants = ride.itinerario!.participantes;
+    const optimized = await Promise.allSettled([service.optimizeRoute(driver, a.id, optimizationPosition, optimizer, {}),
+      service.optimizeRoute(driver, a.id, optimizationPosition, optimizer, {})]);
+    assert.equal(optimized.filter(r => r.status === 'fulfilled').length, 1);
+    assert.equal(optimized.filter(r => r.status === 'rejected').length, 1);
+    ride = await service.get(manager, a.id);
+    assert.deepEqual(ride.itinerario!.paradas.map(p => p.id), stopOrder);
+    assert.deepEqual(ride.itinerario!.participantes, originalParticipants);
+    assert.equal(ride.valorEstimado, '20.00');
+    assert.equal((await pool.query("SELECT COUNT(*) FROM admtaxi.corrida_eventos WHERE corrida_id=$1 AND tipo_evento='TRAJETO_CALCULADO'", [a.id])).rows[0].count, '1');
+    assert.equal((await pool.query("SELECT COUNT(*) FROM admtaxi.auditoria WHERE entidade_id=$1 AND acao='CALCULAR_TRAJETO'", [a.id])).rows[0].count, '1');
+    ok('ROUTE-01 assigned-driver authorization, tenant isolation, concurrency and unchanged individual costs');
+    stopOrder = stops.map(p => p.id);
+    beforePlan = async () => { await pool!.query('UPDATE admtaxi.veiculos SET capacidade_passageiros=1 WHERE id=$1', [vehicles[winningIndex]]); };
+    await assert.rejects(service.optimizeRoute(driver, a.id, { ...optimizationPosition, versao: ride.itinerarioVersao! }, optimizer, {}), { statusCode: 409 });
+    assert.deepEqual((await service.get(manager, a.id)).itinerario!.paradas.map(p => p.id), [stops[1]!.id, stops[3]!.id, stops[0]!.id, stops[2]!.id]);
+    beforePlan = undefined;
+    await pool.query('UPDATE admtaxi.veiculos SET capacidade_passageiros=4 WHERE id=$1', [vehicles[winningIndex]]);
+    ride = await service.optimizeRoute(driver, a.id, { ...optimizationPosition, versao: ride.itinerarioVersao! }, optimizer, {});
+    ok('ROUTE-02 capacity rechecked after external call and failed update rolled back');
     await assert.rejects(service.editItinerary(manager, a.id, ride.itinerarioVersao!, input.itinerario!, {}), { statusCode: 409 });
     await assert.rejects(service.board(driver, a.id, {}), { statusCode: 409 });
     await assert.rejects(service.finish(driver, a.id, { valorFinal: '20.00' }, {}), { statusCode: 409 });
@@ -222,6 +258,11 @@ async function main(): Promise<void> {
       for (const [acao, funcionarioId] of actions) {
         const command: ItineraryAction = { chave: randomUUID(), versao: ride.itinerarioVersao!, paradaId: stops[i]!.id, acao, funcionarioId };
         ride = await service.executeItinerary(driver, a.id, command, {});
+        if (i === 0 && acao === 'INICIAR') {
+          const calls = optimizationCalls;
+          await assert.rejects(service.optimizeRoute(driver, a.id, { ...optimizationPosition, versao: ride.itinerarioVersao! }, optimizer, {}), { statusCode: 409 });
+          assert.equal(optimizationCalls, calls);
+        }
         const retry = await service.executeItinerary(driver, a.id, command, {});
         assert.equal(retry.itinerarioVersao, ride.itinerarioVersao);
         await assert.rejects(service.executeItinerary(driver, a.id, { ...command, acao: acao === 'CHEGAR' ? 'INICIAR' : 'CHEGAR' }, {}), { statusCode: 409 });
@@ -315,6 +356,42 @@ async function main(): Promise<void> {
     const secondaryPreview = await billing.preview(manager, { ...billingInput, centroCustoId: secondCenter });
     assert.equal(secondaryPreview.length, 1); assert.equal(secondaryPreview[0]!.id, a.id); assert.equal(secondaryPreview[0]!.valorFinal, '21.00');
     ok('COST-04 legacy insert compatibility, no retrospective splitting and secondary-center filter');
+    assert.equal((await operations.recentEmployeeDestinations(manager, employeeIds[0]!))[0]?.descricao, stops[2]!.descricao);
+    assert.equal((await operations.recentEmployeeDestinations(manager, employeeIds[1]!))[0]?.descricao, stops[3]!.descricao);
+    assert.deepEqual(await operations.recentEmployeeDestinations({ ...manager, empresaId: otherCompany }, employeeIds[0]!), []);
+    const limitedHistory = new OperacaoRepository(pool, { resolve: async () => ({ kind: 'GERENTE', empresaId: company,
+      usuarioId: manager.usuarioId, setorIds: [sector], centroCustoIds: [center] }) });
+    assert.deepEqual(await limitedHistory.recentEmployeeDestinations({ ...manager, perfil: 'GERENTE' }, employeeIds[1]!), []);
+    for (let i = 0; i < 8; i++) {
+      await pool.query(`INSERT INTO admtaxi.corridas(empresa_id,solicitante_usuario_id,funcionario_id,centro_custo_id,tipo,
+        origem_descricao,destino_descricao,destino_latitude,destino_longitude,criado_em)
+        VALUES($1,$2,$3,$4,'IMEDIATA','Origem teste',$5,$6,$6,CURRENT_TIMESTAMP + ($7 || ' seconds')::interval)`,
+      [company, manager.usuarioId, employeeIds[4], center, `Destino ${i % 7}`, i % 7, i]);
+    }
+    const recent = await operations.recentEmployeeDestinations(manager, employeeIds[4]!);
+    assert.deepEqual(recent.map(a => a.descricao), ['Destino 0', 'Destino 6', 'Destino 5', 'Destino 4', 'Destino 3']);
+    assert.equal(recent[0]?.latitude, 0);
+    await pool.query(`UPDATE admtaxi.corridas SET status='CANCELADA', cancelada_em=CURRENT_TIMESTAMP, motivo_cancelamento='Cancelamento sintetico'
+      WHERE empresa_id=$1 AND funcionario_id=$2 AND destino_descricao='Destino 0'`, [company, employeeIds[4]]);
+    assert.equal((await operations.recentEmployeeDestinations(manager, employeeIds[4]!))[0]?.descricao, 'Destino 6');
+    await pool.query('UPDATE admtaxi.funcionarios SET ativo=FALSE WHERE id=$1', [employeeIds[4]]);
+    assert.deepEqual(await operations.recentEmployeeDestinations(manager, employeeIds[4]!), []);
+    ok('RECENT-DESTINATIONS individual stops, legacy, deduplication, ordering/limit, zero coordinates, tenant/scope/status');
+    const racingRide = await service.accept(driver, legacyCreated.id, { veiculoId: vehicles[winningIndex] }, {});
+    const racingOptimizer = new RideRouteOptimizer('synthetic-key', async () => {
+      await service.executeItinerary(driver, racingRide.id, { chave: randomUUID(), versao: racingRide.itinerarioVersao!,
+        paradaId: racingRide.itinerario!.paradas[0]!.id, acao: 'INICIAR' }, {});
+      return new Response(JSON.stringify({ features: [{ properties: { agent_index: 0, actions: [
+        { type: 'pickup', shipment_index: 0 }, { type: 'pickup', shipment_index: 1 },
+        { type: 'delivery', shipment_index: 0 }, { type: 'delivery', shipment_index: 1 },
+      ] } }] }));
+    });
+    await assert.rejects(service.optimizeRoute(driver, racingRide.id, { ...optimizationPosition, versao: racingRide.itinerarioVersao! }, racingOptimizer, {}), { statusCode: 409 });
+    const afterRace = await service.get(manager, racingRide.id);
+    assert.equal(afterRace.status, 'EM_DESLOCAMENTO');
+    assert.equal(afterRace.itinerario!.paradas[0]!.estado, 'EM_DESLOCAMENTO');
+    assert.equal(afterRace.valorEstimado, '38.00');
+    ok('ROUTE-03 execution during external planning is not overwritten or blocked by database locks');
     console.log(JSON.stringify({ result: 'passed', checks, database: 'temporary PostgreSQL 18, loopback only', remoteDatabaseUsed: false }));
   } finally {
     await pool?.end();

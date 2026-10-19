@@ -75,6 +75,47 @@ export class OperacaoRepository {
       logradouro: null, numero: null, bairro: null, cidade: null, estado: null };
   }
 
+  async recentEmployeeDestinations(auth: AuthContext, employeeId: string): Promise<EnderecoSugestao[]> {
+    const scope = await this.scopeResolver.resolve(auth);
+    const values: unknown[] = [auth.empresaId, employeeId];
+    const conditions = ['f.empresa_id = $1', 'f.id = $2', 'f.ativo = TRUE', 'cc.ativo = TRUE', 's.ativo = TRUE'];
+    addCenterScope(conditions, values, scope, 'f.centro_custo_id');
+    const historyScope = scope.kind === 'GERENTE' ? `AND cp.centro_custo_id = ANY($3::uuid[])` : '';
+    const legacyScope = scope.kind === 'GERENTE' ? `AND c.centro_custo_id = ANY($3::uuid[])` : '';
+    // The individual drop-off is authoritative; legacy trips have only a shared destination.
+    const result = await this.database.query<{ descricao: string; latitude: string; longitude: string }>(`
+      WITH funcionario AS (
+        SELECT f.id FROM admtaxi.funcionarios f
+        JOIN admtaxi.centros_custo cc ON cc.empresa_id=f.empresa_id AND cc.id=f.centro_custo_id
+        JOIN admtaxi.setores s ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id
+        WHERE ${conditions.join(' AND ')}
+      ), destinos AS (
+        SELECT p.descricao, p.latitude, p.longitude, c.criado_em
+        FROM admtaxi.corrida_participacoes cp
+        JOIN funcionario f ON f.id=cp.funcionario_id
+        JOIN admtaxi.corridas c ON c.empresa_id=cp.empresa_id AND c.id=cp.corrida_id
+        JOIN admtaxi.corrida_paradas p ON p.empresa_id=cp.empresa_id AND p.corrida_id=cp.corrida_id AND p.id=cp.desembarque_id
+        WHERE cp.empresa_id=$1 AND cp.estado NOT IN ('AUSENTE','CANCELADO')
+          AND c.status NOT IN ('CANCELADA','RECUSADA') ${historyScope}
+        UNION ALL
+        SELECT c.destino_descricao, c.destino_latitude, c.destino_longitude, c.criado_em
+        FROM admtaxi.corridas c
+        JOIN funcionario f ON (c.funcionario_id=f.id OR EXISTS (
+          SELECT 1 FROM admtaxi.corrida_paradas p WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id=f.id))
+        WHERE c.empresa_id=$1 AND c.status NOT IN ('CANCELADA','RECUSADA') ${legacyScope}
+          AND NOT EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes cp WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id)
+      ), unicos AS (
+        SELECT DISTINCT ON (lower(btrim(descricao)), latitude, longitude) descricao, latitude, longitude, criado_em
+        FROM destinos WHERE char_length(btrim(descricao)) >= 3 AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180
+        ORDER BY lower(btrim(descricao)), latitude, longitude, criado_em DESC
+      ) SELECT descricao, latitude::text, longitude::text FROM unicos ORDER BY criado_em DESC, descricao, latitude, longitude LIMIT 5
+    `, values);
+    return result.rows.map(row => ({
+      id: `recente:${row.latitude}:${row.longitude}:${row.descricao}`, descricao: row.descricao,
+      latitude: Number(row.latitude), longitude: Number(row.longitude), logradouro: null, numero: null, bairro: null, cidade: null, estado: null,
+    }));
+  }
+
   async listSectors(auth: AuthContext): Promise<SetorLookup[]> {
     const scope = await this.scopeResolver.resolve(auth);
     const values: unknown[] = [auth.empresaId];

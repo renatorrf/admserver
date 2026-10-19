@@ -20,6 +20,7 @@ import { assertTransition, isActiveRide } from './state-machine';
 import { employeeRide } from './corrida-visibility';
 import { advanceItinerary, itineraryResolved, itinerarySchema, moneyCents, passengerTotal, type ItineraryAction, type ItineraryInput } from './itinerary';
 import { commandHash, ItineraryRepository } from './itinerary.repository';
+import { assertRouteNotStarted, type OptimizeRouteInput, type RideRouteOptimizer } from './route-optimizer';
 import type {
   CorridaEventoRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida,
 } from './corrida.types';
@@ -484,6 +485,41 @@ export class CorridaService {
         'Itinerario atualizado antes do aceite.', { versao: version + 1 });
       await this.audit.record(client, { ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
         entidade: 'corrida', entidadeId: id, acao: 'EDITAR_ITINERARIO', dadosAnteriores: previous, dadosNovos: input });
+      return updated;
+    }), ride => this.notifications?.publishItineraryUpdate?.(ride));
+  }
+
+  async optimizeRoute(auth: AuthContext, id: string, input: OptimizeRouteInput, optimizer: RideRouteOptimizer, metadata: AuditMetadata): Promise<CorridaRecord> {
+    this.requireProvider(auth);
+    const store = new ItineraryRepository();
+    const initial = await withTransaction(this.database, async client => {
+      const ride = await this.requireLockedRide(client, auth, id);
+      const provider = await this.requireProviderContext(client, auth, true);
+      if (ride.prestadorId !== provider.id) throw forbidden();
+      const snapshot = await store.load(client, auth.empresaId, id, ride.itinerarioVersao ?? 0);
+      assertRouteNotStarted(ride, snapshot, input.versao);
+      const vehicle = await client.query<{ capacidade: number }>(
+        'SELECT capacidade_passageiros AS capacidade FROM admtaxi.veiculos WHERE empresa_id=$1 AND id=$2 AND ativo=TRUE',
+        [auth.empresaId, ride.veiculoId]);
+      if (!vehicle.rows[0]?.capacidade) throw invalidReference('Veiculo indisponivel para calcular o trajeto.');
+      return { ride, snapshot, capacity: vehicle.rows[0].capacidade };
+    });
+    // The external request must not hold ride/provider database locks.
+    const candidate = await optimizer.optimize(initial.snapshot, input, initial.capacity);
+    return this.withRealtime(withTransaction(this.database, async client => {
+      const ride = await this.requireLockedRide(client, auth, id);
+      const provider = await this.requireProviderContext(client, auth, true);
+      if (ride.prestadorId !== provider.id) throw forbidden();
+      const previous = await store.load(client, auth.empresaId, id, ride.itinerarioVersao ?? 0);
+      assertRouteNotStarted(ride, previous, input.versao);
+      if (ride.veiculoId !== initial.ride.veiculoId) throw conflict('O veiculo foi alterado. Calcule novamente.');
+      await store.replace(client, auth.empresaId, id, candidate);
+      const updated = await this.requireLockedRide(client, auth, id);
+      await store.assertCapacity(client, auth.empresaId, id, ride.veiculoId!, candidate.participantes.length, updated.itinerarioVersao!);
+      await this.repository.createEvent(client, auth.empresaId, id, auth.usuarioId, 'TRAJETO_CALCULADO', ride.status, ride.status,
+        'Trajeto calculado a partir da localizacao do motorista.', { versao: input.versao + 1 });
+      await this.audit.record(client, { ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
+        entidade: 'corrida', entidadeId: id, acao: 'CALCULAR_TRAJETO', dadosAnteriores: previous, dadosNovos: candidate });
       return updated;
     }), ride => this.notifications?.publishItineraryUpdate?.(ride));
   }

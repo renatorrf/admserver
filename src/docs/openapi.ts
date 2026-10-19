@@ -534,6 +534,12 @@ export const openApiDocument = {
         responses: { '200': { description: 'Localizacao padrao, sem dados administrativos da empresa' }, '401': { description: 'Autenticacao necessaria' } },
       },
     },
+    '/operacao/funcionarios/{id}/destinos-recentes': {
+      get: { tags: ['Operacao'], summary: 'Ultimos cinco destinos distintos do funcionario', security: bearerSecurity,
+        description: 'GESTOR ou GERENTE no escopo atual do funcionario e do centro historico. Empresa exclusivamente do token. Usa desembarque individual; corridas antigas sem participacoes usam destino compartilhado. Exclui corridas canceladas/recusadas e participantes ausentes/cancelados. Nao registra rascunhos.',
+        parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: { '200': { description: 'Lista de EnderecoSugestao, mais recentes primeiro; vazia quando indisponivel no escopo' }, '403': { description: 'Perfil nao permitido' } } },
+    },
     '/operacao/endereco-empresa': {
       get: {
         tags: ['Operacao'], summary: 'Sugestao de destino da empresa autenticada', security: bearerSecurity,
@@ -864,6 +870,23 @@ export const openApiDocument = {
           },
         } } } },
         responses: { '200': { description: 'Snapshot persistido' }, '409': { description: 'Estado, chave ou versao conflitante' }, '422': { description: 'Dados invalidos' } },
+      },
+    },
+    '/corridas/{id}/otimizar-trajeto': {
+      parameters: [idParameter],
+      post: {
+        tags: ['Corridas'], security: bearerSecurity, summary: 'Otimiza a sequencia a partir do GPS do motorista',
+        description: 'Somente o prestador atribuido, apos o aceite e antes de executar qualquer parada. Usa Geoapify Route Planner, preserva participantes, enderecos e valores, valida precedencia e lotacao. Conflitos de versao e falhas do provedor nao alteram o itinerario.',
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', additionalProperties: false, required: ['versao', 'latitude', 'longitude'], properties: {
+            versao: { type: 'integer', minimum: 1 }, latitude: { type: 'number', minimum: -90, maximum: 90 },
+            longitude: { type: 'number', minimum: -180, maximum: 180 },
+          },
+        } } } },
+        responses: { '200': { description: 'Corrida com itinerario reordenado e versao incrementada' },
+          '403': { description: 'Prestador nao atribuido ou perfil sem permissao' }, '404': { description: 'Corrida sem acesso' },
+          '409': { description: 'Versao, estado ou lotacao conflitante' }, '422': { description: 'Dados invalidos' },
+          '503': { description: 'Calculo indisponivel; itinerario original preservado' } },
       },
     },
     '/corridas/{id}/rota': {

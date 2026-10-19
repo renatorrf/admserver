@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { paginationSchema } from '../../shared/pagination/pagination';
 
 export const mapLocationQuerySchema = z.object({}).strict();
+export const employeeDestinationParamsSchema = z.object({ id: z.string().uuid('Funcionario invalido.') }).strict();
 
 export const funcionarioLookupSchema = z.object({
   centroCustoId: z.string().uuid('Centro de custo invalido.').optional(),
