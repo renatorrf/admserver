@@ -4,8 +4,8 @@ import path from 'node:path';
 import argon2 from 'argon2';
 
 const password = process.env.MASTER_BOOTSTRAP_PASSWORD;
-if (!password || password.length < 12) {
-  throw new Error('Defina MASTER_BOOTSTRAP_PASSWORD com ao menos 12 caracteres apenas nesta execucao.');
+if (!password || password.length < 6) {
+  throw new Error('Defina MASTER_BOOTSTRAP_PASSWORD com ao menos 6 caracteres apenas nesta execucao.');
 }
 
 const envPath = path.resolve('.env');

@@ -114,6 +114,7 @@ export class FuncionarioUnificadoService {
   ): Promise<void> {
     const values: unknown[] = [empresaId, userId];
     const assignments: string[] = [];
+    if (passwordHash) assignments.push('deve_alterar_senha = TRUE');
     const employee = input.funcionario;
     for (const [column, value] of [
       ['nome', employee?.nome], ['email', employee?.email], ['telefone', employee?.telefone],

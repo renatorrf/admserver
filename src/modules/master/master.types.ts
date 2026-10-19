@@ -2,10 +2,12 @@ export type MasterContext = {
   administradorId: string;
   usuario: string;
   deveAlterarSenha: boolean;
+  senhaVersao?: number;
 };
 
 export type MasterRecord = MasterContext & {
   nome: string;
+  email?: string | null;
   senhaHash: string;
   ativo: boolean;
   ultimoAcessoEm: Date | null;

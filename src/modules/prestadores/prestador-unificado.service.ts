@@ -199,7 +199,7 @@ export class PrestadorUnificadoService {
     const assignments = Object.entries(input).filter(([key, value]) => key !== 'senha' && value !== undefined).map(([key, value]) => {
       values.push(value); return `${columns[key]} = $${values.length}`;
     });
-    if (passwordHash) { values.push(passwordHash); assignments.push(`senha_hash = $${values.length}`); }
+    if (passwordHash) { values.push(passwordHash); assignments.push(`senha_hash = $${values.length}`, 'deve_alterar_senha = TRUE'); }
     if (assignments.length) await client.query(`UPDATE admtaxi.usuarios SET ${assignments.join(', ')} WHERE empresa_id = $1 AND id = $2`, values);
   }
 

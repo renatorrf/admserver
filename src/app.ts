@@ -18,6 +18,7 @@ import type { TokenService } from './modules/auth/token-service';
 import { AppError } from './shared/errors/app-error';
 import { createErrorHandler, notFoundHandler } from './shared/http/error-handler';
 import { authenticatedRateKey } from './shared/http/rate-key';
+import type { PasswordService } from './modules/auth/password.service';
 
 export type AppDependencies = {
   config: AppConfig;
@@ -29,6 +30,7 @@ export type AppDependencies = {
   operationalRouter?: Router;
   provisioningRouter?: Router;
   masterRouter?: Router;
+  passwords?: PasswordService;
 };
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -85,7 +87,7 @@ export function createApp(dependencies: AppDependencies): Express {
     }
   });
 
-  app.use('/api/v1/auth', createAuthRouter(auth, tokens));
+  app.use('/api/v1/auth', createAuthRouter(auth, tokens, dependencies.passwords));
   if (masterRouter) app.use('/api/v1/master', masterRouter);
   if (provisioningRouter) app.use('/api/v1/provisionamento', provisioningRouter);
   if (operationalRouter) app.use('/api/v1', operationalRouter);

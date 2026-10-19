@@ -105,6 +105,42 @@ export const openApiDocument = {
     { name: 'Paineis' }, { name: 'Faturamentos' }, { name: 'Master' },
   ],
   paths: {
+    '/master/auth/senha/recuperar': {
+      post: { tags: ['Master'], summary: 'Solicitar recuperacao master por email (resposta generica)',
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
+          required: ['email'], properties: { email: { type: 'string', format: 'email', maxLength: 254 } } } } } },
+        responses: { 200: { description: 'Solicitacao recebida sem confirmar a conta' }, 429: { description: 'Limite de tentativas' }, 503: { description: 'SMTP ou URL master nao configurado' } } },
+    },
+    '/master/auth/senha/redefinir': {
+      post: { tags: ['Master'], summary: 'Redefinir senha master e revogar sessoes e links',
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
+          required: ['token', 'novaSenha'], properties: { token: { type: 'string', pattern: '^[a-f0-9]{64}$' }, novaSenha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 } } } } } },
+        responses: { 204: { description: 'Senha alterada; entrar novamente' }, 400: { description: 'Link invalido, expirado ou usado' }, 422: { description: 'Senha invalida ou repetida' }, 429: { description: 'Limite de tentativas' } } },
+    },
+    '/master/auth/email': {
+      post: { tags: ['Master'], summary: 'Cadastrar/alterar o proprio email com confirmacao da senha atual', security: [{ masterBearer: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
+          required: ['email', 'senhaAtual'], properties: { email: { type: 'string', format: 'email', maxLength: 254 }, senhaAtual: { type: 'string', format: 'password', minLength: 1, maxLength: 128 } } } } } },
+        responses: { 200: { description: 'Email atualizado; sessao renovada' }, 401: { description: 'Sessao ou senha incorreta' }, 409: { description: 'Email ja cadastrado' } } },
+    },
+    '/auth/senha/recuperar': {
+      post: { tags: ['Autenticacao'], summary: 'Solicitar link de uso unico por email (resposta generica)',
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
+          required: ['empresa', 'email'], properties: { empresa: { type: 'string' }, email: { type: 'string', format: 'email' } } } } } },
+        responses: { 200: { description: 'Solicitacao recebida, sem confirmar a existencia da conta' }, 429: { description: 'Limite de tentativas' }, 503: { description: 'Email nao configurado' } } },
+    },
+    '/auth/senha/redefinir': {
+      post: { tags: ['Autenticacao'], summary: 'Redefinir senha e revogar sessoes anteriores',
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
+          required: ['token', 'novaSenha'], properties: { token: { type: 'string', pattern: '^[a-f0-9]{64}$' }, novaSenha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 } } } } } },
+        responses: { 204: { description: 'Senha alterada; entrar novamente' }, 400: { description: 'Link invalido, expirado ou utilizado' }, 422: { description: 'Senha invalida ou repetida' } } },
+    },
+    '/auth/senha': {
+      post: { tags: ['Autenticacao'], summary: 'Trocar senha pessoal (permitido durante o primeiro acesso)', security: [{ bearerAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
+          required: ['senhaAtual', 'novaSenha'], properties: { senhaAtual: { type: 'string', format: 'password' }, novaSenha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 } } } } } },
+        responses: { 204: { description: 'Senha alterada; entrar novamente' }, 401: { description: 'Sessao invalida' }, 422: { description: 'Senha atual incorreta, senha nova invalida ou repetida' } } },
+    },
     '/health': {
       get: {
         tags: ['Health'],
@@ -252,7 +288,10 @@ export const openApiDocument = {
       },
       post: {
         tags: ['Master'], summary: 'Cria administrador master com senha temporaria', security: [{ masterBearer: [] }],
-        responses: { '201': { description: 'Administrador criado com troca de senha obrigatoria' }, '409': { description: 'Usuario duplicado' } },
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
+          required: ['usuario', 'nome', 'email', 'senha'], properties: { usuario: { type: 'string', minLength: 3 }, nome: { type: 'string', minLength: 2 },
+            email: { type: 'string', format: 'email', maxLength: 254 }, senha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 } } } } } },
+        responses: { '201': { description: 'Administrador criado com troca de senha obrigatoria' }, '409': { description: 'Usuario ou email duplicado' } },
       },
     },
     '/master/administradores/{id}/ativo': {
@@ -826,7 +865,7 @@ export const openApiDocument = {
               nome: { type: 'string', minLength: 2, maxLength: 150 }, email: { type: 'string', format: 'email' },
               telefone: { type: ['string', 'null'], maxLength: 20 }, ativo: { type: 'boolean' },
               formaAtivacao: { type: 'string', enum: ['SENHA_TEMPORARIA'] },
-              senha: { type: 'string', format: 'password', minLength: 12, maxLength: 128 },
+              senha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 },
             },
           },
           prestador: {
@@ -869,7 +908,7 @@ export const openApiDocument = {
         properties: {
           acesso: {
             type: 'object', additionalProperties: false, required: ['senha'],
-            properties: { senha: { type: 'string', format: 'password', minLength: 12, maxLength: 128 }, ativo: { type: 'boolean', default: true } },
+            properties: { senha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 }, ativo: { type: 'boolean', default: true } },
           },
           funcionario: { $ref: '#/components/schemas/FuncionarioUnificadoInput' },
         },
@@ -877,7 +916,7 @@ export const openApiDocument = {
       FuncionarioUnificadoUpdateInput: {
         type: 'object', minProperties: 1, additionalProperties: false,
         properties: {
-          acesso: { type: 'object', properties: { senha: { type: 'string', format: 'password', minLength: 12, maxLength: 128 }, ativo: { type: 'boolean' } } },
+          acesso: { type: 'object', properties: { senha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 }, ativo: { type: 'boolean' } } },
           funcionario: { type: 'object', description: 'Campos parciais de FuncionarioUnificadoInput, incluindo ativo.' },
         },
       },
@@ -913,7 +952,7 @@ export const openApiDocument = {
               nome: { type: 'string', minLength: 2, maxLength: 150 },
               email: { type: 'string', format: 'email' },
               telefone: { type: ['string', 'null'], maxLength: 20 },
-              senha: { type: 'string', format: 'password', minLength: 12, maxLength: 128 },
+              senha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 },
             },
           },
         },

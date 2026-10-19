@@ -1,3 +1,4 @@
+import { passwordSchema } from '../../shared/validation/password';
 import { z } from 'zod';
 
 import { paginationSchema } from '../../shared/pagination/pagination';
@@ -9,7 +10,7 @@ const accessFields = {
   telefone: optionalText(20),
   ativo: z.boolean().default(true),
   formaAtivacao: z.literal('SENHA_TEMPORARIA'),
-  senha: z.string().min(12, 'A senha deve ter ao menos 12 caracteres.').max(128),
+  senha: passwordSchema,
 };
 
 const providerFields = {

@@ -12,6 +12,8 @@ type AuthUserRow = {
   perfil: AuthUserRecord['perfil'];
   ativo: boolean;
   empresa_ativa: boolean;
+  senha_versao: number;
+  deve_alterar_senha: boolean;
 };
 
 export interface AuthRepository {
@@ -41,6 +43,8 @@ function mapUser(row: AuthUserRow | null): AuthUserRecord | null {
     perfil: row.perfil,
     ativo: row.ativo,
     empresaAtiva: row.empresa_ativa,
+    senhaVersao: row.senha_versao,
+    deveAlterarSenha: row.deve_alterar_senha,
   };
 }
 
@@ -50,8 +54,9 @@ export class PgAuthRepository implements AuthRepository {
   async accessAllowed(auth: AuthContext): Promise<boolean> {
     const result = await this.pool.query(
       `SELECT 1 FROM admtaxi.usuarios u JOIN admtaxi.empresas e ON e.id=u.empresa_id
-       WHERE u.id=$1 AND u.empresa_id=$2 AND u.perfil=$3 AND u.ativo=TRUE AND e.ativo=TRUE`,
-      [auth.usuarioId, auth.empresaId, auth.perfil],
+       WHERE u.id=$1 AND u.empresa_id=$2 AND u.perfil=$3 AND u.ativo=TRUE AND e.ativo=TRUE
+         AND u.senha_versao=$4 AND u.deve_alterar_senha=$5`,
+      [auth.usuarioId, auth.empresaId, auth.perfil, auth.senhaVersao ?? 0, auth.deveAlterarSenha ?? false],
     );
     return result.rowCount === 1;
   }
@@ -73,7 +78,7 @@ export class PgAuthRepository implements AuthRepository {
     const row = await queryOne<AuthUserRow>(
       this.pool,
       `SELECT u.id, u.empresa_id, u.nome, u.email::text AS email, u.senha_hash,
-              u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa
+              u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa, u.senha_versao, u.deve_alterar_senha
          FROM admtaxi.usuarios u
          JOIN admtaxi.empresas e ON e.id = u.empresa_id
         WHERE u.email = $1 AND e.codigo_acesso = $2
@@ -87,7 +92,7 @@ export class PgAuthRepository implements AuthRepository {
     const row = await queryOne<AuthUserRow>(
       this.pool,
       `SELECT u.id, u.empresa_id, u.nome, u.email::text AS email, u.senha_hash,
-              u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa
+              u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa, u.senha_versao, u.deve_alterar_senha
          FROM admtaxi.usuarios u
          JOIN admtaxi.empresas e ON e.id = u.empresa_id
         WHERE u.id = $1 AND u.empresa_id = $2
@@ -151,6 +156,12 @@ export class PgAuthRepository implements AuthRepository {
     tokenHash: string,
     auth: AuthContext,
   ): Promise<AuthUserRecord | null> {
+    // Same lock order as password changes, preventing refresh/reset races.
+    const locked = await client.query(
+      'SELECT id FROM admtaxi.usuarios WHERE id=$1 AND empresa_id=$2 AND senha_versao=$3 FOR UPDATE',
+      [auth.usuarioId, auth.empresaId, auth.senhaVersao ?? 0],
+    );
+    if (!locked.rowCount) return null;
     const result = await client.query<AuthUserRow>(
       `UPDATE admtaxi.refresh_tokens rt
           SET revogado_em = CURRENT_TIMESTAMP
@@ -164,7 +175,7 @@ export class PgAuthRepository implements AuthRepository {
           AND u.empresa_id = rt.empresa_id
           AND e.id = u.empresa_id
       RETURNING u.id, u.empresa_id, u.nome, u.email::text AS email, u.senha_hash,
-                u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa`,
+                u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa, u.senha_versao, u.deve_alterar_senha`,
       [tokenHash, auth.usuarioId, auth.empresaId],
     );
     return mapUser(result.rows[0] ?? null);

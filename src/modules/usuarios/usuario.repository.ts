@@ -144,6 +144,7 @@ export class UsuarioRepository {
     if (senhaHash) {
       values.push(senhaHash);
       assignments.push(`senha_hash = $${values.length}`);
+      assignments.push('deve_alterar_senha = TRUE');
     }
     const result = await executor.query<UsuarioRow>(
       `UPDATE admtaxi.usuarios SET ${assignments.join(', ')}

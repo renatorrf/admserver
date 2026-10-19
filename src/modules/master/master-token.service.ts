@@ -10,6 +10,7 @@ const masterPayloadSchema = z.object({
   deveAlterarSenha: z.boolean(),
   tipo: z.literal('master-access'),
   exp: z.number().int().positive(),
+  senhaVersao: z.number().int().nonnegative().optional(),
 });
 
 export class MasterTokenService {
@@ -22,6 +23,7 @@ export class MasterTokenService {
       sub: context.administradorId,
       usuario: context.usuario,
       deveAlterarSenha: context.deveAlterarSenha,
+      senhaVersao: context.senhaVersao,
       tipo: 'master-access',
     }, this.secret, {
       expiresIn: this.expiresInSeconds,
@@ -39,6 +41,7 @@ export class MasterTokenService {
         administradorId: payload.sub,
         usuario: payload.usuario,
         deveAlterarSenha: payload.deveAlterarSenha,
+        ...(payload.senhaVersao === undefined ? {} : { senhaVersao: payload.senhaVersao }),
       };
     } catch {
       throw unauthorized('Sessao master invalida ou expirada.');

@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 
 import type { AppConfig } from '../../config/env';
-import { unauthorized } from '../../shared/errors/app-error';
+import { AppError, unauthorized } from '../../shared/errors/app-error';
 import { perfisUsuario, type AuthContext, type RefreshTokenRecord } from './auth.types';
 
 const tokenPayloadSchema = z.object({
@@ -13,6 +13,8 @@ const tokenPayloadSchema = z.object({
   perfil: z.enum(perfisUsuario),
   tipo: z.enum(['access', 'refresh']),
   exp: z.number().int().positive(),
+  senhaVersao: z.number().int().nonnegative().optional(),
+  deveAlterarSenha: z.boolean().optional(),
 });
 
 type TokenConfig = Pick<
@@ -37,10 +39,13 @@ export class TokenService {
     private readonly accessAllowed?: (auth: AuthContext) => Promise<boolean>,
   ) {}
 
-  async authenticateAccess(token: string): Promise<AuthContext> {
+  async authenticateAccess(token: string, allowPasswordChange = false): Promise<AuthContext> {
     const auth = this.verifyAccess(token);
     if (this.accessAllowed && !await this.accessAllowed(auth)) {
       throw unauthorized('Conta bloqueada ou perfil alterado. Entre novamente.');
+    }
+    if (auth.deveAlterarSenha && !allowPasswordChange) {
+      throw new AppError(403, 'TROCA_SENHA_OBRIGATORIA', 'Defina uma nova senha para continuar.');
     }
     return auth;
   }
@@ -48,7 +53,8 @@ export class TokenService {
   issueTokens(auth: AuthContext): IssuedTokens {
     const refreshId = randomUUID();
     const accessToken = jwt.sign(
-      { sub: auth.usuarioId, empresaId: auth.empresaId, perfil: auth.perfil, tipo: 'access' },
+      { sub: auth.usuarioId, empresaId: auth.empresaId, perfil: auth.perfil, tipo: 'access',
+        senhaVersao: auth.senhaVersao, deveAlterarSenha: auth.deveAlterarSenha },
       this.config.jwtAccessSecret,
       {
         expiresIn: this.config.jwtAccessExpiresInSeconds,
@@ -57,7 +63,8 @@ export class TokenService {
       },
     );
     const refreshToken = jwt.sign(
-      { sub: auth.usuarioId, empresaId: auth.empresaId, perfil: auth.perfil, tipo: 'refresh' },
+      { sub: auth.usuarioId, empresaId: auth.empresaId, perfil: auth.perfil, tipo: 'refresh',
+        senhaVersao: auth.senhaVersao, deveAlterarSenha: auth.deveAlterarSenha },
       this.config.jwtRefreshSecret,
       {
         expiresIn: this.config.jwtRefreshExpiresInSeconds,
@@ -87,14 +94,18 @@ export class TokenService {
   verifyAccessSession(token: string): VerifiedAccessSession {
     const payload = this.verify(token, this.config.jwtAccessSecret, 'access');
     return {
-      auth: { usuarioId: payload.sub, empresaId: payload.empresaId, perfil: payload.perfil },
+      auth: { usuarioId: payload.sub, empresaId: payload.empresaId, perfil: payload.perfil,
+        ...(payload.senhaVersao === undefined ? {} : { senhaVersao: payload.senhaVersao }),
+        ...(payload.deveAlterarSenha === undefined ? {} : { deveAlterarSenha: payload.deveAlterarSenha }) },
       expiresAt: new Date(payload.exp * 1000),
     };
   }
 
   verifyRefresh(token: string): AuthContext {
     const payload = this.verify(token, this.config.jwtRefreshSecret, 'refresh');
-    return { usuarioId: payload.sub, empresaId: payload.empresaId, perfil: payload.perfil };
+    return { usuarioId: payload.sub, empresaId: payload.empresaId, perfil: payload.perfil,
+      ...(payload.senhaVersao === undefined ? {} : { senhaVersao: payload.senhaVersao }),
+      ...(payload.deveAlterarSenha === undefined ? {} : { deveAlterarSenha: payload.deveAlterarSenha }) };
   }
 
   hash(token: string): string {

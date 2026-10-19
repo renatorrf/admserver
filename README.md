@@ -1,5 +1,70 @@
 # ADM Taxi Backend
 
+## Senhas e recuperacao por email
+
+**Antes de publicar esta alteracao, aplicar as migrations 014 e 015 com autorizacao.**
+Elas adicionam senha temporaria, versao das credenciais, email master e tokens de recuperacao separados.
+Nao foram aplicadas no banco remoto nesta implementacao. Nao executar o backend novo com o schema antigo.
+A inicializacao verifica os registros da 014 e 015 e recusa iniciar sem eles, evitando anunciar uma API saudavel
+que falharia nas consultas de autenticacao.
+
+- Senhas novas: 6 a 128 caracteres, sem obrigar combinacoes de letras/numeros/simbolos.
+- Novos usuarios de empresas (gestor, gerente, funcionario e prestador) devem trocar a senha inicial.
+- Senha redefinida por cadastro administrativo volta a ser temporaria; senha escolhida pelo titular nao.
+- Contas anteriores a 014 nao sao forcadas a trocar a senha automaticamente.
+- A restricao do primeiro acesso e validada no backend HTTP e Socket.IO, alem dos guards do frontend.
+- Troca pessoal exige senha atual e senha diferente; revoga tokens de acesso e refresh anteriores.
+- Recuperacao: empresa + email cadastrado no acesso. Link aleatorio de uso unico, hash SHA-256 no banco,
+  validade padrao de 30 minutos, sem enviar senhas. Nova solicitacao invalida links anteriores.
+- Limites: 5 pedidos por IP/15 minutos (por instancia), 60 segundos entre envios e 5 por conta/hora
+  (persistidos no banco, inclusive entre instancias). Resposta generica com janela minima de 10 segundos.
+- Token fica no fragmento do link, removido da barra pelo frontend, e so e enviado ao backend no corpo
+  do POST. Falha SMTP invalida o link e registra `RECUPERACAO_EMAIL_FALHOU` sem email ou segredo nos logs.
+- Recuperacao conclui com novo login, nunca autentica automaticamente.
+- O portal master mantem a troca obrigatoria inicial, agora com minimo de 6 caracteres. Novos masters
+  exigem email unico (sem diferenciar maiusculas/minusculas); contas existentes preservam email vazio.
+- Masters existentes cadastram o proprio email pelo icone de envelope no painel, confirmando a senha
+  atual. O formulario abre automaticamente quando o email ainda nao foi cadastrado. Nao e possivel
+  recuperar por email uma conta antiga antes desse cadastro; manter acesso ate concluir essa etapa.
+- O login master oferece "Esqueci minha senha". A recuperacao pede apenas o email, nao uma empresa.
+  Links/tabelas/rotas master sao separados dos usuarios empresariais, inclusive para o mesmo email.
+- Troca de senha, email e inativacao master revogam sessoes e links anteriores; reativar nao restaura
+  sessoes antigas. Ao salvar email/senha autenticado, apenas a sessao atual recebe um token novo.
+- Falha de envio master registra somente `RECUPERACAO_MASTER_EMAIL_FALHOU`. Recuperacao e alteracao
+  de email sao auditadas sem armazenar senha/token em texto puro.
+
+As novas variaveis estao vazias em `.env` e `.env.example`; as configuracoes anteriores foram preservadas:
+
+| Variavel | Preenchimento |
+| --- | --- |
+| SMTP_HOST | Servidor SMTP do provedor |
+| SMTP_PORT | 587 (padrao, STARTTLS) ou 465 (TLS direto) |
+| SMTP_SECURE | false para 587; true para 465 |
+| SMTP_USER | Usuario SMTP |
+| SMTP_PASSWORD | Senha de aplicativo/credencial SMTP |
+| SMTP_FROM | Email remetente autorizado no provedor |
+| PASSWORD_RESET_URL | URL HTTPS completa do frontend, terminada em `/redefinir-senha`, sem query/fragmento |
+| MASTER_PASSWORD_RESET_URL | URL HTTPS completa do frontend, terminada em `/master/redefinir-senha`, sem query/fragmento |
+| PASSWORD_RESET_TTL_MINUTES | 5 a 60; vazio usa 30 |
+
+Todas vazias desabilitam apenas recuperacao por email (503 explicito); a troca autenticada continua ativa.
+O portal master reutiliza SMTP/TTL; a sua URL vazia desabilita apenas a recuperacao master.
+Configuracao parcial impede inicializacao para evitar envio mal configurado. TLS e verificacao de
+certificado permanecem obrigatorios; nao usar `rejectUnauthorized=false`. O remetente deve estar
+verificado no provedor; configurar SPF/DKIM e testar a entrega antes do piloto.
+No Cloud Run, configurar variaveis/Secret Manager na revisao: o `.env` local nao e publicado automaticamente.
+O link abre o frontend web/PWA, inclusive quando solicitado no APK; depois da troca, entrar novamente no APK.
+Nao e necessario deep link Android para concluir a recuperacao.
+
+Ordem de publicacao: backup validado -> validar/aplicar 014 e 015 -> publicar backend -> publicar frontend/APK
+-> preencher SMTP/URL no ambiente -> testar email real e primeiro acesso. Nenhum deploy ou envio real
+foi feito nesta implementacao. Manter as variaveis de banco/JWT existentes; nao substitui-las por valores vazios.
+
+Validacao local: `npm test`, `npm run lint`, `npm run build` e `npm run test:password:integration`.
+O teste de integracao cria PostgreSQL 18 isolado em loopback e nao utiliza DATABASE_URL.
+Referencias: [Nodemailer SMTP](https://nodemailer.com/smtp),
+[OWASP Forgot Password](https://cheatsheetseries.owasp.org/cheatsheets/Forgot_Password_Cheat_Sheet.html).
+
 ## Revisao geral de 2026-10-15
 
 Itinerarios individuais, isolamento de passageiros, idempotencia e testes com PostgreSQL

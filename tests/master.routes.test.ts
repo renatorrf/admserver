@@ -26,6 +26,7 @@ function serviceMock(): MasterService {
     login: vi.fn().mockResolvedValue({ accessToken: 'token' }),
     getCurrent: vi.fn().mockResolvedValue({ ...context, nome: 'Administrador', ativo: true }),
     changePassword: vi.fn(),
+    changeEmail: vi.fn().mockResolvedValue({ accessToken: 'updated' }),
     listCompanies: vi.fn().mockResolvedValue([]),
     createCompany: vi.fn(),
     listAdministrators: vi.fn().mockResolvedValue([]),
@@ -77,5 +78,22 @@ describe('rotas master', () => {
 
     expect(response.status).toBe(422);
     expect(service.createAdministrator).not.toHaveBeenCalled();
+  });
+  it('exige email para novos masters e aceita senha com seis caracteres', async () => {
+    const service = serviceMock(), app = appWith(service);
+    const input = { usuario: 'outro.master', nome: 'Outro Master', senha: '123456' };
+    await request(app).post('/api/v1/master/administradores').auth(tokens.issue(context), { type: 'bearer' }).send(input).expect(422);
+    await request(app).post('/api/v1/master/administradores').auth(tokens.issue(context), { type: 'bearer' })
+      .send({ ...input, email: 'MASTER@example.test' }).expect(201);
+    expect(service.createAdministrator).toHaveBeenCalledWith(context, { ...input, email: 'master@example.test' }, expect.any(Object));
+  });
+  it('altera apenas o email do master autenticado com confirmacao de senha', async () => {
+    const service = serviceMock(), app = appWith(service);
+    const input = { email: 'MASTER@example.test', senhaAtual: '123456' };
+    await request(app).post('/api/v1/master/auth/email').send(input).expect(401);
+    await request(app).post('/api/v1/master/auth/email').auth(tokens.issue(context), { type: 'bearer' }).send({ email: input.email }).expect(422);
+    await request(app).post('/api/v1/master/auth/email').auth(tokens.issue(context), { type: 'bearer' }).send({ ...input, administradorId: context.administradorId }).expect(422);
+    await request(app).post('/api/v1/master/auth/email').auth(tokens.issue(context), { type: 'bearer' }).send(input).expect(200);
+    expect(service.changeEmail).toHaveBeenCalledExactlyOnceWith(context, { email: 'master@example.test', senhaAtual: '123456' });
   });
 });

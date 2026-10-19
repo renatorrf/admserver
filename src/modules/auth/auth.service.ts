@@ -94,6 +94,7 @@ export class AuthService implements AuthApplication {
       nome: user.nome,
       email: user.email,
       perfil: user.perfil,
+      deveAlterarSenha: user.deveAlterarSenha ?? false,
     };
   }
 }

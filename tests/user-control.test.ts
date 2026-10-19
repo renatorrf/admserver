@@ -37,7 +37,7 @@ describe('controle de usuarios e bloqueio', () => {
     const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
     const repository = new PgAuthRepository({ query } as unknown as Pool);
     expect(await repository.accessAllowed(auth)).toBe(false);
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('u.ativo=TRUE AND e.ativo=TRUE'), [auth.usuarioId, auth.empresaId, auth.perfil]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('u.ativo=TRUE AND e.ativo=TRUE'), [auth.usuarioId, auth.empresaId, auth.perfil, 0, false]);
   });
 
   it('parametriza busca e limita listagem e resumo a empresa autenticada', async () => {

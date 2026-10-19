@@ -20,6 +20,9 @@ import { createProvisionamentoRouter } from './modules/provisionamento/provision
 import { ProvisionamentoService } from './modules/provisionamento/provisionamento.service';
 import { RealtimeBus } from './realtime/realtime-bus';
 import { attachSocketServer } from './realtime/socket-server';
+import { PasswordService } from './modules/auth/password.service';
+import { SmtpPasswordMailer } from './modules/auth/password-mailer';
+import { MasterRecoveryService } from './modules/master/master-recovery.service';
 
 const config = getConfig();
 const logger = createLogger(config);
@@ -43,10 +46,12 @@ const provisioningRouter = config.provisioningSecret
 const masterTokens = new MasterTokenService(config.jwtAccessSecret);
 const masterRouter = createMasterRouter(
   new MasterService(pool, masterTokens, new ProvisionamentoService(pool)), masterTokens,
+  new MasterRecoveryService(pool, logger, config.mail, config.mail ? new SmtpPasswordMailer(config.mail) : undefined),
 );
 const app = createApp({
   config, logger, pool, auth: authService, tokens: tokenService, adminRouter, operationalRouter,
   provisioningRouter, masterRouter,
+  passwords: new PasswordService(pool, logger, config.mail, config.mail ? new SmtpPasswordMailer(config.mail) : undefined),
 });
 const server = createServer(app);
 const socketRideService = new CorridaService(pool, new AuditRepository(pool));
@@ -54,6 +59,12 @@ const socketLocationService = new LocalizacaoService(pool, socketRideService, re
 const io = attachSocketServer(server, config, tokenService, socketLocationService, realtime, logger, pool);
 
 async function start(): Promise<void> {
+  const passwordMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=14');
+  if (!passwordMigration.rowCount) {
+    throw new Error('Migration 014_recuperacao_senha pendente. Aplique a migration antes de publicar este backend.');
+  }
+  const masterMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=15');
+  if (!masterMigration.rowCount) throw new Error('Migration 015_recuperacao_master pendente. Aplique antes de publicar este backend.');
   await ensureInitialMaster(pool, config.masterBootstrapUsername, config.masterBootstrapPasswordHash);
   server.listen(config.port, () => {
     logger.info({ port: config.port, environment: config.nodeEnv }, 'API ADM Taxi iniciada');

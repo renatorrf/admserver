@@ -49,6 +49,15 @@ const envSchema = z.object({
   MASTER_BOOTSTRAP_USERNAME: z.string().min(3).max(50).optional(),
   MASTER_BOOTSTRAP_PASSWORD_HASH: z.string().min(20).optional(),
   GEOAPIFY_API_KEY: z.string().min(20, "GEOAPIFY_API_KEY invalida").optional(),
+  SMTP_HOST: optionalEnvironmentValue(z.string().trim().min(1)),
+  SMTP_PORT: optionalEnvironmentValue(z.coerce.number().int().min(1).max(65535)),
+  SMTP_SECURE: optionalEnvironmentValue(z.enum(['true', 'false'])),
+  SMTP_USER: optionalEnvironmentValue(z.string().min(1)),
+  SMTP_PASSWORD: optionalEnvironmentValue(z.string().min(1)),
+  SMTP_FROM: optionalEnvironmentValue(z.string().email()),
+  PASSWORD_RESET_URL: optionalEnvironmentValue(z.string().url()),
+  MASTER_PASSWORD_RESET_URL: optionalEnvironmentValue(z.string().url()),
+  PASSWORD_RESET_TTL_MINUTES: optionalEnvironmentValue(z.coerce.number().int().min(5).max(60)),
   PUSH_VAPID_SUBJECT: optionalEnvironmentValue(z.string().trim().min(8)),
   PUSH_VAPID_PUBLIC_KEY: optionalEnvironmentValue(z.string().trim().min(20)),
   PUSH_VAPID_PRIVATE_KEY: optionalEnvironmentValue(z.string().trim().min(20)),
@@ -75,6 +84,13 @@ export type AppConfig = {
   masterBootstrapPasswordHash?: string;
   geoapifyApiKey?: string;
   push?: PushConfig;
+  mail?: MailConfig;
+};
+
+export type MailConfig = {
+  host: string; port: number; secure: boolean; user: string; password: string;
+  from: string; resetUrl: string; resetTtlMinutes: number;
+  masterResetUrl?: string;
 };
 
 export type PushConfig = {
@@ -117,6 +133,20 @@ export function getConfig(): AppConfig {
     throw new Error('Configuracao de ambiente invalida: informe todas as variaveis PUSH_VAPID_* e PUSH_APP_URL.');
   }
 
+  const mailRequired = [parsed.data.SMTP_HOST, parsed.data.SMTP_USER, parsed.data.SMTP_PASSWORD,
+    parsed.data.SMTP_FROM, parsed.data.PASSWORD_RESET_URL];
+  if ((mailRequired.some(Boolean) || parsed.data.SMTP_PORT || parsed.data.SMTP_SECURE || parsed.data.PASSWORD_RESET_TTL_MINUTES || parsed.data.MASTER_PASSWORD_RESET_URL)
+    && !mailRequired.every(Boolean)) {
+    throw new Error('Configuracao de email incompleta: informe SMTP_HOST, SMTP_USER, SMTP_PASSWORD, SMTP_FROM e PASSWORD_RESET_URL.');
+  }
+  for (const resetUrl of [parsed.data.PASSWORD_RESET_URL, parsed.data.MASTER_PASSWORD_RESET_URL].filter(Boolean)) {
+    const url = new URL(resetUrl!);
+    const local = parsed.data.NODE_ENV !== 'production' && ['localhost', '127.0.0.1'].includes(url.hostname);
+    if ((url.protocol !== 'https:' && !(local && url.protocol === 'http:')) || url.username || url.password || url.search || url.hash) {
+      throw new Error('PASSWORD_RESET_URL e MASTER_PASSWORD_RESET_URL devem ser URLs HTTPS sem credenciais, query ou fragmento.');
+    }
+  }
+
   cachedConfig = {
     nodeEnv: parsed.data.NODE_ENV,
     port: parsed.data.PORT,
@@ -137,6 +167,13 @@ export function getConfig(): AppConfig {
     masterBootstrapUsername: parsed.data.MASTER_BOOTSTRAP_USERNAME,
     masterBootstrapPasswordHash: parsed.data.MASTER_BOOTSTRAP_PASSWORD_HASH,
     geoapifyApiKey: parsed.data.GEOAPIFY_API_KEY,
+    mail: parsed.data.SMTP_HOST ? {
+      host: parsed.data.SMTP_HOST, port: parsed.data.SMTP_PORT ?? 587,
+      secure: parsed.data.SMTP_SECURE === 'true' || (parsed.data.SMTP_SECURE === undefined && parsed.data.SMTP_PORT === 465),
+      user: parsed.data.SMTP_USER!, password: parsed.data.SMTP_PASSWORD!, from: parsed.data.SMTP_FROM!,
+      resetUrl: parsed.data.PASSWORD_RESET_URL!, resetTtlMinutes: parsed.data.PASSWORD_RESET_TTL_MINUTES ?? 30,
+      masterResetUrl: parsed.data.MASTER_PASSWORD_RESET_URL,
+    } : undefined,
     push: parsed.data.PUSH_VAPID_SUBJECT ? {
       subject: parsed.data.PUSH_VAPID_SUBJECT,
       publicKey: parsed.data.PUSH_VAPID_PUBLIC_KEY!,

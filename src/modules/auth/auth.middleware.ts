@@ -4,7 +4,7 @@ import { forbidden, unauthorized } from '../../shared/errors/app-error';
 import type { PerfilUsuario } from './auth.types';
 import type { TokenService } from './token-service';
 
-export function createAuthenticate(tokens: TokenService): RequestHandler {
+export function createAuthenticate(tokens: TokenService, allowPasswordChange = false): RequestHandler {
   return async (request, _response, next) => {
     const authorization = request.header('authorization');
     const [scheme, token] = authorization?.split(' ') ?? [];
@@ -14,7 +14,7 @@ export function createAuthenticate(tokens: TokenService): RequestHandler {
     }
 
     try {
-      request.auth = await tokens.authenticateAccess(token);
+      request.auth = await tokens.authenticateAccess(token, allowPasswordChange);
       next();
     } catch (error) {
       next(error);

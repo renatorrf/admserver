@@ -1,8 +1,9 @@
+import { passwordSchema } from '../../shared/validation/password';
 import { z } from 'zod';
 
 import { funcionarioCreateSchema, funcionarioUpdateSchema } from './funcionario.catalog';
 
-const senha = z.string().min(12, 'A senha deve ter ao menos 12 caracteres.').max(128);
+const senha = passwordSchema;
 
 export const funcionarioUnificadoCreateSchema = z.object({
   acesso: z.object({ senha, ativo: z.boolean().default(true) }).strict(),

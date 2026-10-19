@@ -1,3 +1,4 @@
+import { passwordSchema } from '../../shared/validation/password';
 import { z } from 'zod';
 
 import { perfisUsuario } from '../auth/auth.types';
@@ -8,7 +9,7 @@ const fields = {
   nome: z.string().trim().min(2).max(150),
   email: z.string().trim().email('Informe um e-mail valido.').max(254).transform((value) => value.toLowerCase()),
   telefone: optionalText(20),
-  senha: z.string().min(12, 'A senha deve ter ao menos 12 caracteres.').max(128),
+  senha: passwordSchema,
   perfil: z.enum(['PRESTADOR', 'GERENTE', 'GESTOR']),
 };
 

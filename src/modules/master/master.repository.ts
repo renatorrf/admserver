@@ -7,6 +7,7 @@ import type { MasterPublic, MasterRecord } from './master.types';
 type MasterRow = QueryResultRow & {
   id: string; usuario: string; nome: string; senha_hash: string; ativo: boolean;
   deve_alterar_senha: boolean; ultimo_acesso_em: Date | null; criado_em: Date;
+  email: string | null; senha_versao: number;
 };
 
 function mapMaster(row: MasterRow): MasterRecord {
@@ -14,6 +15,8 @@ function mapMaster(row: MasterRow): MasterRecord {
     administradorId: row.id,
     usuario: row.usuario,
     nome: row.nome,
+    email: row.email,
+    senhaVersao: row.senha_versao,
     senhaHash: row.senha_hash,
     ativo: row.ativo,
     deveAlterarSenha: row.deve_alterar_senha,
@@ -27,6 +30,8 @@ export function publicMaster(master: MasterRecord): MasterPublic {
     administradorId: master.administradorId,
     usuario: master.usuario,
     nome: master.nome,
+    email: master.email,
+    senhaVersao: master.senhaVersao,
     ativo: master.ativo,
     deveAlterarSenha: master.deveAlterarSenha,
     ultimoAcessoEm: master.ultimoAcessoEm,
@@ -39,16 +44,16 @@ export class MasterRepository {
 
   async findByUsername(executor: QueryExecutor, username: string): Promise<MasterRecord | null> {
     const row = await queryOne<MasterRow>(executor, `
-      SELECT id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em
+      SELECT id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em, email::text, senha_versao
         FROM admtaxi.administradores_plataforma WHERE usuario = $1
     `, [username]);
     return row ? mapMaster(row) : null;
   }
 
-  async findById(executor: QueryExecutor, id: string): Promise<MasterRecord | null> {
+  async findById(executor: QueryExecutor, id: string, lock = false): Promise<MasterRecord | null> {
     const row = await queryOne<MasterRow>(executor, `
-      SELECT id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em
-        FROM admtaxi.administradores_plataforma WHERE id = $1
+      SELECT id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em, email::text, senha_versao
+        FROM admtaxi.administradores_plataforma WHERE id = $1 ${lock ? 'FOR UPDATE' : ''}
     `, [id]);
     return row ? mapMaster(row) : null;
   }
@@ -64,14 +69,14 @@ export class MasterRepository {
       UPDATE admtaxi.administradores_plataforma
          SET senha_hash = $2, deve_alterar_senha = FALSE
        WHERE id = $1
-      RETURNING id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em
+      RETURNING id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em, email::text, senha_versao
     `, [id, passwordHash]);
     return mapMaster(result.rows[0]!);
   }
 
   async list(): Promise<MasterPublic[]> {
     const result = await this.database.query<MasterRow>(`
-      SELECT id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em
+      SELECT id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em, email::text, senha_versao
         FROM admtaxi.administradores_plataforma ORDER BY nome, id
     `);
     return result.rows.map((row) => publicMaster(mapMaster(row)));
@@ -79,17 +84,17 @@ export class MasterRepository {
 
   async create(executor: QueryExecutor, input: MasterCreateInput, passwordHash: string): Promise<MasterRecord> {
     const result = await executor.query<MasterRow>(`
-      INSERT INTO admtaxi.administradores_plataforma (usuario, nome, senha_hash)
-      VALUES ($1, $2, $3)
-      RETURNING id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em
-    `, [input.usuario, input.nome, passwordHash]);
+      INSERT INTO admtaxi.administradores_plataforma (usuario, nome, senha_hash, email)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em, email::text, senha_versao
+    `, [input.usuario, input.nome, passwordHash, input.email]);
     return mapMaster(result.rows[0]!);
   }
 
   async setActive(executor: QueryExecutor, id: string, active: boolean): Promise<MasterRecord | null> {
     const result = await executor.query<MasterRow>(`
       UPDATE admtaxi.administradores_plataforma SET ativo = $2 WHERE id = $1
-      RETURNING id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em
+      RETURNING id, usuario::text, nome, senha_hash, ativo, deve_alterar_senha, ultimo_acesso_em, criado_em, email::text, senha_versao
     `, [id, active]);
     return result.rows[0] ? mapMaster(result.rows[0]) : null;
   }

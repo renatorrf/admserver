@@ -1,3 +1,4 @@
+import { passwordSchema } from '../../shared/validation/password';
 import { z } from 'zod';
 
 import { digits, optionalEmail, optionalText } from '../../shared/validation/common.schemas';
@@ -23,7 +24,7 @@ export const provisionamentoSchema = z.object({
     email: z.string().trim().email('Informe um e-mail valido.').max(254)
       .transform((value) => value.toLowerCase()),
     telefone: optionalText(20),
-    senha: z.string().min(12, 'A senha deve ter ao menos 12 caracteres.').max(128),
+    senha: passwordSchema,
   }).strict(),
 }).strict();
 

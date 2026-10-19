@@ -39,21 +39,34 @@ export class MasterService {
   }
 
   async getCurrent(context: MasterContext): Promise<MasterPublic> {
-    return publicMaster(await this.requireActive(context.administradorId));
+    return publicMaster(await this.requireActive(context));
   }
 
   async changePassword(context: MasterContext, input: MasterPasswordInput): Promise<MasterSession> {
-    const current = await this.requireActive(context.administradorId);
+    const current = await this.requireActive(context);
     if (!await argon2.verify(current.senhaHash, input.senhaAtual)) {
       throw unauthorized('A senha atual esta incorreta.');
     }
     const passwordHash = await argon2.hash(input.novaSenha, { type: argon2.argon2id });
     const updated = await withTransaction(this.pool, async (client) => {
+      await this.requireActive(context, client, true);
       const master = await this.repository.changePassword(client, context.administradorId, passwordHash);
       await this.audit(client, context.administradorId, 'administrador_plataforma', context.administradorId, 'ALTERAR_SENHA', {
         usuario: master.usuario,
       });
       return master;
+    });
+    return this.session(publicMaster(updated));
+  }
+
+  async changeEmail(context: MasterContext, input: { email: string; senhaAtual: string }): Promise<MasterSession> {
+    const updated = await withTransaction(this.pool, async client => {
+      const current = await this.requireActive(context, client, true);
+      if (!await argon2.verify(current.senhaHash, input.senhaAtual)) throw unauthorized('A senha atual esta incorreta.');
+      await client.query('UPDATE admtaxi.administradores_plataforma SET email=$2 WHERE id=$1', [context.administradorId, input.email]);
+      await this.audit(client, context.administradorId, 'administrador_plataforma', context.administradorId,
+        'ALTERAR_EMAIL', { email: input.email });
+      return (await this.repository.findById(client, context.administradorId))!;
     });
     return this.session(publicMaster(updated));
   }
@@ -137,14 +150,14 @@ export class MasterService {
     };
   }
 
-  private async requireActive(id: string) {
-    const master = await this.repository.findById(this.pool, id);
-    if (!master?.ativo) throw unauthorized('Sessao master invalida ou expirada.');
+  private async requireActive(context: MasterContext, executor: QueryExecutor = this.pool, lock = false) {
+    const master = await this.repository.findById(executor, context.administradorId, lock);
+    if (!master?.ativo || (master.senhaVersao ?? 0) !== (context.senhaVersao ?? 0)) throw unauthorized('Sessao master invalida ou expirada.');
     return master;
   }
 
   private async requireReady(context: MasterContext): Promise<void> {
-    const master = await this.requireActive(context.administradorId);
+    const master = await this.requireActive(context);
     if (master.deveAlterarSenha) {
       throw conflict('Altere a senha inicial antes de continuar.');
     }

@@ -5,6 +5,8 @@ export type AuthContext = {
   usuarioId: string;
   empresaId: string;
   perfil: PerfilUsuario;
+  senhaVersao?: number;
+  deveAlterarSenha?: boolean;
 };
 
 export type AuthUserRecord = AuthContext & {

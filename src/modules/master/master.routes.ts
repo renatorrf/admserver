@@ -1,5 +1,8 @@
 import { Router, type Request, type RequestHandler } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { setTimeout as delay } from 'node:timers/promises';
+import { masterRecoveryMessage, type MasterRecoveryService } from './master-recovery.service';
+import { resetPasswordSchema } from '../auth/password.schemas';
 
 import { conflict, unauthorized } from '../../shared/errors/app-error';
 import { asyncHandler } from '../../shared/http/async-handler';
@@ -11,6 +14,8 @@ import {
   masterIdSchema,
   masterLoginSchema,
   masterPasswordSchema,
+  masterEmailSchema,
+  masterRecoverySchema,
   type MasterCreateInput,
   type MasterLoginInput,
   type MasterPasswordInput,
@@ -22,7 +27,7 @@ function metadata(request: Request) {
   return { ip: request.ip || null, userAgent: request.get('user-agent') ?? null };
 }
 
-export function createMasterRouter(service: MasterService, tokens: MasterTokenService): Router {
+export function createMasterRouter(service: MasterService, tokens: MasterTokenService, recovery?: MasterRecoveryService): Router {
   const authenticate: RequestHandler = (request, _response, next) => {
     const [scheme, token] = request.header('authorization')?.split(' ') ?? [];
     if (scheme !== 'Bearer' || !token) {
@@ -46,6 +51,21 @@ export function createMasterRouter(service: MasterService, tokens: MasterTokenSe
     message: { erro: { codigo: 'MUITAS_TENTATIVAS', mensagem: 'Aguarde alguns minutos antes de tentar novamente.' } },
   });
   const router = Router();
+  if (recovery) {
+    const limiter = rateLimit({ windowMs: 15*60_000, limit: 5, standardHeaders:'draft-8', legacyHeaders:false,
+      message:{ erro:{ codigo:'MUITAS_TENTATIVAS',mensagem:'Aguarde alguns minutos antes de solicitar outro link.' } } });
+    router.post('/auth/senha/recuperar',limiter,validateBody(masterRecoverySchema),asyncHandler(async(req,res)=>{
+      const started=Date.now(); await recovery.requestReset(req.body);
+      await delay(Math.max(0,10_000-(Date.now()-started)));
+      res.json({data:{mensagem:masterRecoveryMessage}});
+    }));
+    router.post('/auth/senha/redefinir',loginLimiter,validateBody(resetPasswordSchema),asyncHandler(async(req,res)=>{
+      await recovery.reset(req.body); res.status(204).send();
+    }));
+  }
+  router.post('/auth/email',loginLimiter,authenticate,validateBody(masterEmailSchema),asyncHandler(async(req,res)=>{
+    res.json({data:await service.changeEmail(req.master!,req.body)});
+  }));
 
   router.post('/auth/login', loginLimiter, validateBody(masterLoginSchema), asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.login(request.body as MasterLoginInput) });
@@ -53,7 +73,7 @@ export function createMasterRouter(service: MasterService, tokens: MasterTokenSe
   router.get('/auth/me', authenticate, asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.getCurrent(request.master!) });
   }));
-  router.post('/auth/senha', authenticate, validateBody(masterPasswordSchema), asyncHandler(async (request, response) => {
+  router.post('/auth/senha', loginLimiter, authenticate, validateBody(masterPasswordSchema), asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.changePassword(request.master!, request.body as MasterPasswordInput) });
   }));
   router.get('/empresas', authenticate, passwordChanged, asyncHandler(async (request, response) => {

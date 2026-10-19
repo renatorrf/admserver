@@ -14,8 +14,8 @@ export function validateDevelopmentSeedEnvironment(environment: DevelopmentSeedE
   if (environment.confirmation !== 'CRIAR_DADOS_DEMO') {
     throw new Error('Seed bloqueado: defina SEED_DEMO_CONFIRM=CRIAR_DADOS_DEMO.');
   }
-  if (!environment.password || environment.password.length < 12) {
-    throw new Error('Seed bloqueado: SEED_DEMO_PASSWORD deve ter ao menos 12 caracteres.');
+  if (!environment.password || environment.password.length < 6) {
+    throw new Error('Seed bloqueado: SEED_DEMO_PASSWORD deve ter ao menos 6 caracteres.');
   }
 
   let databaseUrl: URL;
