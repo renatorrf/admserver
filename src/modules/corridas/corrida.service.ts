@@ -4,6 +4,7 @@ import { conflict, forbidden, invalidReference, notFound } from '../../shared/er
 import type { PaginatedResult } from '../../shared/pagination/pagination';
 import type { CorridaRealtimeEvent, CorridaRealtimePublisher } from '../../realtime/realtime-bus';
 import type { AuthContext } from '../auth/auth.types';
+import { driverRideContext, driverMemberships } from '../auth/driver-scope';
 import type { AuditEntry, AuditMetadata } from '../auditoria/audit.types';
 import { CorridaRepository, type CorridaPatch, type CorridaScope } from './corrida.repository';
 import type {
@@ -84,12 +85,14 @@ export class CorridaService {
   }
 
   async list(auth: AuthContext, query: CorridaListQuery): Promise<PaginatedResult<CorridaRecord>> {
+    if (auth.perfil === 'PRESTADOR' && auth.contaMotoristaId) return this.repository.list(auth.empresaId, { kind: 'MOTORISTA', contaId: auth.contaMotoristaId }, query);
     const scope = await this.resolveScope(auth);
     const result = await this.repository.list(auth.empresaId, scope, query);
     return scope.kind === 'FUNCIONARIO' ? { ...result, data: result.data.map(ride => employeeRide(ride, scope.funcionarioId)) } : result;
   }
 
   async get(auth: AuthContext, id: string): Promise<CorridaRecord> {
+    auth = await driverRideContext(this.database, auth, id);
     const scope = await this.resolveScope(auth);
     const ride = await this.repository.findAccessible(this.database, auth.empresaId, id, scope);
     if (!ride) throw notFound('Corrida');
@@ -101,6 +104,7 @@ export class CorridaService {
     id: string,
     query: EventoListQuery,
   ): Promise<PaginatedResult<CorridaEventoRecord>> {
+    auth = await driverRideContext(this.database, auth, id);
     await this.get(auth, id);
     const result = await this.repository.listEvents(auth.empresaId, id, query);
     return auth.perfil === 'FUNCIONARIO' ? { ...result, data: result.data.map(event => ({
@@ -221,7 +225,8 @@ export class CorridaService {
     }), ride => this.notifications?.publishRideCreated(ride));
   }
 
-  accept(auth: AuthContext, id: string, input: CorridaAcceptInput, metadata: AuditMetadata): Promise<CorridaRecord> {
+  async accept(auth: AuthContext, id: string, input: CorridaAcceptInput, metadata: AuditMetadata): Promise<CorridaRecord> {
+    auth = await driverRideContext(this.database, auth, id);
     this.requireProvider(auth);
     let changed = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
@@ -274,7 +279,8 @@ export class CorridaService {
     }), ride => { if (changed) this.notifications?.publishRideUpdate(ride, 'ACEITA'); });
   }
 
-  refuse(auth: AuthContext, id: string, metadata: AuditMetadata): Promise<CorridaRecord> {
+  async refuse(auth: AuthContext, id: string, metadata: AuditMetadata): Promise<CorridaRecord> {
+    auth = await driverRideContext(this.database, auth, id);
     this.requireProvider(auth);
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
@@ -303,7 +309,8 @@ export class CorridaService {
     return this.providerTransition(auth, id, 'EM_CORRIDA', 'PASSAGEIRO_EMBARCOU', 'Passageiro embarcou e a corrida iniciou.', metadata);
   }
 
-  disembark(auth: AuthContext, id: string, metadata: AuditMetadata): Promise<CorridaRecord> {
+  async disembark(auth: AuthContext, id: string, metadata: AuditMetadata): Promise<CorridaRecord> {
+    auth = await driverRideContext(this.database, auth, id);
     this.requireProvider(auth);
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
@@ -322,7 +329,8 @@ export class CorridaService {
     }));
   }
 
-  finish(auth: AuthContext, id: string, input: CorridaFinishInput, metadata: AuditMetadata): Promise<CorridaRecord> {
+  async finish(auth: AuthContext, id: string, input: CorridaFinishInput, metadata: AuditMetadata): Promise<CorridaRecord> {
+    auth = await driverRideContext(this.database, auth, id);
     this.requireProvider(auth);
     let changed = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
@@ -359,7 +367,8 @@ export class CorridaService {
     }), ride => { if (changed) this.notifications?.publishRideUpdate(ride, 'FINALIZADA'); });
   }
 
-  cancel(auth: AuthContext, id: string, input: CorridaCancelInput, metadata: AuditMetadata): Promise<CorridaRecord> {
+  async cancel(auth: AuthContext, id: string, input: CorridaCancelInput, metadata: AuditMetadata): Promise<CorridaRecord> {
+    auth = await driverRideContext(this.database, auth, id);
     if (!['GESTOR', 'GERENTE'].includes(auth.perfil)) throw forbidden();
     let changed = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
@@ -407,6 +416,19 @@ export class CorridaService {
   ): Promise<DisponibilidadeResult> {
     this.requireProvider(auth);
     return withTransaction(this.database, async (client) => {
+      if (auth.contaMotoristaId) {
+        await client.query('SELECT id FROM admtaxi.contas_motorista WHERE id=$1 FOR UPDATE', [auth.contaMotoristaId]);
+        const members = await driverMemberships(client, auth);
+        if (!members.length) throw forbidden();
+        const primary = members[0]!;
+        if (input.disponivel && await this.repository.hasActiveRide(client, primary.empresa_id, primary.prestador_id)) throw conflict('Finalize a corrida ativa antes de ficar disponivel.');
+        for (const member of members) {
+          await this.repository.setProviderAvailability(client, member.empresa_id, member.prestador_id, input.disponivel);
+          await this.audit.record(client, { ...metadata, empresaId: member.empresa_id, usuarioId: member.usuario_id,
+            entidade: 'prestador', entidadeId: member.prestador_id, acao: 'ALTERAR_DISPONIBILIDADE', dadosNovos: { disponivel: input.disponivel } });
+        }
+        return { prestadorId: primary.prestador_id, disponivel: input.disponivel };
+      }
       const provider = await this.requireProviderContext(client, auth, true);
       if (input.disponivel && await this.repository.hasActiveRide(client, auth.empresaId, provider.id)) {
         throw conflict('Finalize ou cancele a corrida ativa antes de ficar disponivel.');
@@ -427,7 +449,7 @@ export class CorridaService {
     });
   }
 
-  private providerTransition(
+  private async providerTransition(
     auth: AuthContext,
     id: string,
     target: StatusCorrida,
@@ -435,6 +457,7 @@ export class CorridaService {
     description: string,
     metadata: AuditMetadata,
   ): Promise<CorridaRecord> {
+    auth = await driverRideContext(this.database, auth, id);
     this.requireProvider(auth);
     let changed = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
@@ -490,6 +513,7 @@ export class CorridaService {
   }
 
   async optimizeRoute(auth: AuthContext, id: string, input: OptimizeRouteInput, optimizer: RideRouteOptimizer, metadata: AuditMetadata): Promise<CorridaRecord> {
+    auth = await driverRideContext(this.database, auth, id);
     this.requireProvider(auth);
     const store = new ItineraryRepository();
     const initial = await withTransaction(this.database, async client => {
@@ -524,7 +548,8 @@ export class CorridaService {
     }), ride => this.notifications?.publishItineraryUpdate?.(ride));
   }
 
-  executeItinerary(auth: AuthContext, id: string, action: ItineraryAction, metadata: AuditMetadata): Promise<CorridaRecord> {
+  async executeItinerary(auth: AuthContext, id: string, action: ItineraryAction, metadata: AuditMetadata): Promise<CorridaRecord> {
+    auth = await driverRideContext(this.database, auth, id);
     this.requireProvider(auth);
     let changed = false;
     return this.withRealtime(withTransaction(this.database, async client => {

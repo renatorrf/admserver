@@ -1,5 +1,7 @@
 import type { Database } from '../../db/pool';
 import type { AuthContext } from '../auth/auth.types';
+import { driverMemberships } from '../auth/driver-scope';
+import { CorridaRepository } from '../corridas/corrida.repository';
 import type { EnderecoSugestao } from '../enderecos/endereco.service';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
 import type { FuncionarioLookupQuery, FuncionarioSearchQuery, PrestadorSearchQuery } from './operacao.schemas';
@@ -191,6 +193,14 @@ export class OperacaoRepository {
   }
 
   async getMyProvider(auth: AuthContext): Promise<MeuPrestador | null> {
+    if (auth.contaMotoristaId) {
+      const members = await driverMemberships(this.database, auth);
+      const first = members[0];
+      if (!first) return null;
+      const busy = await new CorridaRepository(this.database).hasActiveRide(this.database, first.empresa_id, first.prestador_id);
+      const row = (await this.database.query<{ nome: string }>('SELECT nome FROM admtaxi.contas_motorista WHERE id=$1', [auth.contaMotoristaId])).rows[0];
+      return { id: first.prestador_id, nome: row?.nome ?? '', disponivel: !busy && members.some(m => m.disponivel), ativo: true };
+    }
     const result = await this.database.query<MeuPrestador>(
       `SELECT id, nome, disponivel, ativo
          FROM admtaxi.prestadores
@@ -250,6 +260,10 @@ export class OperacaoRepository {
   }
 
   async listMyVehicles(auth: AuthContext): Promise<VeiculoLookup[]> {
+    if (auth.contaMotoristaId) return (await this.database.query<VeiculoLookup>(
+      `SELECT v.id,v.placa,v.marca,v.modelo,v.cor,v.capacidade_passageiros AS "capacidadePassageiros",v.empresa_id AS "empresaId",m.empresa_nome AS "empresaNome"
+       FROM admtaxi.veiculos v JOIN admtaxi.motorista_vinculos_ativos m ON m.empresa_id=v.empresa_id AND m.prestador_id=v.prestador_id
+       WHERE m.conta_id=$1 AND v.ativo ORDER BY m.empresa_nome,v.placa,v.id`, [auth.contaMotoristaId])).rows;
     const result = await this.database.query<VeiculoLookup>(
       `SELECT v.id, v.placa, v.marca, v.modelo, v.cor,
               v.capacidade_passageiros AS "capacidadePassageiros"

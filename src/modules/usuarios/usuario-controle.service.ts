@@ -33,7 +33,8 @@ export class UsuarioControleService {
          FROM admtaxi.usuarios u
          LEFT JOIN LATERAL (
            SELECT COUNT(*) AS quantidade FROM admtaxi.refresh_tokens r
-           WHERE r.empresa_id=u.empresa_id AND r.usuario_id=u.id
+           WHERE (r.empresa_id=u.empresa_id AND r.usuario_id=u.id OR r.usuario_id IN
+             (SELECT sibling.id FROM admtaxi.usuarios sibling WHERE sibling.conta_motorista_id=u.conta_motorista_id))
              AND r.revogado_em IS NULL AND r.expira_em>CURRENT_TIMESTAMP
          ) rt ON TRUE
          LEFT JOIN LATERAL (

@@ -3,6 +3,7 @@ import type { QueryResultRow } from 'pg';
 import type { Database } from '../../db/pool';
 import { forbidden } from '../../shared/errors/app-error';
 import type { AuthContext } from '../auth/auth.types';
+import { driverMemberships } from '../auth/driver-scope';
 import { CorridaRepository, type CorridaScope } from '../corridas/corrida.repository';
 import type { CorridaListQuery } from '../corridas/corrida.schemas';
 import type { PainelParticipanteQuery } from './painel.schemas';
@@ -23,6 +24,11 @@ export class PainelParticipanteRepository {
   }
 
   async get(auth: AuthContext, query: PainelParticipanteQuery) {
+    if (auth.contaMotoristaId && auth.perfil === 'PRESTADOR') return this.getDriver(auth, query);
+    return this.getTenant(auth, query);
+  }
+
+  private async getTenant(auth: AuthContext, query: PainelParticipanteQuery) {
     const identity = await this.identity(auth);
     const period = this.period(query);
     const bounds = await this.database.query<{ inicio: Date; fim: Date }>(
@@ -98,6 +104,25 @@ export class PainelParticipanteRepository {
       corridas: identity.scope.kind === 'FUNCIONARIO' ? { ...history,
         data: history.data.map(ride => employeeRide(ride, (identity.scope as { funcionarioId: string }).funcionarioId)) } : history,
     };
+  }
+
+  private async getDriver(auth: AuthContext, query: PainelParticipanteQuery) {
+    const members = await driverMemberships(this.database, auth);
+    if (!members.length) throw forbidden();
+    const period = this.period(query);
+    const summaries = [];
+    for (const m of members) summaries.push(await this.getTenant({ ...auth, contaMotoristaId: undefined, empresaId: m.empresa_id, usuarioId: m.usuario_id }, { ...query, pagina: 1, limite: 1 }));
+    const resumo = { ...summaries[0]!.resumo };
+    for (const key of ['total','finalizadas','canceladas','agendadas','emAndamento','recusadas','proximas'] as const) resumo[key] = summaries.reduce((sum, s) => sum + s.resumo[key], 0);
+    resumo.valorTotal = summaries.reduce((sum, s) => sum + Math.round(Number(s.resumo.valorTotal) * 100), 0).toFixed(0);
+    resumo.valorTotal = (Number(resumo.valorTotal) / 100).toFixed(2);
+    resumo.valorMedio = resumo.finalizadas ? (Number(resumo.valorTotal) / resumo.finalizadas).toFixed(2) : '0.00';
+    const corridas = await this.rides.list(auth.empresaId, { kind: 'MOTORISTA', contaId: auth.contaMotoristaId!, periodo: period, apenasAtribuidas: true }, {
+      ...query, inicio: undefined, fim: undefined,
+    });
+    const busy = await this.rides.hasActiveRide(this.database, members[0]!.empresa_id, members[0]!.prestador_id);
+    return { perfil: auth.perfil, periodo: { inicio: period.inicio, fim: period.fim },
+      disponibilidade: !busy && members.some(m => m.disponivel), resumo, corridas };
   }
 
   private async identity(auth: AuthContext): Promise<{ scope: CorridaScope; disponivel: boolean | null }> {

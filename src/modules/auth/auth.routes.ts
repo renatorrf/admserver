@@ -15,8 +15,9 @@ import { recoveryMessage, type PasswordService } from './password.service';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import type { ManagerLoginService } from './manager-login.service';
+import type { DriverLoginService } from './driver-login.service';
 
-export function createAuthRouter(auth: AuthApplication, tokens: TokenService, passwords?: PasswordService, managers?: ManagerLoginService): Router {
+export function createAuthRouter(auth: AuthApplication, tokens: TokenService, passwords?: PasswordService, managers?: ManagerLoginService, drivers?: DriverLoginService): Router {
   const router = Router();
   const controller = new AuthController(auth);
   const authenticate = createAuthenticate(tokens, true);
@@ -37,6 +38,10 @@ export function createAuthRouter(auth: AuthApplication, tokens: TokenService, pa
   });
 
   router.get('/empresas', asyncHandler(controller.companies));
+  if (drivers && managers) router.post('/acesso', sensitiveRouteLimiter, validateBody(loginSchema.omit({ empresa: true })), asyncHandler(async (req, res) => {
+    const session = await drivers.identify(req.body);
+    res.json({ data: session ? { sessao: session } : await managers.identify(req.body) });
+  }));
   if (managers) {
     router.post('/gestor/login', sensitiveRouteLimiter, validateBody(loginSchema.omit({ empresa: true })), asyncHandler(async (req, res) => {
       res.json({ data: await managers.identify(req.body) });

@@ -7,6 +7,7 @@ import { ZodError } from 'zod';
 import type { AppConfig } from '../config/env';
 import type { Database } from '../db/pool';
 import type { AuthContext } from '../modules/auth/auth.types';
+import { driverMemberships } from '../modules/auth/driver-scope';
 import type { TokenService } from '../modules/auth/token-service';
 import type { CorridaRecord } from '../modules/corridas/corrida.types';
 import {
@@ -140,10 +141,21 @@ export function attachSocketServer(
     }, Math.max(0, expiresIn - refreshLeadTime));
     const expirationTimer = setTimeout(() => socket.disconnect(true), expiresIn + 250);
     let validatingAccess = false;
+    const syncDriverRooms = async () => {
+      if (!database || !socket.data.auth.contaMotoristaId) return;
+      const members = await driverMemberships(database, socket.data.auth);
+      const desired = new Set(members.flatMap(m => [userRoom(m.empresa_id, m.usuario_id), providerRoom(m.empresa_id, m.prestador_id), profileRoom(m.empresa_id, 'PRESTADOR')]));
+      for (const room of socket.rooms) {
+        if (room.startsWith('empresa:') && !room.includes(':corrida:') && !desired.has(room)) await socket.leave(room);
+        if (room.includes(':corrida:') && !members.some(m => room.startsWith(`empresa:${m.empresa_id}:`))) await socket.leave(room);
+      }
+      await socket.join([...desired]);
+    };
     const accessTimer = setInterval(() => {
       if (validatingAccess || !socket.connected) return;
       validatingAccess = true;
       void tokens.authenticateAccess(socket.data.accessToken)
+        .then(syncDriverRooms)
         .catch(() => socket.disconnect(true))
         .finally(() => { validatingAccess = false; });
     }, 15_000);
@@ -172,7 +184,9 @@ export function attachSocketServer(
       ).then((result) => socket.join(result.rows.map((row) => centerRoom(socket.data.auth.empresaId, row.centro_custo_id))))
         .catch(() => socket.disconnect(true));
     }
-    if (database && socket.data.auth.perfil === 'PRESTADOR') {
+    if (database && socket.data.auth.contaMotoristaId) {
+      void syncDriverRooms().catch(() => socket.disconnect(true));
+    } else if (database && socket.data.auth.perfil === 'PRESTADOR') {
       void database.query<{ id: string }>(
         'SELECT id FROM admtaxi.prestadores WHERE empresa_id=$1 AND usuario_id=$2 AND ativo=TRUE',
         [socket.data.auth.empresaId, socket.data.auth.usuarioId],
@@ -190,7 +204,7 @@ export function attachSocketServer(
           await tokens.authenticateAccess(socket.data.accessToken);
           const { corridaId } = acompanharCorridaSchema.parse(raw);
           const snapshot = await locations.snapshot(socket.data.auth, corridaId);
-          await socket.join(rideRoom(socket.data.auth.empresaId, corridaId));
+          await socket.join(rideRoom(snapshot.corrida.empresaId, corridaId));
           respond(ack, { ok: true, data: snapshot });
         } catch (error) {
           ackError(ack, error);
@@ -206,7 +220,7 @@ export function attachSocketServer(
     socket.on('corrida:parar-acompanhamento', (raw: unknown, ack?: RealtimeAck) => {
       try {
         const { corridaId } = acompanharCorridaSchema.parse(raw);
-        void socket.leave(rideRoom(socket.data.auth.empresaId, corridaId));
+        for (const room of socket.rooms) if (room.endsWith(`:corrida:${corridaId}`)) void socket.leave(room);
         respond(ack, { ok: true, data: null });
       } catch (error) {
         ackError(ack, error);

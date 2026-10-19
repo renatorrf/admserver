@@ -3,6 +3,8 @@ import type { QueryResultRow } from 'pg';
 import type { Database } from '../../db/pool';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
 import type { AuthContext, PerfilUsuario } from '../auth/auth.types';
+import { driverMemberships } from '../auth/driver-scope';
+import { forbidden } from '../../shared/errors/app-error';
 import type { DispositivoAtualInput, DispositivoGestaoListQuery } from './dispositivo.schemas';
 
 type DeviceRow = QueryResultRow & {
@@ -18,6 +20,13 @@ export class DispositivoService {
   constructor(private readonly database: Database) {}
 
   async syncCurrent(auth: AuthContext, input: DispositivoAtualInput) {
+    if (auth.contaMotoristaId) {
+      const members = await driverMemberships(this.database, auth);
+      if (!members.length) throw forbidden();
+      const devices: ReturnType<DispositivoService['mapDevice']>[] = [];
+      for (const m of members) devices.push(await this.syncCurrent({ ...auth, contaMotoristaId: undefined, empresaId: m.empresa_id, usuarioId: m.usuario_id }, input));
+      return devices[0]!;
+    }
     const result = await this.database.query<DeviceRow>(
       `INSERT INTO admtaxi.dispositivos_usuario
          (empresa_id, usuario_id, chave_dispositivo, plataforma, nome_dispositivo, navegador, modo_acesso,
@@ -37,6 +46,11 @@ export class DispositivoService {
   }
 
   async deactivateCurrent(auth: AuthContext, deviceKey: string): Promise<void> {
+    if (auth.contaMotoristaId) {
+      await this.database.query(`UPDATE admtaxi.dispositivos_usuario SET ativo=FALSE,ultimo_uso_em=CURRENT_TIMESTAMP
+        WHERE chave_dispositivo=$2 AND usuario_id IN(SELECT id FROM admtaxi.usuarios WHERE conta_motorista_id=$1)`, [auth.contaMotoristaId, deviceKey]);
+      return;
+    }
     await this.database.query(
       `UPDATE admtaxi.dispositivos_usuario SET ativo = FALSE, ultimo_uso_em = CURRENT_TIMESTAMP
         WHERE empresa_id = $1 AND usuario_id = $2 AND chave_dispositivo = $3`,

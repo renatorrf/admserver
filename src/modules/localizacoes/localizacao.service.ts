@@ -5,6 +5,7 @@ import { conflict, forbidden, notFound } from '../../shared/errors/app-error';
 import type { PaginatedResult } from '../../shared/pagination/pagination';
 import { paginate } from '../../shared/pagination/pagination';
 import type { AuthContext } from '../auth/auth.types';
+import { driverRideContext } from '../auth/driver-scope';
 import type { CorridaService } from '../corridas/corrida.service';
 import { LocalizacaoRepository, type LocalizacaoStore } from './localizacao.repository';
 import type { LocalizacaoCreateInput, LocalizacaoListQuery } from './localizacao.schemas';
@@ -25,6 +26,7 @@ export class LocalizacaoService {
   }
 
   async create(auth: AuthContext, corridaId: string, input: LocalizacaoCreateInput): Promise<LocalizacaoRecord> {
+    auth = await driverRideContext(this.database, auth, corridaId);
     if (auth.perfil !== 'PRESTADOR') throw forbidden();
     const location = await withTransaction(this.database, async (client) => {
       const provider = await this.repository.getProvider(client, auth.empresaId, auth.usuarioId);
@@ -46,6 +48,7 @@ export class LocalizacaoService {
     corridaId: string,
     query: LocalizacaoListQuery,
   ): Promise<PaginatedResult<LocalizacaoRecord>> {
+    auth = await driverRideContext(this.database, auth, corridaId);
     await this.rideAccess.get(auth, corridaId);
     if (auth.perfil === 'FUNCIONARIO') {
       const latest = await this.repository.latest(this.database, auth.empresaId, corridaId);
@@ -55,6 +58,7 @@ export class LocalizacaoService {
   }
 
   async snapshot(auth: AuthContext, corridaId: string): Promise<AcompanhamentoSnapshot> {
+    auth = await driverRideContext(this.database, auth, corridaId);
     const corrida = await this.rideAccess.get(auth, corridaId);
     const localizacaoAtual = await this.repository.latest(this.database, auth.empresaId, corridaId);
     return { corrida, localizacaoAtual };

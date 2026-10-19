@@ -32,6 +32,7 @@ export type CorridaParadaRecord = {
 export type CorridaRecord = Record<string, unknown> & {
   id: string;
   empresaId: string;
+  empresaNome?: string;
   solicitanteUsuarioId: string;
   funcionarioId: string;
   centroCustoId: string;

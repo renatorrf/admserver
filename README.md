@@ -318,6 +318,32 @@ os indicadores em `docs/DASHBOARD_E_RELATORIOS.md`. Faturamento e push estao doc
 
 ## Qualidade
 
+### Motoristas vinculados a varias empresas (020)
+
+- O gestor pesquisa o e-mail completo em `GET /api/v1/motoristas/vinculos` e confirma o vinculo
+  com `POST /api/v1/motoristas/vinculos` (`contaId`, `copiarVeiculo`). A pesquisa nao revela
+  empresas, clientes ou corridas de terceiros. O vinculo e direto, auditado e transacional.
+- `POST /api/v1/auth/acesso` recebe somente e-mail/senha. Motoristas recebem a sessao diretamente;
+  gestores continuam com a selecao de empresas. O login antigo por empresa permanece compativel.
+- A credencial pertence a `contas_motorista`; os registros locais de usuario/prestador/veiculo
+  preservam historicos e isolamento. A empresa de cada operacao vem do vinculo autenticado e
+  da corrida consultada no servidor, nunca de um seletor do motorista.
+- Corridas, painel, faturamentos, GPS e rooms abrangem os vinculos ativos. O aceite usa trava
+  da conta para impedir duas corridas simultaneas entre empresas. Inativar um vinculo nao
+  inativa os demais. As rooms sao reconciliadas a cada 15 segundos e a cada reconexao.
+- Troca/recuperacao de senha altera a credencial unica e revoga sessoes de todos os vinculos.
+  Gestores nao podem redefinir a senha de uma conta compartilhada pelo cadastro local.
+- O push usa as inscricoes da conta, mantendo a notificacao na empresa de origem e verificando
+  no banco se a inscricao de outra empresa pertence ao mesmo motorista. A 020 preserva as
+  tentativas existentes, separando suas duas empresas na chave estrangeira do dispositivo.
+- Aplicar a 020 antes de publicar o backend e depois atualizar frontend/APK. Fazer novo login
+  para obter o token com `contaMotoristaId`. A migracao preserva senhas e nao mescla contas antigas
+  automaticamente. O rollback destrutivo esta bloqueado; usar uma correcao forward se necessario.
+
+`npm run test:review:integration` cobre duas empresas, aceite concorrente, vinculo/inativacao,
+GPS/socket real, push com transporte simulado, isolamento e recuperacao por e-mail simulado em
+PostgreSQL temporario local. Nao valida entrega push/GPS em aparelho nem o deploy publicado.
+
 ```powershell
 npm run lint
 npm test

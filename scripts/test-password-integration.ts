@@ -63,6 +63,10 @@ async function main(): Promise<void> {
     await pool.query('BEGIN'); await pool.query(accountSql); await pool.query('COMMIT');
     assert.equal((await pool.query('SELECT senha_versao,deve_alterar_senha FROM admtaxi.contas_gestor WHERE id=$1',[legacy])).rows[0].deve_alterar_senha,false);
     ok('016 rollback/apply preserves the legacy manager credential and memberships');
+    await pool.query(await readFile('src/db/migrations/018_endereco_empresa.up.sql','utf8'));
+    await pool.query('BEGIN');
+    await pool.query(await readFile('src/db/migrations/020_contas_motorista.up.sql','utf8'));
+    await pool.query('COMMIT');
 
     const repository = new PgAuthRepository(pool);
     const tokens = new TokenService({ jwtAccessSecret:randomUUID()+randomUUID(),jwtRefreshSecret:randomUUID()+randomUUID(),

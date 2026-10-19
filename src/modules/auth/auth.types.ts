@@ -2,6 +2,7 @@ export const perfisUsuario = ['PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR'] a
 export type PerfilUsuario = (typeof perfisUsuario)[number];
 
 export type AuthContext = {
+  contaMotoristaId?: string;
   usuarioId: string;
   empresaId: string;
   perfil: PerfilUsuario;

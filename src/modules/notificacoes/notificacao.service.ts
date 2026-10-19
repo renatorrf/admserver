@@ -96,7 +96,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   async listDevices(auth: AuthContext): Promise<PushDevice[]> {
     const result = await this.database.query<SubscriptionRow>(
       `SELECT * FROM admtaxi.push_subscriptions
-        WHERE empresa_id=$1 AND usuario_id=$2 ORDER BY ativo DESC,atualizado_em DESC`,
+        WHERE (empresa_id=$1 AND usuario_id=$2 OR usuario_id IN(SELECT sibling.id FROM admtaxi.usuarios sibling JOIN admtaxi.usuarios root
+          ON sibling.conta_motorista_id=root.conta_motorista_id WHERE root.empresa_id=$1 AND root.id=$2)) ORDER BY ativo DESC,atualizado_em DESC`,
       [auth.empresaId, auth.usuarioId],
     );
     return result.rows.map((row) => this.mapDevice(row));
@@ -105,7 +106,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   async revoke(auth: AuthContext, id: string): Promise<void> {
     const result = await this.database.query(
       `UPDATE admtaxi.push_subscriptions SET ativo=FALSE
-        WHERE empresa_id=$1 AND usuario_id=$2 AND id=$3 AND ativo=TRUE`,
+        WHERE (empresa_id=$1 AND usuario_id=$2 OR usuario_id IN(SELECT sibling.id FROM admtaxi.usuarios sibling JOIN admtaxi.usuarios root
+          ON sibling.conta_motorista_id=root.conta_motorista_id WHERE root.empresa_id=$1 AND root.id=$2)) AND id=$3 AND ativo=TRUE`,
       [auth.empresaId, auth.usuarioId, id],
     );
     if (result.rowCount !== 1) throw notFound('Inscricao Web Push');
@@ -205,7 +207,12 @@ export class NotificacaoService implements CorridaNotificationPublisher {
         WHERE p.empresa_id=$1 AND p.ativo=TRUE AND p.disponivel=TRUE
           AND p.usuario_id IS NOT NULL AND u.ativo=TRUE AND u.perfil='PRESTADOR'
           AND COALESCE(p.cidade_operacao,e.cidade_padrao)=e.cidade_padrao
-          AND COALESCE(p.estado_operacao,e.estado_padrao)=e.estado_padrao`,
+          AND COALESCE(p.estado_operacao,e.estado_padrao)=e.estado_padrao
+          AND NOT EXISTS(SELECT 1 FROM admtaxi.corridas busy
+            JOIN admtaxi.prestadores bp ON bp.id=busy.prestador_id AND bp.empresa_id=busy.empresa_id
+            JOIN admtaxi.usuarios bu ON bu.id=bp.usuario_id AND bu.empresa_id=bp.empresa_id
+            WHERE (bp.id=p.id OR bu.conta_motorista_id=u.conta_motorista_id)
+              AND busy.status IN ('ACEITA','EM_DESLOCAMENTO','AGUARDANDO_PASSAGEIRO','EM_CORRIDA'))`,
       [ride.empresaId],
     );
     await Promise.all(recipients.rows.map((recipient) => this.sendRecipient({
@@ -322,7 +329,12 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     if (input.subscriptionId) values.push(input.subscriptionId);
     const subscriptions = await this.database.query<SubscriptionRow>(
       `SELECT * FROM admtaxi.push_subscriptions
-        WHERE empresa_id=$1 AND usuario_id=$2 AND ativo=TRUE${idFilter}`, values,
+        WHERE (empresa_id=$1 AND usuario_id=$2 OR usuario_id IN (
+          SELECT sibling.id FROM admtaxi.usuarios sibling JOIN admtaxi.usuarios recipient
+            ON recipient.conta_motorista_id=sibling.conta_motorista_id
+          WHERE recipient.empresa_id=$1 AND recipient.id=$2 AND recipient.ativo AND recipient.perfil='PRESTADOR'
+            AND EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.usuario_id=recipient.id)))
+        AND ativo=TRUE${idFilter}`, values,
     );
     if (!this.pushConfig || subscriptions.rows.length === 0) {
       await this.finishLog(notificationId, 'IGNORADA', { dispositivos: subscriptions.rows.length },
@@ -336,18 +348,18 @@ export class NotificacaoService implements CorridaNotificationPublisher {
       data: { type: input.event, corridaId: input.corridaId, openUrl: destination },
     });
     const results = await Promise.all(subscriptions.rows.map((subscription) =>
-      this.sendSubscription(notificationId, subscription, payload)));
+      this.sendSubscription(input.empresaId, notificationId, subscription, payload)));
     const sent = results.filter(Boolean).length;
     const status = sent === results.length ? 'ENVIADA' : sent === 0 ? 'FALHA' : 'PARCIAL';
     await this.finishLog(notificationId, status, { enviados: sent, falhas: results.length - sent },
       sent === results.length ? null : 'Uma ou mais inscricoes recusaram a notificacao.');
   }
 
-  private async sendSubscription(notificationId: string, subscription: SubscriptionRow, payload: string): Promise<boolean> {
+  private async sendSubscription(companyId: string, notificationId: string, subscription: SubscriptionRow, payload: string): Promise<boolean> {
     const attempt = await this.database.query<{ id: string }>(
-      `INSERT INTO admtaxi.push_tentativas (empresa_id,notificacao_id,subscription_id)
-       VALUES ($1,$2,$3) ON CONFLICT (notificacao_id,subscription_id) DO NOTHING RETURNING id`,
-      [subscription.empresa_id, notificationId, subscription.id],
+      `INSERT INTO admtaxi.push_tentativas (empresa_id,notificacao_id,subscription_id,subscription_empresa_id)
+       VALUES ($1,$2,$3,$4) ON CONFLICT (notificacao_id,subscription_id) DO NOTHING RETURNING id`,
+      [companyId, notificationId, subscription.id, subscription.empresa_id],
     );
     const attemptId = attempt.rows[0]?.id;
     if (!attemptId) return true;

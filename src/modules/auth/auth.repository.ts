@@ -5,6 +5,7 @@ import type { AuthContext, AuthUserRecord, LoginCompany, RefreshTokenRecord } fr
 import { lockCredentials } from './account-credentials';
 
 type AuthUserRow = {
+  conta_motorista_id?: string | null;
   id: string;
   empresa_id: string;
   nome: string;
@@ -36,6 +37,7 @@ function mapUser(row: AuthUserRow | null): AuthUserRecord | null {
     return null;
   }
   return {
+    ...(row.conta_motorista_id ? { contaMotoristaId: row.conta_motorista_id } : {}),
     usuarioId: row.id,
     empresaId: row.empresa_id,
     nome: row.nome,
@@ -53,6 +55,14 @@ export class PgAuthRepository implements AuthRepository {
   constructor(private readonly pool: Pool) {}
 
   async accessAllowed(auth: AuthContext): Promise<boolean> {
+    if (auth.contaMotoristaId && auth.perfil === 'PRESTADOR') {
+      const valid = await this.pool.query(`SELECT 1 FROM admtaxi.usuarios_autenticacao u
+        WHERE u.id=$1 AND u.empresa_id=$2 AND u.conta_motorista_id=$3 AND u.perfil='PRESTADOR'
+        AND u.senha_versao=$4 AND u.deve_alterar_senha=$5
+        AND EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.conta_id=u.conta_motorista_id)`,
+      [auth.usuarioId, auth.empresaId, auth.contaMotoristaId, auth.senhaVersao ?? 0, auth.deveAlterarSenha ?? false]);
+      return valid.rowCount === 1;
+    }
     const result = await this.pool.query(
       `SELECT 1 FROM admtaxi.usuarios_autenticacao u JOIN admtaxi.empresas e ON e.id=u.empresa_id
        WHERE u.id=$1 AND u.empresa_id=$2 AND u.perfil=$3 AND u.ativo=TRUE AND e.ativo=TRUE
@@ -79,7 +89,7 @@ export class PgAuthRepository implements AuthRepository {
     const row = await queryOne<AuthUserRow>(
       this.pool,
       `SELECT u.id, u.empresa_id, u.nome, u.email::text AS email, u.senha_hash,
-              u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa, u.senha_versao, u.deve_alterar_senha
+              u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa, u.senha_versao, u.deve_alterar_senha, u.conta_motorista_id
          FROM admtaxi.usuarios_autenticacao u
          JOIN admtaxi.empresas e ON e.id = u.empresa_id
         WHERE u.email = $1 AND e.codigo_acesso = $2
@@ -93,7 +103,10 @@ export class PgAuthRepository implements AuthRepository {
     const row = await queryOne<AuthUserRow>(
       executor,
       `SELECT u.id, u.empresa_id, u.nome, u.email::text AS email, u.senha_hash,
-              u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa, u.senha_versao, u.deve_alterar_senha
+              u.perfil::text AS perfil,
+              CASE WHEN u.conta_motorista_id IS NOT NULL THEN EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.conta_id=u.conta_motorista_id) ELSE u.ativo END AS ativo,
+              CASE WHEN u.conta_motorista_id IS NOT NULL THEN TRUE ELSE e.ativo END AS empresa_ativa,
+              u.senha_versao, u.deve_alterar_senha, u.conta_motorista_id
          FROM admtaxi.usuarios_autenticacao u
          JOIN admtaxi.empresas e ON e.id = u.empresa_id
         WHERE u.id = $1 AND u.empresa_id = $2
@@ -177,7 +190,10 @@ export class PgAuthRepository implements AuthRepository {
           AND u.empresa_id = rt.empresa_id
           AND e.id = u.empresa_id
       RETURNING u.id, u.empresa_id, u.nome, u.email::text AS email, u.senha_hash,
-                u.perfil::text AS perfil, u.ativo, e.ativo AS empresa_ativa, u.senha_versao, u.deve_alterar_senha`,
+                u.perfil::text AS perfil,
+                CASE WHEN u.conta_motorista_id IS NOT NULL THEN EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.conta_id=u.conta_motorista_id) ELSE u.ativo END AS ativo,
+                CASE WHEN u.conta_motorista_id IS NOT NULL THEN TRUE ELSE e.ativo END AS empresa_ativa,
+                u.senha_versao, u.deve_alterar_senha, u.conta_motorista_id`,
       [tokenHash, auth.usuarioId, auth.empresaId],
     );
     return mapUser(result.rows[0] ?? null);

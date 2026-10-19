@@ -189,9 +189,10 @@ export class FaturamentoService {
   }
 
   async list(auth: AuthContext, query: FaturamentoListQuery) {
-    const values: unknown[] = [auth.empresaId];
-    const conditions = ['f.empresa_id=$1'];
-    const providerId = await this.providerScope(auth);
+    const shared = auth.perfil === 'PRESTADOR' && auth.contaMotoristaId;
+    const values: unknown[] = [shared || auth.empresaId];
+    const conditions = [shared ? 'EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.conta_id=$1 AND m.empresa_id=f.empresa_id AND m.prestador_id=f.prestador_id)' : 'f.empresa_id=$1'];
+    const providerId = shared ? null : await this.providerScope(auth);
     if (providerId) { values.push(providerId); conditions.push(`f.prestador_id=$${values.length}`); }
     const add = (sql: string, value: unknown): void => { values.push(value); conditions.push(sql.replace('?', `$${values.length}`)); };
     if (query.status) add('f.status=?', query.status);
@@ -208,6 +209,13 @@ export class FaturamentoService {
   }
 
   async get(auth: AuthContext, id: string) {
+    if (auth.perfil === 'PRESTADOR' && auth.contaMotoristaId) {
+      const m = (await this.database.query<{ usuario_id: string; empresa_id: string }>(
+        `SELECT m.usuario_id,m.empresa_id FROM admtaxi.motorista_vinculos_ativos m JOIN admtaxi.faturamentos f
+          ON f.empresa_id=m.empresa_id AND f.prestador_id=m.prestador_id WHERE m.conta_id=$1 AND f.id=$2`, [auth.contaMotoristaId, id])).rows[0];
+      if (!m) throw notFound('Faturamento');
+      auth = { ...auth, usuarioId: m.usuario_id, empresaId: m.empresa_id };
+    }
     const providerId = await this.providerScope(auth);
     const values: unknown[] = [auth.empresaId, id];
     const provider = providerId ? ' AND f.prestador_id=$3' : '';

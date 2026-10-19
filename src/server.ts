@@ -24,6 +24,7 @@ import { PasswordService } from './modules/auth/password.service';
 import { SmtpPasswordMailer } from './modules/auth/password-mailer';
 import { MasterRecoveryService } from './modules/master/master-recovery.service';
 import { ManagerLoginService } from './modules/auth/manager-login.service';
+import { DriverLoginService } from './modules/auth/driver-login.service';
 import { EnderecoService } from './modules/enderecos/endereco.service';
 
 const config = getConfig();
@@ -55,6 +56,7 @@ const app = createApp({
   config, logger, pool, auth: authService, tokens: tokenService, adminRouter, operationalRouter,
   provisioningRouter, masterRouter,
   managers: new ManagerLoginService(pool, tokenService, config.jwtAccessExpiresInSeconds),
+  drivers: new DriverLoginService(pool, tokenService, config.jwtAccessExpiresInSeconds),
   passwords: new PasswordService(pool, logger, config.mail, config.mail ? new SmtpPasswordMailer(config.mail) : undefined),
 });
 const server = createServer(app);
@@ -63,6 +65,7 @@ const socketLocationService = new LocalizacaoService(pool, socketRideService, re
 const io = attachSocketServer(server, config, tokenService, socketLocationService, realtime, logger, pool);
 
 async function start(): Promise<void> {
+  if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=20')).rowCount) throw new Error('Migration 020_contas_motorista pendente. Aplique antes de publicar este backend.');
   const addressMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=18');
   if (!addressMigration.rowCount) throw new Error('Migration 018_endereco_empresa pendente. Aplique antes de publicar este backend.');
   const accountMigration = await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=16');

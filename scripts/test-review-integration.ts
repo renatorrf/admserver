@@ -36,6 +36,7 @@ import { createAuthRouter } from '../src/modules/auth/auth.routes';
 import { PrestadorUnificadoService } from '../src/modules/prestadores/prestador-unificado.service';
 import { prestadorUnificadoCreateSchema } from '../src/modules/prestadores/prestador-unificado.schemas';
 import { createPrestadorUnificadoRouter } from '../src/modules/prestadores/prestador-unificado.routes';
+import { testSharedDriverAccounts } from './test-shared-driver-accounts';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -447,16 +448,16 @@ async function main(): Promise<void> {
       candidate.acesso[field] = duplicate;
       const before = await pool.query('SELECT count(*) FROM admtaxi.usuarios WHERE empresa_id=$1', [company]);
       const denied = await request(loginApp).post('/cadastros/prestadores').set('Authorization', bearer(manager)).send(candidate).expect(409);
-      assert.equal(denied.body.erro.codigo, 'REGISTRO_DUPLICADO');
-      assert.equal(denied.body.erro.detalhes.campos[0].campo, field);
-      assert(denied.body.erro.mensagem.includes('empresa'));
+      assert.equal(denied.body.erro.codigo, field === 'email' ? 'CONTA_MOTORISTA' : 'REGISTRO_DUPLICADO');
+      if (field !== 'email') assert.equal(denied.body.erro.detalhes.campos[0].campo, field);
+      else assert(denied.body.erro.mensagem.includes('Vincular motorista existente'));
       assert.equal((await pool.query('SELECT count(*) FROM admtaxi.usuarios WHERE empresa_id=$1', [company])).rows[0].count, before.rows[0].count);
     }
     await providers.update(manager, registeredDriver.id, { acesso: { ativo: false } }, {});
     await assert.rejects(pool.query(`INSERT INTO admtaxi.usuarios(empresa_id,nome,email,telefone,senha_hash,perfil)
       VALUES($1,'Novo nome','new.duplicate@example.test','34999991234','synthetic','PRESTADOR')`, [company]), { code: '23505' });
-    await pool.query(`INSERT INTO admtaxi.usuarios(empresa_id,nome,email,telefone,senha_hash,perfil)
-      VALUES($1,'Motorista temporario','driver.temp@example.test','34999991234','synthetic','PRESTADOR')`, [otherCompany]);
+    await assert.rejects(pool.query(`INSERT INTO admtaxi.usuarios(empresa_id,nome,email,telefone,senha_hash,perfil)
+      VALUES($1,'Motorista temporario','driver.temp@example.test','34999991234','synthetic','PRESTADOR')`, [otherCompany]), { code: 'P2001' });
     const plateDuplicate = await request(loginApp).post('/cadastros/prestadores').set('Authorization', bearer(manager)).send({
       ...driverRegistration, acesso: { ...driverRegistration.acesso, nome: 'Placa duplicada', email: 'plate@example.test', telefone: '34988881234' },
       prestador: { ...driverRegistration.prestador, cpf: '52998224725', numeroCnh: 'OTHER12345' },
@@ -464,7 +465,7 @@ async function main(): Promise<void> {
     assert.equal(plateDuplicate.body.erro.detalhes.campos[0].campo, 'placa');
     assert.equal((await pool.query("SELECT count(*) FROM admtaxi.usuarios WHERE email='plate@example.test'")).rows[0].count, '0');
     for (const table of ['usuarios', 'prestadores', 'funcionarios']) {
-      const ids = (await pool.query(`SELECT id FROM admtaxi.${table} WHERE empresa_id=$1 ORDER BY id LIMIT 2`, [company])).rows.map(row => row.id);
+      const ids = (await pool.query(`SELECT id FROM admtaxi.${table} WHERE empresa_id=$1 ${table === 'usuarios' ? "AND perfil='FUNCIONARIO'" : ''} ORDER BY id LIMIT 2`, [company])).rows.map(row => row.id);
       for (const field of ['nome', 'email', 'telefone']) {
         const value = field === 'nome' ? `Nome exclusivo ${table}` : field === 'email' ? `${table}@example.test` : '31912345678';
         await pool.query(`UPDATE admtaxi.${table} SET ${field}=$3 WHERE empresa_id=$1 AND id=$2`, [company, ids[0], value]);
@@ -477,6 +478,7 @@ async function main(): Promise<void> {
     assert.equal(concurrent.filter(r => r.status === 'fulfilled').length, 1);
     assert.equal(concurrent.filter(r => r.status === 'rejected').length, 1);
     ok('DUPLICATES normalized names/phones/emails/plates, inactive records, tenant scope, unchanged edits, atomic rollback and concurrent writes');
+    await testSharedDriverAccounts(pool, ok);
     console.log(JSON.stringify({ result: 'passed', checks, database: 'temporary PostgreSQL 18, loopback only', remoteDatabaseUsed: false }));
   } finally {
     await pool?.end();

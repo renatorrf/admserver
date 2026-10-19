@@ -95,7 +95,7 @@ describe('Socket.IO', () => {
   it('publica somente invalidacao e revalida o escopo antes de enviar GPS', async () => {
     const tokens = new TokenService(config);
     const bus = new RealtimeBus();
-    const snapshot = vi.fn().mockResolvedValue({ corrida: { id: corridaId }, localizacaoAtual: null });
+    const snapshot = vi.fn().mockResolvedValue({ corrida: { id: corridaId, empresaId: auth.empresaId }, localizacaoAtual: null });
     httpServer = createServer();
     ioServer = attachSocketServer(httpServer, config, tokens,
       { snapshot, create: vi.fn() } as unknown as LocalizacaoService, bus, pino({ level: 'silent' }));

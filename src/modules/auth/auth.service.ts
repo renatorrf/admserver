@@ -89,6 +89,7 @@ export class AuthService implements AuthApplication {
 
   private toCurrentUser(user: AuthUserRecord): CurrentUser {
     return {
+      ...(user.contaMotoristaId ? { contaMotoristaId: user.contaMotoristaId } : {}),
       usuarioId: user.usuarioId,
       empresaId: user.empresaId,
       nome: user.nome,

@@ -8,6 +8,7 @@ import { AppError, unauthorized } from '../../shared/errors/app-error';
 import { perfisUsuario, type AuthContext, type RefreshTokenRecord } from './auth.types';
 
 const tokenPayloadSchema = z.object({
+  contaMotoristaId: z.string().uuid().optional(),
   sub: z.string().uuid(),
   empresaId: z.string().uuid(),
   perfil: z.enum(perfisUsuario),
@@ -54,7 +55,7 @@ export class TokenService {
     const refreshId = randomUUID();
     const accessToken = jwt.sign(
       { sub: auth.usuarioId, empresaId: auth.empresaId, perfil: auth.perfil, tipo: 'access',
-        senhaVersao: auth.senhaVersao, deveAlterarSenha: auth.deveAlterarSenha },
+        senhaVersao: auth.senhaVersao, deveAlterarSenha: auth.deveAlterarSenha, contaMotoristaId: auth.contaMotoristaId },
       this.config.jwtAccessSecret,
       {
         expiresIn: this.config.jwtAccessExpiresInSeconds,
@@ -64,7 +65,7 @@ export class TokenService {
     );
     const refreshToken = jwt.sign(
       { sub: auth.usuarioId, empresaId: auth.empresaId, perfil: auth.perfil, tipo: 'refresh',
-        senhaVersao: auth.senhaVersao, deveAlterarSenha: auth.deveAlterarSenha },
+        senhaVersao: auth.senhaVersao, deveAlterarSenha: auth.deveAlterarSenha, contaMotoristaId: auth.contaMotoristaId },
       this.config.jwtRefreshSecret,
       {
         expiresIn: this.config.jwtRefreshExpiresInSeconds,
@@ -95,6 +96,7 @@ export class TokenService {
     const payload = this.verify(token, this.config.jwtAccessSecret, 'access');
     return {
       auth: { usuarioId: payload.sub, empresaId: payload.empresaId, perfil: payload.perfil,
+        ...(payload.contaMotoristaId ? { contaMotoristaId: payload.contaMotoristaId } : {}),
         ...(payload.senhaVersao === undefined ? {} : { senhaVersao: payload.senhaVersao }),
         ...(payload.deveAlterarSenha === undefined ? {} : { deveAlterarSenha: payload.deveAlterarSenha }) },
       expiresAt: new Date(payload.exp * 1000),
@@ -104,6 +106,7 @@ export class TokenService {
   verifyRefresh(token: string): AuthContext {
     const payload = this.verify(token, this.config.jwtRefreshSecret, 'refresh');
     return { usuarioId: payload.sub, empresaId: payload.empresaId, perfil: payload.perfil,
+      ...(payload.contaMotoristaId ? { contaMotoristaId: payload.contaMotoristaId } : {}),
       ...(payload.senhaVersao === undefined ? {} : { senhaVersao: payload.senhaVersao }),
       ...(payload.deveAlterarSenha === undefined ? {} : { deveAlterarSenha: payload.deveAlterarSenha }) };
   }

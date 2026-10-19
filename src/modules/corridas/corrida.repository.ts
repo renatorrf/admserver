@@ -46,6 +46,7 @@ type PrestadorRow = QueryResultRow & PrestadorContext;
 type FuncionarioContextRow = QueryResultRow & FuncionarioContext;
 
 export type CorridaScope =
+  | { kind: 'MOTORISTA'; contaId: string; apenasAtribuidas?: boolean; periodo?: { inicio: string; fimExclusive: string } }
   | { kind: 'GESTOR' }
   | { kind: 'GERENTE'; usuarioId: string; setorIds: string[]; centroCustoIds: string[] }
   | { kind: 'PRESTADOR'; prestadorId: string; disponivel: boolean }
@@ -64,6 +65,7 @@ function numeric(value: unknown): number | null {
 }
 
 const corridaSelect = `SELECT c.*,
+  (SELECT nome_fantasia FROM admtaxi.empresas WHERE id=c.empresa_id) AS empresa_nome,
   f.nome AS funcionario_nome, f.telefone AS funcionario_telefone, f.matricula AS funcionario_matricula,
   cc.codigo AS centro_custo_codigo, cc.nome AS centro_custo_nome,
   su.nome AS solicitante_nome,
@@ -111,6 +113,7 @@ export function mapCorrida(row: CorridaRow): CorridaRecord {
   return {
     id: row.id,
     empresaId: row.empresa_id,
+    empresaNome: row.empresa_nome as string | undefined,
     solicitanteUsuarioId: row.solicitante_usuario_id,
     funcionarioId: row.funcionario_id,
     centroCustoId: row.centro_custo_id,
@@ -180,8 +183,8 @@ export class CorridaRepository {
   }
 
   async list(empresaId: string, scope: CorridaScope, query: CorridaListQuery): Promise<PaginatedResult<CorridaRecord>> {
-    const values: unknown[] = [empresaId];
-    const conditions = ['c.empresa_id = $1'];
+    const values: unknown[] = scope.kind === 'MOTORISTA' ? [] : [empresaId];
+    const conditions = scope.kind === 'MOTORISTA' ? [] : ['c.empresa_id = $1'];
     this.addScope(conditions, values, scope);
     const add = (sql: string, value: unknown): void => {
       values.push(value);
@@ -410,6 +413,8 @@ export class CorridaRepository {
     usuarioId: string,
     lock = false,
   ): Promise<PrestadorContext | null> {
+    if (lock) await executor.query(`SELECT a.id FROM admtaxi.contas_motorista a JOIN admtaxi.usuarios u ON u.conta_motorista_id=a.id
+      WHERE u.empresa_id=$1 AND u.id=$2 FOR UPDATE OF a`, [empresaId, usuarioId]);
     return queryOne<PrestadorRow>(
       executor,
       `SELECT id, usuario_id AS "usuarioId", disponivel, ativo
@@ -522,8 +527,11 @@ export class CorridaRepository {
 
   async hasActiveRide(executor: QueryExecutor, empresaId: string, prestadorId: string): Promise<boolean> {
     const result = await executor.query(
-      `SELECT 1 FROM admtaxi.corridas
-        WHERE empresa_id = $1 AND prestador_id = $2
+      `SELECT 1 FROM admtaxi.corridas c
+        WHERE (c.empresa_id = $1 AND c.prestador_id = $2 OR c.prestador_id IN (
+          SELECT p.id FROM admtaxi.prestadores p JOIN admtaxi.usuarios u ON u.id=p.usuario_id AND u.empresa_id=p.empresa_id
+          WHERE u.conta_motorista_id=(SELECT su.conta_motorista_id FROM admtaxi.prestadores sp JOIN admtaxi.usuarios su
+            ON su.id=sp.usuario_id AND su.empresa_id=sp.empresa_id WHERE sp.empresa_id=$1 AND sp.id=$2)))
           AND status IN ('ACEITA', 'EM_DESLOCAMENTO', 'AGUARDANDO_PASSAGEIRO', 'EM_CORRIDA')
         LIMIT 1`,
       [empresaId, prestadorId],
@@ -532,7 +540,21 @@ export class CorridaRepository {
   }
 
   private addScope(conditions: string[], values: unknown[], scope: CorridaScope): void {
-    if (scope.kind === 'GERENTE') {
+    if (scope.kind === 'MOTORISTA') {
+      values.push(scope.contaId);
+      conditions.push(`EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.conta_id=$${values.length}
+        AND m.empresa_id=c.empresa_id AND (c.prestador_id=m.prestador_id OR
+          (c.prestador_id IS NULL AND ${scope.apenasAtribuidas ? 'FALSE' : 'TRUE'} AND c.status='SOLICITADA' AND m.disponivel AND NOT EXISTS (
+            SELECT 1 FROM admtaxi.corridas busy JOIN admtaxi.prestadores bp ON bp.id=busy.prestador_id AND bp.empresa_id=busy.empresa_id
+            JOIN admtaxi.usuarios bu ON bu.id=bp.usuario_id AND bu.empresa_id=bp.empresa_id
+            WHERE bu.conta_motorista_id=m.conta_id AND busy.status IN ('ACEITA','EM_DESLOCAMENTO','AGUARDANDO_PASSAGEIRO','EM_CORRIDA')))))`);
+      if (scope.periodo) {
+        values.push(scope.periodo.inicio, scope.periodo.fimExclusive);
+        conditions.push(`EXISTS(SELECT 1 FROM admtaxi.empresas e WHERE e.id=c.empresa_id
+          AND c.solicitada_em >= ($${values.length - 1}::date::timestamp AT TIME ZONE e.timezone)
+          AND c.solicitada_em < ($${values.length}::date::timestamp AT TIME ZONE e.timezone))`);
+      }
+    } else if (scope.kind === 'GERENTE') {
       values.push(scope.centroCustoIds);
       conditions.push(`c.centro_custo_id = ANY($${values.length}::uuid[])`);
       conditions.push(`NOT EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes cp
