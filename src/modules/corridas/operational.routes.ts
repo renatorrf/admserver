@@ -36,13 +36,15 @@ import { PainelParticipanteRepository } from '../paineis/painel.repository';
 import { PainelParticipanteService } from '../paineis/painel.service';
 import { createFaturamentoRouter } from '../faturamentos/faturamento.routes';
 import { FaturamentoService } from '../faturamentos/faturamento.service';
+import type { ScheduledEmailQueue } from './scheduled-emails';
 
 export function createOperationalRouter(
   pool: Pool, tokens: TokenService, realtime?: RealtimeBus, geoapifyApiKey?: string, pushConfig?: PushConfig,
+  scheduledEmails?: ScheduledEmailQueue,
 ): Router {
   const router = Router();
   const notifications = new NotificacaoService(pool, pushConfig);
-  const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications);
+  const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications, undefined, scheduledEmails);
   const locations = new LocalizacaoService(pool, service, realtime);
   router.use('/dashboard', createAuthenticate(tokens), createDashboardRouter(new DashboardService(new DashboardRepository(pool))));
   router.use('/paineis', createAuthenticate(tokens), createPainelParticipanteRouter(

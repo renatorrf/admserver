@@ -108,6 +108,35 @@ const funcionario: AuthContext = { usuarioId: '78787878-7878-4787-8787-787878787
 const listQuery: CorridaListQuery = { pagina: 1, limite: 20 };
 
 describe('CorridaService', () => {
+  it.each([3_600_001, 7_200_000])('bloqueia aceite agendado %i ms antes sem ocupar prestador', async (offset) => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    try {
+      const store = new RideStore();
+      store.current = { ...ride(), tipo: 'AGENDADA', agendadaPara: new Date(Date.now() + offset) };
+      const audit = new RideAudit();
+      await expect(new CorridaService(fakeDatabase(), audit, store).accept(prestador, CORRIDA, { veiculoId: VEICULO }, {}))
+        .rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('uma hora antes') });
+      expect(store.current.status).toBe('SOLICITADA'); expect(store.provider.disponivel).toBe(true);
+      expect(store.events).toEqual([]); expect(audit.entries).toEqual([]);
+    } finally { now.mockRestore(); }
+  });
+
+  it.each([3_600_000, 3_599_999, 0])('permite aceite agendado %i ms antes', async (offset) => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    try {
+      const store = new RideStore();
+      store.current = { ...ride(), tipo: 'AGENDADA', agendadaPara: new Date(Date.now() + offset) };
+      const result = await new CorridaService(fakeDatabase(), new RideAudit(), store).accept(prestador, CORRIDA, { veiculoId: VEICULO }, {});
+      expect(result.status).toBe('ACEITA');
+    } finally { now.mockRestore(); }
+  });
+
+  it.each([null, new Date('invalid')])('nao aceita agendamento sem horario valido', async (date) => {
+    const store = new RideStore(); store.current = { ...ride(), tipo: 'AGENDADA', agendadaPara: date };
+    await expect(new CorridaService(fakeDatabase(), new RideAudit(), store).accept(prestador, CORRIDA, { veiculoId: VEICULO }, {}))
+      .rejects.toMatchObject({ statusCode: 409 });
+  });
+
   it('aplica escopo de listagem conforme o perfil', async () => {
     const store = new RideStore();
     const service = new CorridaService(fakeDatabase(), new RideAudit(), store);

@@ -38,6 +38,7 @@ import { prestadorUnificadoCreateSchema } from '../src/modules/prestadores/prest
 import { createPrestadorUnificadoRouter } from '../src/modules/prestadores/prestador-unificado.routes';
 import { testSharedDriverAccounts } from './test-shared-driver-accounts';
 import { testSharedEmployeeAccounts } from './test-shared-employee-accounts';
+import { testScheduledEmails } from './test-scheduled-emails';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -449,8 +450,8 @@ async function main(): Promise<void> {
       }
       assert.equal(current.status, 'EM_CORRIDA'); assert(current.desembarqueEm);
       assert(current.itinerario!.paradas.every(p => p.estado === 'CONCLUIDA'));
-      assert.equal(current.itinerario!.participantes[0]!.estado, 'AUSENTE');
-      assert.equal(current.itinerario!.participantes[0]!.desembarqueEm, null);
+      assert.equal(current.itinerario!.participantes.find(p => p.funcionarioId === employeeIds[0])!.estado, 'AUSENTE');
+      assert.equal(current.itinerario!.participantes.find(p => p.funcionarioId === employeeIds[0])!.desembarqueEm, null);
       const history = await service.listEvents(manager, created.id, { pagina: 1, limite: 100 });
       assert.equal(history.data.filter(e => e.tipoEvento === 'PARADA_DISPENSADA').length, scenario === 'allAbsent' ? 2 : 1);
       await service.finish(absentDriver, created.id, { valorFinal: created.valorEstimado! }, {});
@@ -458,7 +459,7 @@ async function main(): Promise<void> {
       assert.equal(visible.etapaPassageiro, 'Funcionario ausente');
       assert.equal(visible.acompanhamentoLiberado, false);
       const listed = await service.list(manager, { pagina: 1, limite: 100 });
-      assert.equal(listed.data.find(r => r.id === created.id)!.itinerario!.participantes[0]!.estado, 'AUSENTE');
+      assert.equal(listed.data.find(r => r.id === created.id)!.itinerario!.participantes.find(p => p.funcionarioId === employeeIds[0])!.estado, 'AUSENTE');
     }
     ok('ABSENCE single/multiple passengers, automatic skipped destinations, persisted history, idempotency and finalization');
     const providers = new PrestadorUnificadoService(pool, new AuditRepository(pool));
@@ -534,6 +535,7 @@ async function main(): Promise<void> {
     ok('DUPLICATES normalized names/phones/emails/plates, inactive records, tenant scope, unchanged edits, atomic rollback and concurrent writes');
     await testSharedDriverAccounts(pool, ok);
     await testSharedEmployeeAccounts(pool, ok);
+    await testScheduledEmails(pool, ok);
     console.log(JSON.stringify({ result: 'passed', checks, database: 'temporary PostgreSQL 18, loopback only', remoteDatabaseUsed: false }));
   } finally {
     await pool?.end();
@@ -544,4 +546,4 @@ async function main(): Promise<void> {
     } else if (started) await embedded.stop();
   }
 }
-main().catch(error => { console.error(error instanceof Error ? error.message : 'Integration failed'); process.exitCode = 1; });
+main().catch(error => { console.error(error instanceof Error ? error.stack : 'Integration failed'); process.exit(1); });

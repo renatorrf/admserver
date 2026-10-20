@@ -26,6 +26,7 @@ import type {
   CorridaEventoRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida,
 } from './corrida.types';
 import type { CorridaNotificationPublisher } from '../notificacoes/notificacao.service';
+import type { ScheduledEmailQueue } from './scheduled-emails';
 import {
   centerAllowed, OperationalScopeService, type OperationalScopeResolver,
 } from '../escopo/operational-scope.service';
@@ -79,6 +80,7 @@ export class CorridaService {
     private readonly realtime?: CorridaRealtimePublisher,
     private readonly notifications?: CorridaNotificationPublisher,
     scopeResolver?: OperationalScopeResolver,
+    private readonly scheduledEmails?: ScheduledEmailQueue,
   ) {
     this.repository = repository ?? new CorridaRepository(database);
     this.scopeResolver = scopeResolver ?? new OperationalScopeService(database);
@@ -161,8 +163,9 @@ export class CorridaService {
         'Corrida solicitada.',
       );
       await this.recordAudit(client, auth, metadata, created, 'CRIAR', null, created);
+      await this.scheduledEmails?.enqueue(client, created);
       return created;
-    }), ride => { if (createdNow) this.notifications?.publishRideCreated(ride); });
+    }), ride => { if (createdNow) { this.notifications?.publishRideCreated(ride); this.scheduledEmails?.kick(); } });
   }
 
   assign(auth: AuthContext, id: string, input: CorridaAssignInput, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -244,6 +247,11 @@ export class CorridaService {
       }
       if (current.status === 'OFERTADA' && current.prestadorId !== provider.id) throw forbidden();
       if (current.status === 'SOLICITADA' && current.prestadorId !== null) throw conflict('A corrida ja possui prestador.');
+      if (current.tipo === 'AGENDADA' && (!current.agendadaPara
+        || !Number.isFinite(new Date(current.agendadaPara).getTime())
+        || new Date(current.agendadaPara).getTime() - Date.now() > 60 * 60 * 1000)) {
+        throw conflict('O aceite desta corrida sera liberado uma hora antes do horario agendado.');
+      }
 
       const vehicleId = input.veiculoId ?? current.veiculoId;
       if (!vehicleId || !await this.repository.validateProviderAndVehicle(

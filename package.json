@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.build.json",
     "gcp-build": "npm run build",
     "start": "node dist/server.js",
+    "email:process": "node dist/process-scheduled-emails.js",
     "lint": "eslint .",
     "test": "vitest run",
     "test:review:integration": "tsx scripts/test-review-integration.ts",

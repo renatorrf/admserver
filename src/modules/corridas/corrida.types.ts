@@ -40,6 +40,7 @@ export type CorridaRecord = Record<string, unknown> & {
   veiculoId: string | null;
   status: StatusCorrida;
   tipo: TipoCorrida;
+  agendadaPara?: Date | null;
   desembarqueEm?: Date | null;
   funcionarioNome?: string;
   funcionarioTelefone?: string | null;
