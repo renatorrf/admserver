@@ -42,6 +42,7 @@ import { testSharedEmployeeAccounts } from './test-shared-employee-accounts';
 import { testScheduledEmails } from './test-scheduled-emails';
 import { UsuarioService } from '../src/modules/usuarios/usuario.service';
 import { NotificacaoService } from '../src/modules/notificacoes/notificacao.service';
+import { testRequisitions } from './test-requisitions';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -180,8 +181,8 @@ async function main(): Promise<void> {
     await request(app).get(`/corridas/${legacyId}`).expect(401);
     await request(app).get(`/corridas/${legacyId}`).set('Authorization', bearer({ ...manager, empresaId: otherCompany })).expect(404);
     await request(app).post('/corridas').set('Authorization', bearer(employees[0]!)).send({}).expect(403);
-    const invalid = await request(app).post('/corridas').set('Authorization', bearer(manager)).send({}).expect(422);
-    assert.equal(invalid.body.erro.codigo, 'DADOS_INVALIDOS');
+    const invalid = await request(app).post('/corridas').set('Authorization', bearer(manager)).send({}).expect(403);
+    assert.match(invalid.body.erro.mensagem,/portaria/);
     ok('AUTH-01/03 FORM-01 authenticated HTTP authorization and validation');
     assert.equal((await service.get(manager, legacyId)).itinerarioVersao, 0);
     ok('MIG-01 historical ride and repeated migration runner');
@@ -576,6 +577,7 @@ async function main(): Promise<void> {
     assert.deepEqual(await notifications.listOwn({ ...portariaAuth, empresaId: otherCompany }), []);
     const log = await pool.query('SELECT url_abertura FROM admtaxi.notificacoes_push WHERE id=$1', [inbox[0]!.id]);
     assert.equal(log.rows[0].url_abertura, '/app/notificacoes');
+    await testRequisitions(pool,manager,portariaAuth,employeeIds,center,sector,otherCompany,drivers[1-winningIndex]!,vehicles[1-winningIndex]!,ok);
     await users.setActive(manager, portaria.id, false, {});
     await request(loginApp).post('/auth/login').send({ empresa: 'TEST_0', email: 'portaria@example.test', senha: '654321' }).expect(401);
     await request(loginApp).get('/protected').set('Authorization', `Bearer ${access.body.data.accessToken}`).expect(401);

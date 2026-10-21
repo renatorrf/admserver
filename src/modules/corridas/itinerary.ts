@@ -51,7 +51,7 @@ export type ItineraryStop = ItineraryInput['paradas'][number] & {
   ordem: number; estado: StopState; chegadaEm?: string | null; saidaEm?: string | null;
 };
 export type Participation = ItineraryInput['participantes'][number] & {
-  funcionarioNome: string; estado: PassengerState; motivo?: string | null;
+  funcionarioNome: string; funcionarioTelefone?: string | null; estado: PassengerState; motivo?: string | null;
   embarqueEm?: string | null; desembarqueEm?: string | null;
 };
 export type ItinerarySnapshot = { versao: number; paradas: ItineraryStop[]; participantes: Participation[] };

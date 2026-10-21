@@ -27,6 +27,7 @@ import type {
 } from './corrida.types';
 import type { CorridaNotificationPublisher } from '../notificacoes/notificacao.service';
 import type { ScheduledEmailQueue } from './scheduled-emails';
+import type { TravelEmails } from '../requisicoes/travel-emails';
 import {
   centerAllowed, OperationalScopeService, type OperationalScopeResolver,
 } from '../escopo/operational-scope.service';
@@ -68,6 +69,8 @@ export type DisponibilidadeResult = {
   prestadorId: string;
   disponivel: boolean;
 };
+type Conference = (client: QueryExecutor) => Promise<{ existingId: string; input?: never; complete?: never }
+  | { existingId?: never; input: CorridaCreateInput; complete(id: string): Promise<void> }>;
 
 export class CorridaService {
   private readonly repository: CorridaStore;
@@ -81,6 +84,7 @@ export class CorridaService {
     private readonly notifications?: CorridaNotificationPublisher,
     scopeResolver?: OperationalScopeResolver,
     private readonly scheduledEmails?: ScheduledEmailQueue,
+    private readonly travelEmails?: TravelEmails,
   ) {
     this.repository = repository ?? new CorridaRepository(database);
     this.scopeResolver = scopeResolver ?? new OperationalScopeService(database);
@@ -115,12 +119,29 @@ export class CorridaService {
   }
 
   create(auth: AuthContext, input: CorridaCreateInput, metadata: AuditMetadata): Promise<CorridaRecord> {
+    return this.createInternal(auth, input, metadata);
+  }
+
+  createConferred(auth: AuthContext, metadata: AuditMetadata, conference: Conference): Promise<CorridaRecord> {
+    if (auth.perfil !== 'PORTARIA') throw forbidden();
+    return this.createInternal(auth, undefined, metadata, conference);
+  }
+
+  private createInternal(auth: AuthContext, supplied: CorridaCreateInput | undefined, metadata: AuditMetadata, conference?: Conference): Promise<CorridaRecord> {
     if (!['GESTOR', 'GERENTE', 'PORTARIA'].includes(auth.perfil)) throw forbidden();
-    if (!input.chaveSolicitacao && input.tipo === 'AGENDADA' && input.agendadaPara && input.agendadaPara.getTime() <= Date.now()) {
+    if (supplied && !supplied.chaveSolicitacao && supplied.tipo === 'AGENDADA' && supplied.agendadaPara && supplied.agendadaPara.getTime() <= Date.now()) {
       throw conflict('A corrida agendada deve possuir data futura.');
     }
     let createdNow = true;
     return this.withRealtime(withTransaction(this.database, async (client) => {
+      const checked = await conference?.(client);
+      if (checked?.existingId) {
+        createdNow = false;
+        const existing = await this.repository.findForUpdate(client, auth.empresaId, checked.existingId, { kind: 'GESTOR' });
+        if (!existing) throw notFound('Corrida');
+        return existing;
+      }
+      const input = checked?.input ?? supplied!;
       const scope = await this.scopeResolver.resolve(auth, client);
       if (!centerAllowed(scope, input.centroCustoId)) {
         throw forbidden('Voce nao possui permissao para solicitar corridas para este funcionario ou centro de custo.');
@@ -175,9 +196,10 @@ export class CorridaService {
         'Corrida solicitada.',
       );
       await this.recordAudit(client, auth, metadata, created, 'CRIAR', null, created);
-      await this.scheduledEmails?.enqueue(client, created);
+      if (checked?.complete) await checked.complete(created.id);
+      else await this.scheduledEmails?.enqueue(client, created);
       return created;
-    }), ride => { if (createdNow) { this.notifications?.publishRideCreated(ride); this.scheduledEmails?.kick(); } });
+    }), ride => { if (createdNow) { this.notifications?.publishRideCreated(ride); this.scheduledEmails?.kick(); this.travelEmails?.kick(); } });
   }
 
   assign(auth: AuthContext, id: string, input: CorridaAssignInput, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -387,8 +409,9 @@ export class CorridaService {
         'Corrida finalizada.', { valorFinal: input.valorFinal },
       );
       await this.recordAudit(client, auth, metadata, finished, 'FINALIZAR', current, finished);
+      await this.travelEmails?.completed(client, auth.empresaId, id);
       return finished;
-    }), ride => { if (changed) this.notifications?.publishRideUpdate(ride, 'FINALIZADA'); });
+    }), ride => { if (changed) { this.notifications?.publishRideUpdate(ride, 'FINALIZADA'); this.travelEmails?.kick(); } });
   }
 
   async cancel(auth: AuthContext, id: string, input: CorridaCancelInput, metadata: AuditMetadata): Promise<CorridaRecord> {

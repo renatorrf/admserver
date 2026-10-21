@@ -1,0 +1,104 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import type { Pool } from 'pg';
+import express from 'express';
+import request from 'supertest';
+import pino from 'pino';
+import { AuditRepository } from '../src/modules/auditoria/audit.repository';
+import type { AuthContext } from '../src/modules/auth/auth.types';
+import { CorridaService } from '../src/modules/corridas/corrida.service';
+import { createCorridaRouter } from '../src/modules/corridas/corrida.routes';
+import { RequisitionService } from '../src/modules/requisicoes/requisicao.service';
+import { requisicaoSchema } from '../src/modules/requisicoes/requisicao.schemas';
+import { requisitionRouter } from '../src/modules/requisicoes/requisicao.routes';
+import { TravelEmails } from '../src/modules/requisicoes/travel-emails';
+import { createErrorHandler } from '../src/shared/http/error-handler';
+import { createAuthenticate } from '../src/modules/auth/auth.middleware';
+import { TokenService } from '../src/modules/auth/token-service';
+
+export async function testRequisitions(pool: Pool,manager: AuthContext,gate: AuthContext,employeeIds: string[],center: string,sector: string,otherCompany: string,driver: AuthContext,vehicle: string,ok: (s: string)=>void) {
+  const logger=pino({level:'silent'}); const audit=new AuditRepository(pool);
+  const emails=new TravelEmails(pool,logger);
+  const rides=new CorridaService(pool,audit,undefined,undefined,undefined,undefined,undefined,emails);
+  const service=new RequisitionService(pool,audit,rides,emails);
+  const supervisor: AuthContext={...manager,usuarioId:randomUUID(),perfil:'GERENTE'};
+  await pool.query(`INSERT INTO admtaxi.usuarios(id,empresa_id,nome,email,senha_hash,perfil) VALUES($1,$2,'Supervisor requisicoes','supervisor-travel@example.test','synthetic','GERENTE')`,[supervisor.usuarioId,manager.empresaId]);
+  await pool.query('INSERT INTO admtaxi.gerente_setores(empresa_id,gerente_usuario_id,setor_id) VALUES($1,$2,$3)',[manager.empresaId,supervisor.usuarioId,sector]);
+  await pool.query('INSERT INTO admtaxi.gerente_centros_custo(empresa_id,gerente_usuario_id,centro_custo_id) VALUES($1,$2,$3)',[manager.empresaId,supervisor.usuarioId,center]);
+  await pool.query(`INSERT INTO admtaxi.gerente_centros_custo(empresa_id,gerente_usuario_id,centro_custo_id)
+    SELECT DISTINCT empresa_id,$2::uuid,centro_custo_id FROM admtaxi.funcionarios WHERE empresa_id=$1 AND id=ANY($3::uuid[])
+    ON CONFLICT DO NOTHING`,[manager.empresaId,supervisor.usuarioId,employeeIds.slice(0,2)]);
+  const input=requisicaoSchema.parse({chave:randomUUID(),tipo:'IMEDIATA',participantes:employeeIds.slice(0,2).map(funcionarioId=>({funcionarioId,valor:'10.00'}))});
+  const before=Number((await pool.query('SELECT count(*) FROM admtaxi.corridas WHERE empresa_id=$1',[manager.empresaId])).rows[0].count);
+  const created=await service.create(supervisor,input,{});
+  assert.equal(created.status,'PENDENTE');
+  assert.equal((await service.create(supervisor,input,{})).id,created.id);
+  assert.equal(Number((await pool.query('SELECT count(*) FROM admtaxi.corridas WHERE empresa_id=$1',[manager.empresaId])).rows[0].count),before);
+  assert.equal((await service.list(supervisor))[0]!.id,created.id);
+  await assert.rejects(service.get({...manager,empresaId:otherCompany},created.id),{statusCode:404});
+  await assert.rejects(service.get({...supervisor,usuarioId:manager.usuarioId},created.id),{statusCode:404});
+  await assert.rejects(service.create(gate,input,{}),{statusCode:403});
+  await assert.rejects(service.decide(supervisor,created.id,{autorizar:true},{}),{statusCode:403});
+  await assert.rejects(service.dispatch(gate,created.id,input.participantes,{}),{statusCode:409});
+  await service.decide(manager,created.id,{autorizar:true},{});
+  await service.decide(manager,created.id,{autorizar:true},{});
+  await assert.rejects(service.decide(manager,created.id,{autorizar:false,motivo:'Mudanca de ideia'},{}),{statusCode:409});
+  await assert.rejects(service.dispatch(manager,created.id,input.participantes,{}),{statusCode:403});
+  await assert.rejects(service.dispatch(gate,created.id,input.participantes,{}),{statusCode:422});
+  const participants=input.participantes.map((p,i)=>({...p,origem:{descricao:`Origem privada ${i}`,latitude:-18.9-i/100,longitude:-48.2},destino:{descricao:`Destino privado ${i}`,latitude:-18.8,longitude:-48.3}}));
+  const results=await Promise.all([service.dispatch(gate,created.id,participants,{}),service.dispatch(gate,created.id,participants,{})]);
+  assert.equal(results[0]!.id,results[1]!.id);
+  assert.equal(results[0]!.itinerario?.participantes.length,2);
+  assert.equal(Number((await pool.query('SELECT count(*) FROM admtaxi.corridas WHERE empresa_id=$1',[manager.empresaId])).rows[0].count),before+1);
+  assert.equal((await service.get(gate,created.id)).status,'SOLICITADA');
+  const queue=await pool.query('SELECT * FROM admtaxi.emails_viagem WHERE requisicao_id=$1',[created.id]);
+  assert.equal(queue.rows.filter(r=>r.evento==='PENDENTE').length,5);
+  assert.equal(queue.rows.filter(r=>r.evento==='AUTORIZADA').length,5);
+  assert.equal(queue.rows.filter(r=>r.evento==='SOLICITADA').length,5);
+  const email=(await pool.query(`SELECT COALESCE(NULLIF(trim(f.email::text),''),u.email::text) AS email FROM admtaxi.funcionarios f
+    JOIN admtaxi.usuarios u ON u.empresa_id=f.empresa_id AND u.id=f.usuario_id WHERE f.id=$1`,[employeeIds[0]])).rows[0].email.toLowerCase();
+  const own=queue.rows.find(r=>r.evento==='SOLICITADA'&&r.destinatario===email);
+  assert(own); assert(own.corpo.includes('Origem privada 0')); assert(!own.corpo.includes('Origem privada 1'));
+  let ride=await rides.accept(driver,results[0]!.id,{veiculoId:vehicle},{});
+  while(ride.itinerario!.paradas.some(s=>s.estado!=='CONCLUIDA')) {
+    const stop=ride.itinerario!.paradas.find(s=>s.estado!=='CONCLUIDA')!;
+    const person=ride.itinerario!.participantes.find(p=>p.embarqueId===stop.id||p.desembarqueId===stop.id)!;
+    const action=stop.estado==='PENDENTE'?'INICIAR':stop.estado==='EM_DESLOCAMENTO'?'CHEGAR':person.embarqueId===stop.id?'EMBARCAR':'DESEMBARCAR';
+    ride=await rides.executeItinerary(driver,ride.id,{chave:randomUUID(),versao:ride.itinerario!.versao,paradaId:stop.id,
+      acao:action,funcionarioId:person.funcionarioId,avancoAutomatico:true},{});
+  }
+  await rides.finish(driver,ride.id,{valorFinal:'20.00'},{}); await rides.finish(driver,ride.id,{valorFinal:'20.00'},{});
+  assert.equal((await pool.query("SELECT count(*) FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='FINALIZADA'",[created.id])).rows[0].count,'5');
+  const auto=await service.create(manager,{...input,chave:randomUUID(),participantes:[participants[0]!]},{ });
+  assert.equal(auto.status,'AUTORIZADA');
+  await assert.rejects(service.dispatch(gate,auto.id,[{...participants[0]!,origem:{...participants[0]!.origem,descricao:'Alterado indevidamente'}}],{}),{statusCode:409});
+  const rejected=await service.create(supervisor,{...input,chave:randomUUID()},{});
+  await service.decide(manager,rejected.id,{autorizar:false,motivo:'Sem necessidade operacional'},{});
+  await assert.rejects(service.dispatch(gate,rejected.id,participants,{}),{statusCode:409});
+  const failing=new RequisitionService(pool,{record:async()=>{throw Error('audit unavailable');}},rides,emails);
+  await assert.rejects(failing.create(manager,{...input,chave:randomUUID()},{}),/audit unavailable/);
+  ok('REQUISITIONS optional addresses, supervisor scope, approval, rejection, manager auto-authorization, conference-only release and atomic idempotency');
+
+  const tokens=new TokenService({jwtAccessSecret:randomUUID()+randomUUID(),jwtRefreshSecret:randomUUID()+randomUUID(),jwtAccessExpiresInSeconds:900,jwtRefreshExpiresInSeconds:3600});
+  const app=express();app.use(express.json());app.use('/requisicoes',createAuthenticate(tokens),requisitionRouter(service));app.use('/corridas',createAuthenticate(tokens),createCorridaRouter(rides));app.use(createErrorHandler(logger));
+  const bearer=(auth:AuthContext)=>`Bearer ${tokens.issueTokens(auth).accessToken}`;
+  for(const auth of [manager,supervisor,gate]) await request(app).post('/corridas').set('Authorization',bearer(auth)).send({}).expect(403);
+  await request(app).post('/requisicoes').set('Authorization',bearer(gate)).send(input).expect(403);
+  await request(app).post(`/requisicoes/${auto.id}/decisao`).set('Authorization',bearer(gate)).send({autorizar:true}).expect(403);
+  await request(app).post(`/requisicoes/${auto.id}/solicitar`).set('Authorization',bearer(manager)).send({participantes:participants}).expect(403);
+  await request(app).get('/requisicoes').set('Authorization',bearer({...manager,perfil:'PRESTADOR'})).expect(403);
+  await request(app).post('/requisicoes').set('Authorization',bearer(supervisor)).send({...input,chave:randomUUID(),empresaId:otherCompany}).expect(422);
+  await request(app).post(`/requisicoes/${created.id}/decisao`).set('Authorization',bearer(manager)).send({autorizar:false}).expect(422);
+  ok('REQUISITIONS HTTP boundaries prevent bypass, tenant injection, driver access and unauthorized decision/release');
+  assert.equal(await emails.process(),0);
+  const failingWorker=new TravelEmails(pool,logger,{send:async()=>{throw Error('SMTP unavailable');}});
+  await failingWorker.process();
+  assert(Number((await pool.query("SELECT count(*) FROM admtaxi.emails_viagem WHERE tentativas=1 AND status='PENDENTE' AND ultimo_erro='FALHA_SMTP'")).rows[0].count)>0);
+  await pool.query("UPDATE admtaxi.emails_viagem SET proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='PENDENTE'");
+  const sent:string[]=[];
+  const worker=new TravelEmails(pool,logger,{send:async message=>{sent.push(message.id);}});
+  for(let n=0;n<5;n++) if(await worker.process()<20)break;
+  assert.equal(new Set(sent).size,sent.length);assert(sent.length>0);
+  assert.equal((await pool.query("SELECT count(*) FROM admtaxi.emails_viagem WHERE status<>'ENVIADO'")).rows[0].count,'0');
+  ok('TRAVEL-EMAIL recipient privacy, all four stages, unique notifications, SMTP retry, missing SMTP retention and successful retry');
+}

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getConfig, resetConfigForTests, resolveTrustProxy } from '../src/config/env';
 
@@ -7,6 +7,10 @@ const pushKeys = [
   'PUSH_NOTIFICATION_ICON_URL', 'PUSH_NOTIFICATION_BADGE_URL', 'PUSH_DEFAULT_OPEN_URL', 'PUSH_RIDE_OPEN_URL',
 ] as const;
 const originalPush = Object.fromEntries(pushKeys.map((key) => [key, process.env[key]]));
+beforeEach(() => {
+  // A developer's SMTP configuration must not affect isolated VAPID tests.
+  for (const key of ['SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASSWORD','SMTP_FROM','SMTP_SECURE','PASSWORD_RESET_URL','MASTER_PASSWORD_RESET_URL']) vi.stubEnv(key,'');
+});
 
 afterEach(() => {
   for (const key of pushKeys) {
@@ -15,6 +19,7 @@ afterEach(() => {
     else process.env[key] = value;
   }
   resetConfigForTests();
+  vi.unstubAllEnvs();
 });
 
 describe('configuracao de proxy', () => {

@@ -40,9 +40,9 @@ describe('Portaria permission boundary', () => {
     expect(result.status).toBe(403);
     expect(pool.connect).not.toHaveBeenCalled();
   });
-  it('allows only valid creation payloads and refuses injected tenant',async ()=> {
+  it('blocks direct creation, including injected tenant, until conference',async ()=> {
     const result = await request(app).post('/api/v1/corridas').send({empresaId:company}).set('Authorization',`Bearer ${token}`);
-    expect(result.status).toBe(422);
+    expect(result.status).toBe(403);
     expect(pool.connect).not.toHaveBeenCalled();
   });
   it('lists only own company notifications',async ()=> {

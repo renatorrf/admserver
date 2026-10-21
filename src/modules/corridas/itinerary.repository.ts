@@ -12,7 +12,7 @@ export class ItineraryRepository {
         chegada_em AS "chegadaEm", saida_em AS "saidaEm"
        FROM admtaxi.corrida_paradas WHERE empresa_id=$1 AND corrida_id=$2 ORDER BY ordem`, [empresaId, corridaId]);
     const passengers = await db.query<Participation>(
-      `SELECT p.funcionario_id AS "funcionarioId", f.nome AS "funcionarioNome",
+      `SELECT p.funcionario_id AS "funcionarioId", f.nome AS "funcionarioNome", f.telefone AS "funcionarioTelefone",
         p.centro_custo_id AS "centroCustoId", p.valor::text AS valor,
         p.embarque_id AS "embarqueId", p.desembarque_id AS "desembarqueId", p.estado, p.motivo,
         p.embarque_em AS "embarqueEm", p.desembarque_em AS "desembarqueEm"

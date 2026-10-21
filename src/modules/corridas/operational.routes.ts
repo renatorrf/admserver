@@ -37,14 +37,20 @@ import { PainelParticipanteService } from '../paineis/painel.service';
 import { createFaturamentoRouter } from '../faturamentos/faturamento.routes';
 import { FaturamentoService } from '../faturamentos/faturamento.service';
 import type { ScheduledEmailQueue } from './scheduled-emails';
+import { TravelEmails } from '../requisicoes/travel-emails';
+import { RequisitionService } from '../requisicoes/requisicao.service';
+import { requisitionRouter } from '../requisicoes/requisicao.routes';
 
 export function createOperationalRouter(
   pool: Pool, tokens: TokenService, realtime?: RealtimeBus, geoapifyApiKey?: string, pushConfig?: PushConfig,
   scheduledEmails?: ScheduledEmailQueue,
+  travelEmails?: TravelEmails,
 ): Router {
   const router = Router();
   const notifications = new NotificacaoService(pool, pushConfig);
-  const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications, undefined, scheduledEmails);
+  const emails = travelEmails ?? new TravelEmails(pool, { warn: () => undefined, error: () => undefined });
+  const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications, undefined, scheduledEmails, emails);
+  router.use('/requisicoes', createAuthenticate(tokens), requisitionRouter(new RequisitionService(pool,new AuditRepository(pool),service,emails)));
   const locations = new LocalizacaoService(pool, service, realtime);
   router.use('/dashboard', createAuthenticate(tokens), createDashboardRouter(new DashboardService(new DashboardRepository(pool))));
   router.use('/paineis', createAuthenticate(tokens), createPainelParticipanteRouter(

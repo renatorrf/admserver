@@ -9,14 +9,12 @@ import {
   corridaAcceptSchema,
   corridaAssignSchema,
   corridaCancelSchema,
-  corridaCreateSchema,
   corridaFinishSchema,
   corridaListSchema,
   eventoListSchema,
   type CorridaAcceptInput,
   type CorridaAssignInput,
   type CorridaCancelInput,
-  type CorridaCreateInput,
   type CorridaFinishInput,
   type CorridaListQuery,
   type EventoListQuery,
@@ -24,7 +22,7 @@ import {
 import type { CorridaService } from './corrida.service';
 import { itineraryActionSchema, itineraryEditSchema } from './itinerary';
 import type { RideRouteService } from './route.service';
-import { unavailable } from '../../shared/errors/app-error';
+import { unavailable, forbidden } from '../../shared/errors/app-error';
 import { optimizeRouteSchema, type RideRouteOptimizer } from './route-optimizer';
 
 export function createCorridaRouter(service: CorridaService, routes?: RideRouteService, optimizer?: RideRouteOptimizer): Router {
@@ -57,12 +55,9 @@ export function createCorridaRouter(service: CorridaService, routes?: RideRouteS
       requireAuthContext(request), getValidatedQuery<CorridaListQuery>(request),
     ));
   }));
-  router.post('/', authorize('GERENTE', 'GESTOR', 'PORTARIA'), validateBody(corridaCreateSchema), asyncHandler(async (request, response) => {
-    const result = await service.create(
-      requireAuthContext(request), request.body as CorridaCreateInput, auditMetadataFromRequest(request),
-    );
-    response.status(201).json({ data: result });
-  }));
+  router.post('/', authorize('GERENTE', 'GESTOR', 'PORTARIA'), () => {
+    throw forbidden('Crie uma requisicao de viagem. Somente a portaria pode solicitar uma corrida autorizada, pela tela de conferencia.');
+  });
   router.get('/:id', authorize('PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR'), validateParams(uuidParamsSchema), asyncHandler(async (request, response) => {
     const { id } = getValidatedParams<UuidParams>(request);
     response.status(200).json({ data: await service.get(requireAuthContext(request), id) });
