@@ -159,7 +159,7 @@ export class UsuarioService {
   async getManagerCenters(auth: AuthContext, id: string): Promise<CentroCustoResumo[]> {
     const user = await this.repository.findById(this.pool, auth.empresaId, id);
     if (!user) throw notFound('Usuario');
-    if (user.perfil !== 'GERENTE') throw conflict('O usuario informado nao possui perfil GERENTE.');
+    if (user.perfil !== 'GERENTE') throw conflict('O usuario informado nao possui perfil Supervisor.');
     return this.repository.listManagerCenters(this.pool, auth.empresaId, id);
   }
 
@@ -173,14 +173,14 @@ export class UsuarioService {
       const user = await this.repository.findById(client, auth.empresaId, id);
       if (!user) throw notFound('Usuario');
       if (user.perfil !== 'GERENTE' || !user.ativo) {
-        throw conflict('Selecione um gerente ativo.');
+        throw conflict('Selecione um supervisor ativo.');
       }
       const currentSectors = await this.repository.listManagerSectors(client, auth.empresaId, id);
       const validCenters = await this.repository.countActiveCentersInSectors(
         client, auth.empresaId, input.centroCustoIds, currentSectors.map((sector) => sector.id),
       );
       if (validCenters !== input.centroCustoIds.length) {
-        throw invalidReference('Um ou mais centros nao pertencem aos setores autorizados do gerente.');
+        throw invalidReference('Um ou mais centros nao pertencem aos setores autorizados do supervisor.');
       }
       const previous = await this.repository.listManagerCenters(client, auth.empresaId, id);
       await this.repository.replaceManagerCenters(client, auth.empresaId, id, input.centroCustoIds);
@@ -208,7 +208,7 @@ export class UsuarioService {
   async getManagerScope(auth: AuthContext, id: string): Promise<GerenteEscopoResumo> {
     const user = await this.repository.findById(this.pool, auth.empresaId, id);
     if (!user) throw notFound('Usuario');
-    if (user.perfil !== 'GERENTE') throw conflict('O usuario informado nao possui perfil GERENTE.');
+    if (user.perfil !== 'GERENTE') throw conflict('O usuario informado nao possui perfil Supervisor.');
     const [setores, centrosCusto] = await Promise.all([
       this.repository.listManagerSectors(this.pool, auth.empresaId, id),
       this.repository.listManagerCenters(this.pool, auth.empresaId, id),
@@ -245,7 +245,7 @@ export class UsuarioService {
     return withTransaction(this.pool, async (client) => {
       const user = await this.repository.findById(client, auth.empresaId, id);
       if (!user) throw notFound('Usuario');
-      if (user.perfil !== 'GERENTE' || !user.ativo) throw conflict('Selecione um gerente ativo.');
+      if (user.perfil !== 'GERENTE' || !user.ativo) throw conflict('Selecione um supervisor ativo.');
       const validSectors = await this.repository.countActiveSectors(client, auth.empresaId, input.setorIds);
       if (validSectors !== input.setorIds.length) {
         throw invalidReference('Um ou mais setores nao existem, estao inativos ou pertencem a outra empresa.');

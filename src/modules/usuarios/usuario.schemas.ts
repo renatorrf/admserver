@@ -10,7 +10,7 @@ const fields = {
   email: z.string().trim().email('Informe um e-mail valido.').max(254).transform((value) => value.toLowerCase()),
   telefone: optionalText(20),
   senha: passwordSchema,
-  perfil: z.enum(['PRESTADOR', 'GERENTE', 'GESTOR']),
+  perfil: z.enum(['PRESTADOR', 'GERENTE', 'GESTOR', 'PORTARIA']),
 };
 
 export const usuarioCreateSchema = z.object(fields).strict();

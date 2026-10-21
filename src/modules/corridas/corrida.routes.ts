@@ -57,7 +57,7 @@ export function createCorridaRouter(service: CorridaService, routes?: RideRouteS
       requireAuthContext(request), getValidatedQuery<CorridaListQuery>(request),
     ));
   }));
-  router.post('/', authorize('GERENTE', 'GESTOR'), validateBody(corridaCreateSchema), asyncHandler(async (request, response) => {
+  router.post('/', authorize('GERENTE', 'GESTOR', 'PORTARIA'), validateBody(corridaCreateSchema), asyncHandler(async (request, response) => {
     const result = await service.create(
       requireAuthContext(request), request.body as CorridaCreateInput, auditMetadataFromRequest(request),
     );

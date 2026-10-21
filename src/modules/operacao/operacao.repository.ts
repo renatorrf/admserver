@@ -36,7 +36,7 @@ export type PrestadorSearchResult = PrestadorLookup & {
 };
 export type SolicitanteLookup = { id: string; nome: string; perfil: 'GERENTE' | 'GESTOR' };
 export type OperationalScopeSummary = {
-  perfil: 'GERENTE' | 'GESTOR'; setores: SetorLookup[]; centrosCusto: CentroCustoLookup[];
+  perfil: 'GERENTE' | 'GESTOR' | 'PORTARIA'; setores: SetorLookup[]; centrosCusto: CentroCustoLookup[];
   funcionariosVisiveis: number;
 };
 

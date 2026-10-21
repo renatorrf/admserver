@@ -15,6 +15,9 @@ export function createNotificacaoRouter(service: NotificacaoService, tokens: Tok
     response.status(200).json({ data: { publicKey: service.publicKey() } });
   }));
   router.use(createAuthenticate(tokens));
+  router.get('/notificacoes', asyncHandler(async (request, response) => {
+    response.json({ data: await service.listOwn(requireAuthContext(request)) });
+  }));
   router.post('/subscriptions', validateBody(pushSubscriptionSchema), asyncHandler(async (request, response) => {
     response.status(201).json({ data: await service.register(
       requireAuthContext(request), request.body as PushSubscriptionInput, request.headers['user-agent'] ?? null,

@@ -115,7 +115,7 @@ export class CorridaService {
   }
 
   create(auth: AuthContext, input: CorridaCreateInput, metadata: AuditMetadata): Promise<CorridaRecord> {
-    if (!['GESTOR', 'GERENTE'].includes(auth.perfil)) throw forbidden();
+    if (!['GESTOR', 'GERENTE', 'PORTARIA'].includes(auth.perfil)) throw forbidden();
     if (!input.chaveSolicitacao && input.tipo === 'AGENDADA' && input.agendadaPara && input.agendadaPara.getTime() <= Date.now()) {
       throw conflict('A corrida agendada deve possuir data futura.');
     }
@@ -134,6 +134,12 @@ export class CorridaService {
         if (previous.rows[0]) {
           if (previous.rows[0].solicitacao_hash !== commandHash(input)) throw conflict('Esta chave de solicitacao ja foi usada com outros dados.');
           createdNow = false;
+          // The idempotency lookup above is scoped to the company and requester.
+          if (auth.perfil === 'PORTARIA') {
+            const existing = await this.repository.findForUpdate(client, auth.empresaId, previous.rows[0].id, { kind: 'GESTOR' });
+            if (!existing || existing.solicitanteUsuarioId !== auth.usuarioId) throw notFound('Corrida');
+            return existing;
+          }
           return this.requireLockedRide(client, auth, previous.rows[0].id);
         }
       }
@@ -671,9 +677,10 @@ export class CorridaService {
   }
 
   private async resolveScope(auth: AuthContext, executor: QueryExecutor = this.database): Promise<CorridaScope> {
+    if (auth.perfil === 'PORTARIA') throw forbidden('Portaria pode solicitar corridas e consultar suas notificacoes.');
     if (auth.perfil === 'GESTOR' || auth.perfil === 'GERENTE') {
       const scope = await this.scopeResolver.resolve(auth, executor);
-      return scope.kind === 'GESTOR'
+      return scope.kind !== 'GERENTE'
         ? { kind: 'GESTOR' }
         : {
           kind: 'GERENTE', usuarioId: scope.usuarioId,

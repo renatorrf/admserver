@@ -11,11 +11,11 @@ import type { OperacaoService } from './operacao.service';
 
 export function createOperacaoRouter(service: OperacaoService): Router {
   const router = Router();
-  router.get('/funcionarios/:id/destinos-recentes', authorize('GERENTE', 'GESTOR'),
+  router.get('/funcionarios/:id/destinos-recentes', authorize('GERENTE', 'GESTOR', 'PORTARIA'),
     validateParams(employeeDestinationParamsSchema), validateQuery(mapLocationQuerySchema), asyncHandler(async (request, response) => {
       response.json({ data: await service.recentEmployeeDestinations(requireAuthContext(request), getValidatedParams<{ id: string }>(request).id) });
     }));
-  router.get('/endereco-empresa', authorize('GERENTE', 'GESTOR'), validateQuery(mapLocationQuerySchema), asyncHandler(async (request, response) => {
+  router.get('/endereco-empresa', authorize('GERENTE', 'GESTOR', 'PORTARIA'), validateQuery(mapLocationQuerySchema), asyncHandler(async (request, response) => {
     response.json({ data: await service.getCompanyAddress(requireAuthContext(request)) });
   }));
 
@@ -30,12 +30,12 @@ export function createOperacaoRouter(service: OperacaoService): Router {
     response.status(200).json({ data: await service.listSectors(requireAuthContext(request)) });
   }));
 
-  router.get('/centros-custo', authorize('GERENTE', 'GESTOR'), asyncHandler(async (request, response) => {
+  router.get('/centros-custo', authorize('GERENTE', 'GESTOR', 'PORTARIA'), asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.listCenters(requireAuthContext(request)) });
   }));
   router.get(
     '/funcionarios',
-    authorize('GERENTE', 'GESTOR'),
+    authorize('GERENTE', 'GESTOR', 'PORTARIA'),
     validateQuery(funcionarioLookupSchema),
     asyncHandler(async (request, response) => {
       response.status(200).json({ data: await service.listEmployees(
@@ -45,7 +45,7 @@ export function createOperacaoRouter(service: OperacaoService): Router {
   );
   router.get(
     '/funcionarios/pesquisa',
-    authorize('GERENTE', 'GESTOR'),
+    authorize('GERENTE', 'GESTOR', 'PORTARIA'),
     validateQuery(funcionarioSearchSchema),
     asyncHandler(async (request, response) => {
       response.status(200).json(await service.searchEmployees(

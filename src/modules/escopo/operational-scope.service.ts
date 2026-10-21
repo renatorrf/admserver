@@ -11,6 +11,7 @@ type ManagerScopeRow = QueryResultRow & {
 
 export type OperationalScope =
   | { kind: 'GESTOR'; empresaId: string }
+  | { kind: 'PORTARIA'; empresaId: string }
   | {
     kind: 'GERENTE';
     empresaId: string;
@@ -28,6 +29,7 @@ export class OperationalScopeService implements OperationalScopeResolver {
 
   async resolve(auth: AuthContext, executor: QueryExecutor = this.database): Promise<OperationalScope> {
     if (auth.perfil === 'GESTOR') return { kind: 'GESTOR', empresaId: auth.empresaId };
+    if (auth.perfil === 'PORTARIA') return { kind: 'PORTARIA', empresaId: auth.empresaId };
     if (auth.perfil !== 'GERENTE') throw forbidden();
 
     const row = await queryOne<ManagerScopeRow>(
@@ -83,6 +85,6 @@ export function addCenterScope(
 }
 
 export function centerAllowed(scope: OperationalScope, centerId: string): boolean {
-  return scope.kind === 'GESTOR' || scope.centroCustoIds.includes(centerId);
+  return scope.kind !== 'GERENTE' || scope.centroCustoIds.includes(centerId);
 }
 

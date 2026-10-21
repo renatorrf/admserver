@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Pool, type PoolClient } from 'pg';
 
 import { getDatabaseUrl } from '../config/env';
+import { isNonTransactionalMigration } from './migration-mode';
 
 type Direction = 'up' | 'down' | 'status' | 'validate';
 type Migration = { version: number; name: string; path: string; checksum: string };
@@ -90,17 +91,18 @@ async function migrateUp(client: PoolClient, migrations: Migration[], applied: A
 
   for (const migration of pending) {
     const sql = await fs.readFile(migration.path, 'utf8');
-    await client.query('BEGIN');
+    const standalone = isNonTransactionalMigration(sql);
+    if (!standalone) await client.query('BEGIN');
     try {
       await client.query(sql);
       await client.query(
         'INSERT INTO admtaxi.schema_migrations (versao, nome, checksum) VALUES ($1, $2, $3)',
         [migration.version, migration.name, migration.checksum],
       );
-      await client.query('COMMIT');
+      if (!standalone) await client.query('COMMIT');
       console.log(`Aplicada: ${String(migration.version).padStart(3, '0')}_${migration.name}`);
     } catch (error) {
-      await client.query('ROLLBACK');
+      if (!standalone) await client.query('ROLLBACK');
       throw error;
     }
   }
@@ -146,10 +148,14 @@ async function validatePending(client: PoolClient, migrations: Migration[], appl
   try {
     for (const migration of pending) {
       const sql = await fs.readFile(migration.path, 'utf8');
+      if (isNonTransactionalMigration(sql)) {
+        console.log(`${migration.version}: validacao estatica somente; ADD VALUE sera aplicado fora de transacao, nao executado nesta validacao.`);
+        continue;
+      }
       await client.query(sql);
     }
     await client.query('ROLLBACK');
-    console.log(`${pending.length} migration(s) validada(s) com rollback completo.`);
+    console.log('Validacao concluida: migrations transacionais executadas com rollback; excecoes estaticas listadas acima.');
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

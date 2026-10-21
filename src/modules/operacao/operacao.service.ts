@@ -13,7 +13,7 @@ export class OperacaoService {
   getCompanyAddress(auth: AuthContext) { return this.repository.getCompanyAddress(auth); }
 
   recentEmployeeDestinations(auth: AuthContext, employeeId: string) {
-    if (auth.perfil !== 'GESTOR' && auth.perfil !== 'GERENTE') throw forbidden();
+    if (!['GESTOR', 'GERENTE', 'PORTARIA'].includes(auth.perfil)) throw forbidden();
     return this.repository.recentEmployeeDestinations(auth, employeeId);
   }
 

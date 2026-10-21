@@ -108,6 +108,22 @@ const funcionario: AuthContext = { usuarioId: '78787878-7878-4787-8787-787878787
 const listQuery: CorridaListQuery = { pagina: 1, limite: 20 };
 
 describe('CorridaService', () => {
+  it('Portaria creates tenant scoped requests but cannot read rides or change their stages', async () => {
+    const portaria: AuthContext = { ...gerente, perfil:'PORTARIA' };
+    const store = new RideStore();
+    const audit = new RideAudit();
+    const service = new CorridaService(fakeDatabase(),audit,store);
+    const input: CorridaCreateInput = { funcionarioId:FUNCIONARIO,centroCustoId:CENTRO,tipo:'IMEDIATA',
+      origemDescricao:'Origem teste',destinoDescricao:'Destino teste',quantidadePassageiros:1 };
+    const created = await service.create(portaria,input,{});
+    expect(created.empresaId).toBe(EMPRESA);
+    expect(created.solicitanteUsuarioId).toBe(portaria.usuarioId);
+    expect(audit.entries).toHaveLength(1);
+    await expect(service.get(portaria,CORRIDA)).rejects.toMatchObject({statusCode:403});
+    await expect(service.list(portaria,listQuery)).rejects.toMatchObject({statusCode:403});
+    store.employeeValid = false;
+    await expect(service.create(portaria,input,{})).rejects.toMatchObject({statusCode:422});
+  });
   it.each([3_600_001, 7_200_000])('bloqueia aceite agendado %i ms antes sem ocupar prestador', async (offset) => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
     try {

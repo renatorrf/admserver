@@ -39,6 +39,8 @@ import { createPrestadorUnificadoRouter } from '../src/modules/prestadores/prest
 import { testSharedDriverAccounts } from './test-shared-driver-accounts';
 import { testSharedEmployeeAccounts } from './test-shared-employee-accounts';
 import { testScheduledEmails } from './test-scheduled-emails';
+import { UsuarioService } from '../src/modules/usuarios/usuario.service';
+import { NotificacaoService } from '../src/modules/notificacoes/notificacao.service';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -536,6 +538,47 @@ async function main(): Promise<void> {
     await testSharedDriverAccounts(pool, ok);
     await testSharedEmployeeAccounts(pool, ok);
     await testScheduledEmails(pool, ok);
+    const users = new UsuarioService(pool, new AuditRepository(pool));
+    const portaria = await users.create(manager, {
+      nome: 'Portaria teste', email: 'portaria@example.test', senha: '123456', perfil: 'PORTARIA',
+    }, {});
+    const portariaLogin = await request(loginApp).post('/auth/login')
+      .send({ empresa: 'TEST_0', email: 'portaria@example.test', senha: '123456' }).expect(200);
+    assert.equal(portariaLogin.body.data.usuario.perfil, 'PORTARIA');
+    assert.equal(portariaLogin.body.data.usuario.deveAlterarSenha, true);
+    await request(loginApp).post('/auth/senha').set('Authorization', `Bearer ${portariaLogin.body.data.accessToken}`)
+      .send({ senhaAtual: '123456', novaSenha: '654321' }).expect(204);
+    const access = await request(loginApp).post('/auth/login')
+      .send({ empresa: 'TEST_0', email: 'portaria@example.test', senha: '654321' }).expect(200);
+    const portariaAuth: AuthContext = { empresaId: company, usuarioId: portaria.id, perfil: 'PORTARIA' };
+    const stopIds = new Map(input.itinerario!.paradas.map(stop => [stop.id, randomUUID()]));
+    const command = { ...input, chaveSolicitacao: randomUUID(), itinerario: {
+      ...input.itinerario!, paradas: input.itinerario!.paradas.map(stop => ({ ...stop, id: stopIds.get(stop.id)! })),
+      participantes: input.itinerario!.participantes.map(participant => ({ ...participant,
+        embarqueId: stopIds.get(participant.embarqueId)!, desembarqueId: stopIds.get(participant.desembarqueId)!,
+      })),
+    } };
+    const requested = await service.create(portariaAuth, command, {});
+    const repeated = await service.create(portariaAuth, command, {});
+    assert.equal(requested.id, repeated.id);
+    assert.equal(requested.solicitanteUsuarioId, portaria.id);
+    await request(app).get(`/corridas/${requested.id}`).set('Authorization', bearer(portariaAuth)).expect(403);
+    const notifications = new NotificacaoService(pool);
+    notifications.publishRideUpdate({ ...requested, status: 'ACEITA' }, 'ACEITA');
+    let inbox: Awaited<ReturnType<typeof notifications.listOwn>> = [];
+    for (let attempt = 0; attempt < 40; attempt++) {
+      inbox = await notifications.listOwn(portariaAuth);
+      if (inbox.length) break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.equal(inbox[0]?.titulo, 'Corrida aceita');
+    assert.deepEqual(await notifications.listOwn({ ...portariaAuth, empresaId: otherCompany }), []);
+    const log = await pool.query('SELECT url_abertura FROM admtaxi.notificacoes_push WHERE id=$1', [inbox[0]!.id]);
+    assert.equal(log.rows[0].url_abertura, '/app/notificacoes');
+    await users.setActive(manager, portaria.id, false, {});
+    await request(loginApp).post('/auth/login').send({ empresa: 'TEST_0', email: 'portaria@example.test', senha: '654321' }).expect(401);
+    await request(loginApp).get('/protected').set('Authorization', `Bearer ${access.body.data.accessToken}`).expect(401);
+    ok('PORTARIA migration, creation, temporary password, request retry, denied tracking, own notifications and deactivation');
     console.log(JSON.stringify({ result: 'passed', checks, database: 'temporary PostgreSQL 18, loopback only', remoteDatabaseUsed: false }));
   } finally {
     await pool?.end();

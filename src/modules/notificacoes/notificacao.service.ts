@@ -57,6 +57,14 @@ export interface CorridaNotificationPublisher {
 let vapidInitialized = false;
 
 export class NotificacaoService implements CorridaNotificationPublisher {
+  async listOwn(auth: AuthContext) {
+    const result = await this.database.query<{ id: string; titulo: string; corpo: string; criadoEm: Date }>(
+      `SELECT id,titulo,corpo,criado_em AS "criadoEm" FROM admtaxi.notificacoes_push
+       WHERE empresa_id=$1 AND usuario_id=$2 ORDER BY criado_em DESC,id DESC LIMIT 50`,
+      [auth.empresaId, auth.usuarioId],
+    );
+    return result.rows;
+  }
   constructor(
     private readonly database: Database,
     private readonly pushConfig?: PushConfig,
@@ -226,9 +234,9 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   }
 
   private async sendRequesterRide(ride: CorridaRecord, event: RideNotificationEvent): Promise<void> {
-    const authorized = await this.database.query<{ id: string }>(
-      `SELECT u.id FROM admtaxi.usuarios u WHERE u.empresa_id=$1 AND u.id=$2 AND u.ativo=TRUE AND (
-        u.perfil='GESTOR' OR (u.perfil='GERENTE' AND EXISTS (
+    const authorized = await this.database.query<{ id: string; perfil: string }>(
+      `SELECT u.id,u.perfil FROM admtaxi.usuarios u WHERE u.empresa_id=$1 AND u.id=$2 AND u.ativo=TRUE AND (
+        u.perfil IN ('GESTOR','PORTARIA') OR (u.perfil='GERENTE' AND EXISTS (
           SELECT 1 FROM admtaxi.gerente_centros_custo gcc
           JOIN admtaxi.centros_custo cc ON cc.empresa_id=gcc.empresa_id AND cc.id=gcc.centro_custo_id AND cc.ativo=TRUE
           JOIN admtaxi.setores s ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id AND s.ativo=TRUE
@@ -238,7 +246,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
         )))`, [ride.empresaId, ride.solicitanteUsuarioId, ride.centroCustoId],
     );
     if (authorized.rowCount !== 1) return;
-    await this.sendRideMessage(ride, ride.solicitanteUsuarioId, event, event);
+    await this.sendRideMessage(ride, ride.solicitanteUsuarioId, event, event,
+      authorized.rows[0]?.perfil === 'PORTARIA' ? '/app/notificacoes' : undefined);
   }
 
   private async sendGestorsRide(ride: CorridaRecord, event: RideNotificationEvent): Promise<void> {
@@ -306,11 +315,11 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     });
   }
 
-  private sendRideMessage(ride: CorridaRecord, userId: string, logEvent: string, messageEvent: RideNotificationEvent): Promise<void> {
+  private sendRideMessage(ride: CorridaRecord, userId: string, logEvent: string, messageEvent: RideNotificationEvent, destination?: string): Promise<void> {
     const message = this.rideMessage(messageEvent);
     return this.sendRecipient({
       empresaId: ride.empresaId, usuarioId: userId, corridaId: ride.id,
-      event: logEvent, title: message.title, body: message.body, destination: this.rideUrl(ride.id),
+      event: logEvent, title: message.title, body: message.body, destination: destination ?? this.rideUrl(ride.id),
       dedupeKey: `${ride.empresaId}:${ride.id}:${logEvent}:${userId}${this.itineraryDedupe(ride, messageEvent)}`,
     });
   }
