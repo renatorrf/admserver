@@ -4,6 +4,7 @@ import type { OperacaoRepository } from './operacao.repository';
 import type { FuncionarioLookupQuery, FuncionarioSearchQuery, PrestadorSearchQuery } from './operacao.schemas';
 
 export class OperacaoService {
+  getConfiguration(auth: AuthContext) { return this.repository.getConfiguration(auth); }
   constructor(private readonly repository: OperacaoRepository) {}
 
   getMapLocation(auth: AuthContext) {

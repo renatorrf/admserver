@@ -146,7 +146,13 @@ export class CorridaService {
       if (input.tipo === 'AGENDADA' && input.agendadaPara && input.agendadaPara.getTime() <= Date.now()) {
         throw conflict('A corrida agendada deve possuir data futura.');
       }
-      if (input.itinerario) await this.validateItinerary(client, auth, input.itinerario, input.funcionarioId, input.centroCustoId);
+      const policy = await client.query<{ modo_cobranca: string }>('SELECT modo_cobranca FROM admtaxi.empresas WHERE id=$1 FOR SHARE', [auth.empresaId]);
+      const monthly = policy.rows[0]?.modo_cobranca === 'MENSAL_FIXO';
+      if (monthly && (input.valorEstimado != null || input.itinerario?.participantes.some(p => p.valor !== undefined))) {
+        throw invalidReference('Esta empresa utiliza mensalidade fixa. Reabra a solicitacao sem valores individuais.');
+      }
+      if (monthly && !input.itinerario) throw invalidReference('Informe os participantes e seus centros de custo para o rateio mensal.');
+      if (input.itinerario) await this.validateItinerary(client, auth, input.itinerario, input.funcionarioId, input.centroCustoId, monthly);
       if (!input.itinerario && !await this.repository.validateEmployeeAndCenter(client, auth.empresaId, input.funcionarioId, input.centroCustoId)) {
         throw invalidReference('Funcionario e centro de custo devem estar ativos, vinculados e pertencer a mesma empresa.');
       }
@@ -351,8 +357,12 @@ export class CorridaService {
       const current = await this.requireLockedRide(client, auth, id);
       const provider = await this.requireProviderContext(client, auth, true);
       if (current.prestadorId !== provider.id) throw forbidden();
+      const monthly = current.modoCobranca === 'MENSAL_FIXO';
+      if (!monthly && input.valorFinal === undefined) throw invalidReference('Informe o valor final da corrida.');
+      if (monthly && input.valorFinal !== undefined) throw invalidReference('A corrida mensal nao possui valor individual.');
+      const finalValue = monthly ? null : input.valorFinal!;
       if (current.status === 'FINALIZADA') {
-        if (Number(current.valorFinal) !== Number(input.valorFinal)
+        if (Number(current.valorFinal) !== Number(finalValue)
           || (current.observacaoPrestador ?? null) !== (input.observacaoPrestador ?? null)) throw conflict('A corrida ja foi finalizada com outros dados.');
         changed = false;
         return current;
@@ -361,14 +371,14 @@ export class CorridaService {
         const itinerary = await new ItineraryRepository().load(client, auth.empresaId, id, current.itinerarioVersao);
         if (!itineraryResolved(itinerary)) throw conflict('Conclua todas as paradas e resolva todos os passageiros antes de finalizar.');
         const total = passengerTotal(itinerary);
-        if (total !== undefined && moneyCents(total) !== moneyCents(input.valorFinal)) {
+        if (!monthly && total !== undefined && moneyCents(total) !== moneyCents(input.valorFinal!)) {
           throw conflict(`O valor final deve corresponder a soma dos valores individuais: R$ ${total.replace('.', ',')}.`);
         }
       }
       if (!current.desembarqueEm) throw conflict('Confirme o desembarque antes de finalizar a corrida.');
       assertTransition(current.status, 'FINALIZADA');
       const finished = await this.repository.changeStatus(client, auth.empresaId, id, 'FINALIZADA', {
-        valorFinal: input.valorFinal,
+        valorFinal: finalValue,
         observacaoPrestador: input.observacaoPrestador ?? null,
       });
       await this.repository.setProviderAvailability(client, auth.empresaId, provider.id, true);
@@ -511,7 +521,7 @@ export class CorridaService {
         const old = previous.participantes.find(item => item.funcionarioId === p.funcionarioId);
         return { ...p, centroCustoId: p.centroCustoId ?? old?.centroCustoId, valor: p.valor ?? old?.valor };
       }) };
-      await this.validateItinerary(client, auth, input, ride.funcionarioId, ride.centroCustoId);
+      await this.validateItinerary(client, auth, input, ride.funcionarioId, ride.centroCustoId, ride.modoCobranca === 'MENSAL_FIXO');
       if (previous.participantes.some(p => !input.participantes.some(next => next.funcionarioId === p.funcionarioId))) {
         throw conflict('Reassocie os passageiros; nao remova participacoes silenciosamente. Para cancelar a viagem, use cancelamento com motivo.');
       }
@@ -626,11 +636,12 @@ export class CorridaService {
     }), ride => { if (changed) this.notifications?.publishItineraryUpdate?.(ride, action); });
   }
 
-  private async validateItinerary(client: QueryExecutor, auth: AuthContext, input: ItineraryInput, primary: string, center: string): Promise<void> {
+  private async validateItinerary(client: QueryExecutor, auth: AuthContext, input: ItineraryInput, primary: string, center: string, monthly = false): Promise<void> {
     itinerarySchema.parse(input);
     if (!input.participantes.some(p => p.funcionarioId === primary)) throw invalidReference('Mantenha o funcionario principal entre os participantes.');
     const total = passengerTotal(input);
-    if (total === undefined && input.participantes.some(p => p.centroCustoId && p.centroCustoId !== center)) {
+    if (monthly && total !== undefined) throw invalidReference('O modo mensal nao permite valores individuais.');
+    if (!monthly && total === undefined && input.participantes.some(p => p.centroCustoId && p.centroCustoId !== center)) {
       throw invalidReference('Informe os valores individuais para utilizar centros de custo diferentes.');
     }
     const scope = await this.scopeResolver.resolve(auth, client);

@@ -30,6 +30,7 @@ export type CorridaParadaRecord = {
 };
 
 export type CorridaRecord = Record<string, unknown> & {
+  modoCobranca?: 'MANUAL' | 'MENSAL_FIXO';
   id: string;
   empresaId: string;
   empresaNome?: string;

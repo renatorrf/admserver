@@ -98,7 +98,7 @@ export const corridaCancelSchema = z.object({
 }).strict();
 
 export const corridaFinishSchema = z.object({
-  valorFinal: decimalMoney,
+  valorFinal: decimalMoney.optional(),
   observacaoPrestador: optionalText(2000),
 }).strict();
 

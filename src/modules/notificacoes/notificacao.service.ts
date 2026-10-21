@@ -58,10 +58,12 @@ let vapidInitialized = false;
 
 export class NotificacaoService implements CorridaNotificationPublisher {
   async listOwn(auth: AuthContext) {
-    const result = await this.database.query<{ id: string; titulo: string; corpo: string; criadoEm: Date }>(
-      `SELECT id,titulo,corpo,criado_em AS "criadoEm" FROM admtaxi.notificacoes_push
-       WHERE empresa_id=$1 AND usuario_id=$2 ORDER BY criado_em DESC,id DESC LIMIT 50`,
-      [auth.empresaId, auth.usuarioId],
+    const shared = auth.perfil === 'PRESTADOR' && auth.contaMotoristaId;
+    const result = await this.database.query<{ id: string; titulo: string; corpo: string; criadoEm: Date; corridaId: string | null; urlAbertura: string }>(
+      `SELECT n.id,n.titulo,n.corpo,n.criado_em AS "criadoEm",n.corrida_id AS "corridaId",n.url_abertura AS "urlAbertura" FROM admtaxi.notificacoes_push n
+       WHERE ${shared ? 'EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.conta_id=$1 AND m.empresa_id=n.empresa_id AND m.usuario_id=n.usuario_id)' : 'empresa_id=$1 AND usuario_id=$2'}
+       ORDER BY n.criado_em DESC,n.id DESC LIMIT 50`,
+      shared ? [shared] : [auth.empresaId, auth.usuarioId],
     );
     return result.rows;
   }

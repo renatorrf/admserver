@@ -6,6 +6,7 @@ import { digits, optionalEmail, optionalText } from '../../shared/validation/com
 
 export const provisionamentoSchema = z.object({
   empresa: z.object({
+    modoCobranca: z.enum(['MANUAL', 'MENSAL_FIXO']).optional(),
     ...companyAddressFields,
     codigoAcesso: z.string().trim().min(2).max(50)
       .regex(/^[A-Za-z0-9][A-Za-z0-9_-]+$/, 'Codigo de acesso invalido.')

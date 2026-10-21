@@ -20,6 +20,7 @@ import { createErrorHandler } from '../src/shared/http/error-handler';
 import { createAuthenticate } from '../src/modules/auth/auth.middleware';
 import { TokenService } from '../src/modules/auth/token-service';
 import { FaturamentoService } from '../src/modules/faturamentos/faturamento.service';
+import { MonthlyBillingService } from '../src/modules/faturamentos/monthly-billing.service';
 import { PainelParticipanteRepository } from '../src/modules/paineis/painel.repository';
 import { RelatorioRepository } from '../src/modules/relatorios/relatorio.repository';
 import { DashboardRepository } from '../src/modules/dashboard/dashboard.repository';
@@ -579,6 +580,71 @@ async function main(): Promise<void> {
     await request(loginApp).post('/auth/login').send({ empresa: 'TEST_0', email: 'portaria@example.test', senha: '654321' }).expect(401);
     await request(loginApp).get('/protected').set('Authorization', `Bearer ${access.body.data.accessToken}`).expect(401);
     ok('PORTARIA migration, creation, temporary password, request retry, denied tracking, own notifications and deactivation');
+    await companies.updateCurrent(manager, { modoCobranca: 'MENSAL_FIXO' }, {});
+    assert.equal((await service.get(manager, a.id)).modoCobranca, 'MANUAL');
+    const monthly = new MonthlyBillingService(pool, new AuditRepository(pool));
+    const monthlyIndex = 1 - winningIndex;
+    const monthlyDriver = drivers[monthlyIndex]!;
+    const monthlyProvider = providerIds[monthlyIndex]!;
+    await monthly.setValue(manager, monthlyProvider, '100.01', {});
+    await assert.rejects(monthly.providers(monthlyDriver), { statusCode: 403 });
+    const monthlyIds: string[] = [];
+    for (const scenario of ['two', 'one', 'absent']) {
+      const payload = structuredClone(input);
+      payload.chaveSolicitacao = randomUUID(); delete payload.valorEstimado;
+      const ids = new Map(payload.itinerario!.paradas.map(stop => [stop.id, randomUUID()]));
+      payload.itinerario!.paradas.forEach(stop => { stop.id = ids.get(stop.id)!; });
+      payload.itinerario!.participantes.forEach(p => {
+        p.embarqueId = ids.get(p.embarqueId)!; p.desembarqueId = ids.get(p.desembarqueId)!; delete p.valor;
+      });
+      if (scenario !== 'two') {
+        const p = payload.itinerario!.participantes[0]!;
+        payload.itinerario!.participantes = [p]; payload.quantidadePassageiros = 1;
+        payload.itinerario!.paradas = payload.itinerario!.paradas.filter(stop => [p.embarqueId, p.desembarqueId].includes(stop.id));
+      }
+      const created = await service.create(manager, payload, {});
+      monthlyIds.push(created.id);
+      assert.equal(created.modoCobranca, 'MENSAL_FIXO'); assert.equal(created.valorEstimado, null);
+      assert.equal((await service.create(manager, payload, {})).id, created.id);
+      let current = await service.accept(monthlyDriver, created.id, { veiculoId: vehicles[monthlyIndex]! }, {});
+      const execute = async (acao: ItineraryAction['acao'], funcionarioId?: string) => {
+        const stop = current.itinerario!.paradas.find(p => !['CONCLUIDA', 'CANCELADA'].includes(p.estado))!;
+        current = await service.executeItinerary(monthlyDriver, created.id, {
+          chave: randomUUID(), versao: current.itinerarioVersao!, paradaId: stop.id, acao,
+          funcionarioId, avancoAutomatico: true, ...(acao === 'AUSENTE' ? { motivo: 'Ausente no embarque de teste' } : {}),
+        }, {});
+      };
+      while (current.itinerario!.paradas.some(p => !['CONCLUIDA', 'CANCELADA'].includes(p.estado))) {
+        const stop = current.itinerario!.paradas.find(p => !['CONCLUIDA', 'CANCELADA'].includes(p.estado))!;
+        if (stop.estado === 'PENDENTE') await execute('INICIAR');
+        await execute('CHEGAR');
+        for (const p of current.itinerario!.participantes.filter(p => p.desembarqueId === stop.id && p.estado === 'EMBARCADO')) await execute('DESEMBARCAR', p.funcionarioId);
+        for (const p of current.itinerario!.participantes.filter(p => p.embarqueId === stop.id && p.estado === 'AGUARDANDO')) await execute(scenario === 'absent' ? 'AUSENTE' : 'EMBARCAR', p.funcionarioId);
+      }
+      await assert.rejects(service.finish(monthlyDriver, created.id, { valorFinal: '1.00' }, {}), { statusCode: 422 });
+      const finished = await service.finish(monthlyDriver, created.id, {}, {});
+      assert.equal(finished.status, 'FINALIZADA'); assert.equal(finished.valorFinal, null);
+      await pool.query("UPDATE admtaxi.corridas SET finalizada_em='2000-01-15T12:00:00Z' WHERE id=$1", [created.id]);
+    }
+    const monthlyInput = { prestadorId: monthlyProvider, competencia: '2000-01' };
+    await assert.rejects(monthly.preview({ ...manager, empresaId: otherCompany }, monthlyInput), { statusCode: 404 });
+    const preview = await monthly.preview(manager, monthlyInput);
+    assert.equal(preview.quantidadeCorridas, 2);
+    assert.deepEqual(preview.porCentroCusto.map(c => c.percentual).sort(), [25, 75]);
+    await monthly.setValue(manager, monthlyProvider, '200.00', {});
+    await assert.rejects(monthly.close(manager, { ...monthlyInput, previsaoHash: preview.previsaoHash }, {}), { statusCode: 409 });
+    await monthly.setValue(manager, monthlyProvider, '100.01', {});
+    const closings = await Promise.allSettled([0, 1].map(() => monthly.close(manager, { ...monthlyInput, previsaoHash: preview.previsaoHash }, {})));
+    assert.equal(closings.filter(c => c.status === 'fulfilled').length, 1);
+    assert.equal(closings.filter(c => c.status === 'rejected').length, 1);
+    const closedMonthly = closings.find(c => c.status === 'fulfilled')! as PromiseFulfilledResult<string>;
+    const monthlyBill = await billing.get(manager, closedMonthly.value);
+    assert.equal(monthlyBill.valorTotal, '100.01'); assert.equal(monthlyBill.quantidadeCorridas, 2);
+    const allocated = () => pool!.query('SELECT sum(valor_final)::text AS total FROM admtaxi.corrida_custos WHERE corrida_id=ANY($1::uuid[])', [monthlyIds]);
+    assert.equal((await allocated()).rows[0].total, '100.01');
+    await billing.cancel(manager, closedMonthly.value, { motivo: 'Teste de cancelamento mensal' }, {});
+    assert.equal((await allocated()).rows[0].total, null);
+    ok('MONTHLY policy snapshot, rides without prices, no-show exclusion, exact allocation, stale preview, concurrent closing, reports and cancellation');
     console.log(JSON.stringify({ result: 'passed', checks, database: 'temporary PostgreSQL 18, loopback only', remoteDatabaseUsed: false }));
   } finally {
     await pool?.end();

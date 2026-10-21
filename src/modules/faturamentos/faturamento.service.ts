@@ -8,6 +8,7 @@ import type { AuditMetadata } from '../auditoria/audit.types';
 import type { AuditRepository } from '../auditoria/audit.repository';
 import { CorridaRepository } from '../corridas/corrida.repository';
 import { moneyCents } from '../corridas/itinerary';
+import { MonthlyBillingService } from './monthly-billing.service';
 import type { RealtimeBus } from '../../realtime/realtime-bus';
 import type {
   CorridaValorAjusteInput, FaturamentoCancelInput, FaturamentoCreateInput,
@@ -31,6 +32,7 @@ type BillingRow = QueryResultRow & {
 };
 
 export class FaturamentoService {
+  get monthly(): MonthlyBillingService { return new MonthlyBillingService(this.database, this.audit); }
   constructor(
     private readonly database: Database,
     private readonly audit: AuditRepository,
@@ -395,7 +397,7 @@ export class FaturamentoService {
   private billingSelect(): string {
     return `SELECT f.id,f.empresa_id AS "empresaId",f.numero::text,f.periodo_inicio::text AS "periodoInicio",
       f.periodo_fim::text AS "periodoFim",f.prestador_id AS "prestadorId",p.nome AS "prestadorNome",
-      f.status::text,f.quantidade_corridas AS "quantidadeCorridas",f.valor_total::text AS "valorTotal",
+      f.modo_cobranca AS "modoCobranca",f.status::text,f.quantidade_corridas AS "quantidadeCorridas",f.valor_total::text AS "valorTotal",
       f.observacao,f.fechado_em AS "fechadoEm",f.cancelado_em AS "canceladoEm",
       f.motivo_cancelamento AS "motivoCancelamento",f.criado_em AS "criadoEm",f.atualizado_em AS "atualizadoEm"
      FROM admtaxi.faturamentos f LEFT JOIN admtaxi.prestadores p

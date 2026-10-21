@@ -45,6 +45,15 @@ function ride(): CorridaRecord {
 }
 
 describe('NotificacaoService', () => {
+  it('limita a caixa normal a empresa e usuario, e a do motorista aos seus vinculos ativos', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
+    const service = new NotificacaoService({ query } as unknown as Database);
+    await service.listOwn({ ...auth, perfil: 'FUNCIONARIO' });
+    expect(query).toHaveBeenLastCalledWith(expect.stringContaining('empresa_id=$1 AND usuario_id=$2'), [auth.empresaId, auth.usuarioId]);
+    await service.listOwn({ ...auth, contaMotoristaId: 'shared-driver' });
+    expect(query).toHaveBeenLastCalledWith(expect.stringContaining('m.empresa_id=n.empresa_id AND m.usuario_id=n.usuario_id'), ['shared-driver']);
+    expect(query.mock.calls[1]![0]).toContain('motorista_vinculos_ativos');
+  });
   it('direciona etapa individual apenas ao passageiro afetado com deduplicacao por versao', async () => {
     const query = vi.fn().mockImplementation((sql: string) => {
       if (sql.includes('INSERT INTO admtaxi.notificacoes_push')) return Promise.resolve({ rows: [{ id: subscriptionId }], rowCount: 1 });

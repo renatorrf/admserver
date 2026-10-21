@@ -14,9 +14,24 @@ import {
   type FaturamentoListQuery, type FaturamentoResumoFiltro,
 } from './faturamento.schemas';
 import type { FaturamentoService } from './faturamento.service';
+import { monthlyQuery, monthlyValue, monthlyClose } from './monthly-billing.service';
 
 export function createFaturamentoRouter(service: FaturamentoService): Router {
   const router = Router();
+  router.get('/mensal/prestadores', authorize('GESTOR'), asyncHandler(async (req, res) => {
+    res.json({ data: await service.monthly.providers(requireAuthContext(req)) });
+  }));
+  router.patch('/mensal/prestadores/:id', authorize('GESTOR'), validateParams(uuidParamsSchema), validateBody(monthlyValue), asyncHandler(async (req, res) => {
+    res.json({ data: await service.monthly.setValue(requireAuthContext(req), getValidatedParams<UuidParams>(req).id, req.body.valor, auditMetadataFromRequest(req)) });
+  }));
+  router.get('/mensal/previa', authorize('GESTOR'), validateQuery(monthlyQuery), asyncHandler(async (req, res) => {
+    res.json({ data: await service.monthly.preview(requireAuthContext(req), getValidatedQuery(req)) });
+  }));
+  router.post('/mensal', authorize('GESTOR'), validateBody(monthlyClose), asyncHandler(async (req, res) => {
+    const auth = requireAuthContext(req);
+    const id = await service.monthly.close(auth, req.body, auditMetadataFromRequest(req));
+    res.status(201).json({ data: await service.get(auth, id) });
+  }));
   router.get('/resumo', authorize('GESTOR'), validateQuery(faturamentoResumoSchema), asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.summary(
       requireAuthContext(request), getValidatedQuery<FaturamentoResumoFiltro>(request),

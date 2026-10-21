@@ -11,6 +11,9 @@ import type { OperacaoService } from './operacao.service';
 
 export function createOperacaoRouter(service: OperacaoService): Router {
   const router = Router();
+  router.get('/configuracao', asyncHandler(async (request, response) => {
+    response.json({ data: await service.getConfiguration(requireAuthContext(request)) });
+  }));
   router.get('/funcionarios/:id/destinos-recentes', authorize('GERENTE', 'GESTOR', 'PORTARIA'),
     validateParams(employeeDestinationParamsSchema), validateQuery(mapLocationQuerySchema), asyncHandler(async (request, response) => {
       response.json({ data: await service.recentEmployeeDestinations(requireAuthContext(request), getValidatedParams<{ id: string }>(request).id) });

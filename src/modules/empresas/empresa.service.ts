@@ -27,6 +27,7 @@ type EmpresaRecord = Record<string, unknown> & {
 };
 
 export const empresaFieldColumns: Record<keyof EmpresaUpdateInput, string> = {
+  modoCobranca: 'modo_cobranca',
   endereco: 'endereco', enderecoLatitude: 'endereco_latitude', enderecoLongitude: 'endereco_longitude',
   codigoAcesso: 'codigo_acesso',
   razaoSocial: 'razao_social',
@@ -44,6 +45,7 @@ export const empresaFieldColumns: Record<keyof EmpresaUpdateInput, string> = {
 export function mapEmpresa(row: QueryResultRow): EmpresaRecord {
   return {
     id: row.id as string,
+    modoCobranca: row.modo_cobranca ?? 'MANUAL',
     endereco: row.endereco as string | null,
     enderecoLatitude: row.endereco_latitude == null ? null : Number(row.endereco_latitude),
     enderecoLongitude: row.endereco_longitude == null ? null : Number(row.endereco_longitude),

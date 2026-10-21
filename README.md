@@ -399,3 +399,36 @@ Depois do desembarque, o GPS deixa de ser entregue a ele. Gestores mantem o acom
 Nao ha nova migracao para este ajuste. Publicar o backend antes do frontend/APK.
 `npm run test:review:integration` valida a execucao automatica completa e idempotencia
 em PostgreSQL temporario; `tests/socket-server.test.ts` valida a liberacao seletiva do GPS.
+
+## Cobranca Mensal e Avisos no Aplicativo
+
+A migracao 024 adiciona `modoCobranca` por empresa (`MANUAL` ou `MENSAL_FIXO`).
+Empresas existentes permanecem MANUAL. A corrida conserva o modo vigente na criacao;
+alterar a empresa nao reescreve valores ou historico de corridas anteriores.
+
+No modo mensal, a solicitacao e a conclusao nao recebem valores individuais. O gestor
+define a mensalidade de cada prestador no fechamento mensal, seleciona a competencia
+e confere a previa. Somente corridas finalizadas na competencia (America/Sao_Paulo)
+com passageiros DESEMBARCADOS participam. Cada corrida tem peso 1, dividido igualmente
+entre os passageiros transportados e atribuido ao centro registrado na participacao.
+Ausentes e cancelados nao participam. Arredondamento por maiores restos preserva
+todos os centavos da mensalidade. Sem corridas transportadas, o fechamento e bloqueado:
+nao se inventa centro de custo nem se registra rateio zero para um valor devido.
+
+O fechamento so e confirmado depois do fim do mes. O hash da previa impede confirmar
+um rateio desatualizado; trava transacional e indice unico impedem duplicacao. O cancelamento
+mantem o historico e permite refazer a competencia. Relatorios leem os valores rateados
+apenas depois do fechamento. Mensalidade, fechamento e cancelamento sao auditados.
+
+Rotas exclusivas do GESTOR: `/faturamentos/mensal/prestadores`,
+`PATCH /faturamentos/mensal/prestadores/:id`, `/faturamentos/mensal/previa`
+e `POST /faturamentos/mensal`. O escopo vem da autenticacao, nunca do corpo da requisicao.
+Aplicar 023/024 antes do backend e publicar o frontend depois. Nenhum deploy e automatico.
+
+A origem pode ser alterada por passageiro na solicitacao, sem modificar seu cadastro.
+Os avisos em primeiro plano consultam a caixa autenticada a cada 15 segundos, quando
+o app esta visivel e online, e ao receber o sinal de push. Nao solicitam permissao
+para exibir o banner, nao repetem o historico no login e descartam respostas de sessoes
+anteriores. Portaria abre somente Notificacoes. Motoristas veem avisos dos vinculos ativos.
+Web Push em segundo plano continua dependendo de HTTPS, permissao e VAPID configurado;
+a entrega real em iOS/Android e o push nativo do APK nao sao comprovados pelos testes locais.

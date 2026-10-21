@@ -85,7 +85,7 @@ describe('provisionamento de empresa', () => {
 
     expect(hasher).toHaveBeenCalledWith(input.gestor.senha);
     const companyInsert = query.mock.calls.find(([sql]) => sql.includes('INSERT INTO admtaxi.empresas'));
-    expect(companyInsert?.[1]?.slice(-3)).toEqual([input.empresa.endereco, input.empresa.enderecoLatitude, input.empresa.enderecoLongitude]);
+    expect(companyInsert?.[1]?.slice(-4)).toEqual([input.empresa.endereco, input.empresa.enderecoLatitude, input.empresa.enderecoLongitude, 'MANUAL']);
     expect(query.mock.calls.map(([sql]) => sql.trim().split(/\s+/)[0])).toEqual([
       'BEGIN', 'SELECT', 'INSERT', 'INSERT', 'INSERT', 'COMMIT',
     ]);

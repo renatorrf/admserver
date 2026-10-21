@@ -56,7 +56,7 @@ export type CorridaPatch = {
   prestadorId?: string | null;
   veiculoId?: string | null;
   observacaoPrestador?: string | null;
-  valorFinal?: string;
+  valorFinal?: string | null;
   motivoCancelamento?: string;
 };
 
@@ -113,6 +113,7 @@ export function mapCorrida(row: CorridaRow): CorridaRecord {
   return {
     id: row.id,
     empresaId: row.empresa_id,
+    modoCobranca: row.modo_cobranca ?? 'MANUAL',
     empresaNome: row.empresa_nome as string | undefined,
     solicitanteUsuarioId: row.solicitante_usuario_id,
     funcionarioId: row.funcionario_id,
