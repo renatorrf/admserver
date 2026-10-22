@@ -170,7 +170,7 @@ export class FuncionarioUnificadoService {
       `SELECT f.*, u.ativo AS usuario_ativo
          FROM admtaxi.funcionarios f LEFT JOIN admtaxi.usuarios u
            ON u.empresa_id = f.empresa_id AND u.id = f.usuario_id
-        WHERE f.empresa_id = $1 AND f.id = $2${lock ? ' FOR UPDATE OF f' : ''}`,
+        WHERE f.empresa_id = $1 AND f.id = $2 AND NOT f.avulso${lock ? ' FOR UPDATE OF f' : ''}`,
       [empresaId, id]);
     if (!row) throw notFound('Funcionario');
     return {

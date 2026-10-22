@@ -30,10 +30,12 @@ import { EnderecoService } from './modules/enderecos/endereco.service';
 import { ScheduledRideEmails } from './modules/corridas/scheduled-emails';
 import { SmtpScheduledMailer } from './modules/corridas/scheduled-mailer';
 import { TravelEmails } from './modules/requisicoes/travel-emails';
+import { FcmService, createFcmSender } from './modules/notificacoes/fcm.service';
 
 const config = getConfig();
 const logger = createLogger(config);
 const pool = createPool(config);
+const fcm = new FcmService(pool, logger, config.fcmProjectId ? createFcmSender(config.fcmProjectId) : undefined);
 const authRepository = new PgAuthRepository(pool);
 const tokenService = new TokenService(config, (auth) => authRepository.accessAllowed(auth));
 const authService = new AuthService(
@@ -48,7 +50,7 @@ const scheduledEmails = new ScheduledRideEmails(pool, logger, config.mail ? new 
 const travelEmails = new TravelEmails(pool,logger,config.mail ? new SmtpScheduledMailer(config.mail) : undefined);
 const adminRouter = createAdminRouter(pool, tokenService);
 const operationalRouter = createOperationalRouter(
-  pool, tokenService, realtime, config.geoapifyApiKey, config.push, scheduledEmails, travelEmails,
+  pool, tokenService, realtime, config.geoapifyApiKey, config.push, scheduledEmails, travelEmails, fcm,
 );
 const provisioningRouter = config.provisioningSecret
   ? createProvisionamentoRouter(new ProvisionamentoService(pool), config.provisioningSecret)
@@ -73,6 +75,8 @@ const socketLocationService = new LocalizacaoService(pool, socketRideService, re
 const io = attachSocketServer(server, config, tokenService, socketLocationService, realtime, logger, pool);
 
 async function start(): Promise<void> {
+  if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=27')).rowCount) throw new Error('Migration 027_fcm_android pendente. Aplique antes de publicar este backend.');
+  if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=26')).rowCount) throw new Error('Migration 026_passageiros_plano pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=25')).rowCount) throw new Error('Migration 025_requisicoes_viagem pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=22')).rowCount) throw new Error('Migration 022_emails_agendamento pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=20')).rowCount) throw new Error('Migration 020_contas_motorista pendente. Aplique antes de publicar este backend.');
@@ -93,6 +97,7 @@ async function start(): Promise<void> {
   server.listen(config.port, () => {
     scheduledEmails.start();
     travelEmails.start();
+    fcm.start();
     logger.info({ port: config.port, environment: config.nodeEnv }, 'API ADM Taxi iniciada');
   });
 }
@@ -109,6 +114,7 @@ async function shutdown(signal: string): Promise<void> {
   server.close(async (error) => {
     await scheduledEmails.stop();
     await travelEmails.stop();
+    await fcm.stop();
     await pool.end();
     if (error) {
       logger.error({ err: error }, 'Erro ao encerrar servidor');

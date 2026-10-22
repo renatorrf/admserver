@@ -8,13 +8,25 @@ import {
   pushSubscriptionSchema, subscriptionIdSchema, type PushSubscriptionInput, type SubscriptionIdParams,
 } from './notificacao.schemas';
 import type { NotificacaoService } from './notificacao.service';
+import { type FcmService, nativeDeviceSchema, nativeBindingSchema } from './fcm.service';
 
-export function createNotificacaoRouter(service: NotificacaoService, tokens: TokenService): Router {
+export function createNotificacaoRouter(service: NotificacaoService, tokens: TokenService, fcm?: FcmService): Router {
   const router = Router();
   router.get('/public-key', asyncHandler(async (_request, response) => {
     response.status(200).json({ data: { publicKey: service.publicKey() } });
   }));
   router.use(createAuthenticate(tokens));
+  if (fcm) {
+    router.post('/android/devices', authorize('PRESTADOR'), validateBody(nativeDeviceSchema), asyncHandler(async (req,res) => {
+      res.status(201).json({ data: await fcm.register(requireAuthContext(req),req.body) });
+    }));
+    router.post('/android/status', authorize('PRESTADOR'), validateBody(nativeBindingSchema), asyncHandler(async (req,res) => {
+      res.json({ data: await fcm.status(requireAuthContext(req),req.body.vinculoId) });
+    }));
+    router.post('/android/revoke', authorize('PRESTADOR'), validateBody(nativeBindingSchema), asyncHandler(async (req,res) => {
+      await fcm.revoke(requireAuthContext(req),req.body.vinculoId); res.sendStatus(204);
+    }));
+  }
   router.get('/notificacoes', asyncHandler(async (request, response) => {
     response.json({ data: await service.listOwn(requireAuthContext(request)) });
   }));

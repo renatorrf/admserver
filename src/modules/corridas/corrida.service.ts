@@ -199,7 +199,7 @@ export class CorridaService {
       if (checked?.complete) await checked.complete(created.id);
       else await this.scheduledEmails?.enqueue(client, created);
       return created;
-    }), ride => { if (createdNow) { this.notifications?.publishRideCreated(ride); this.scheduledEmails?.kick(); this.travelEmails?.kick(); } });
+    }), async ride => { if (createdNow) { await this.notifications?.publishRideCreated(ride); this.scheduledEmails?.kick(); this.travelEmails?.kick(); } });
   }
 
   assign(auth: AuthContext, id: string, input: CorridaAssignInput, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -236,11 +236,11 @@ export class CorridaService {
       );
       await this.recordAudit(client, auth, metadata, updated, 'ATRIBUIR', current, updated);
       return updated;
-    }), ride => {
-      this.notifications?.publishProviderRide(ride, notificationEvent);
+    }), async ride => {
+      await this.notifications?.publishProviderRide(ride, notificationEvent);
       this.notifications?.publishRideUpdate(ride, 'ATRIBUICAO_ALTERADA');
       if (previousProviderId && previousProviderId !== ride.prestadorId) {
-        this.notifications?.publishProviderRide({ ...ride, prestadorId: previousProviderId }, 'REMOVIDA');
+        await this.notifications?.publishProviderRide({ ...ride, prestadorId: previousProviderId }, 'REMOVIDA');
       }
     });
   }
@@ -677,27 +677,27 @@ export class CorridaService {
           throw invalidReference('Funcionario e centro de custo devem estar ativos e vinculados.');
         }
       } else {
-        const employee = await client.query<{ centro_custo_id: string }>(`SELECT f.centro_custo_id FROM admtaxi.funcionarios f
-          JOIN admtaxi.centros_custo home ON home.empresa_id=f.empresa_id AND home.id=f.centro_custo_id AND home.ativo
-          JOIN admtaxi.setores hs ON hs.empresa_id=home.empresa_id AND hs.id=home.setor_id AND hs.ativo
+        const employee = await client.query<{ centro_custo_id: string; avulso: boolean }>(`SELECT f.centro_custo_id,f.avulso FROM admtaxi.funcionarios f
+          JOIN admtaxi.centros_custo home ON home.empresa_id=f.empresa_id AND home.id=f.centro_custo_id AND (home.ativo OR f.avulso)
+          JOIN admtaxi.setores hs ON hs.empresa_id=home.empresa_id AND hs.id=home.setor_id AND (hs.ativo OR f.avulso)
           JOIN admtaxi.centros_custo cc ON cc.empresa_id=f.empresa_id AND cc.id=$3 AND cc.ativo
           JOIN admtaxi.setores s ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id AND s.ativo
           WHERE f.empresa_id=$1 AND f.id=$2 AND f.ativo`, [auth.empresaId, participant.funcionarioId, selectedCenter]);
         if (!employee.rows[0]) throw invalidReference('Funcionario e centro de custo devem estar ativos na empresa.');
-        if (!centerAllowed(scope, employee.rows[0].centro_custo_id)) throw forbidden('Funcionario fora do seu escopo.');
+        if (!employee.rows[0].avulso && !centerAllowed(scope, employee.rows[0].centro_custo_id)) throw forbidden('Funcionario fora do seu escopo.');
       }
     }
   }
 
   private async withRealtime(
-    operation: Promise<CorridaRecord>, afterCommit?: (ride: CorridaRecord) => void,
+    operation: Promise<CorridaRecord>, afterCommit?: (ride: CorridaRecord) => void | Promise<void>,
   ): Promise<CorridaRecord> {
     const ride = await operation;
     const complete = await this.repository.findAccessible(
       this.database, ride.empresaId, ride.id, { kind: 'GESTOR' },
     ) ?? ride;
     this.realtime?.publishRide(complete, this.realtimeEvent(complete));
-    afterCommit?.(complete);
+    await afterCommit?.(complete);
     return complete;
   }
 

@@ -59,6 +59,7 @@ const envSchema = z.object({
   MASTER_PASSWORD_RESET_URL: optionalEnvironmentValue(z.string().url()),
   PASSWORD_RESET_TTL_MINUTES: optionalEnvironmentValue(z.coerce.number().int().min(5).max(60)),
   PUSH_VAPID_SUBJECT: optionalEnvironmentValue(z.string().trim().min(8)),
+  FCM_PROJECT_ID: optionalEnvironmentValue(z.string().regex(/^[a-z][a-z0-9-]{4,62}$/)),
   PUSH_VAPID_PUBLIC_KEY: optionalEnvironmentValue(z.string().trim().min(20)),
   PUSH_VAPID_PRIVATE_KEY: optionalEnvironmentValue(z.string().trim().min(20)),
   PUSH_APP_URL: optionalEnvironmentValue(z.string().url()),
@@ -84,6 +85,7 @@ export type AppConfig = {
   masterBootstrapPasswordHash?: string;
   geoapifyApiKey?: string;
   push?: PushConfig;
+  fcmProjectId?: string;
   mail?: MailConfig;
 };
 
@@ -105,6 +107,15 @@ export type PushConfig = {
 };
 
 let cachedConfig: AppConfig | undefined;
+
+export function getFcmWorkerConfig(environment: NodeJS.ProcessEnv = process.env) {
+  const parsed = envSchema.pick({ NODE_ENV: true, DATABASE_URL: true, LOG_LEVEL: true, FCM_PROJECT_ID: true }).safeParse(environment);
+  if (!parsed.success || !parsed.data.FCM_PROJECT_ID) {
+    throw new Error('Configure DATABASE_URL, FCM_PROJECT_ID, NODE_ENV e LOG_LEVEL para o worker FCM.');
+  }
+  return { nodeEnv: parsed.data.NODE_ENV, databaseUrl: parsed.data.DATABASE_URL,
+    logLevel: parsed.data.LOG_LEVEL, fcmProjectId: parsed.data.FCM_PROJECT_ID };
+}
 
 export function resolveTrustProxy(
   nodeEnv: AppConfig["nodeEnv"],
@@ -167,6 +178,7 @@ export function getConfig(): AppConfig {
     masterBootstrapUsername: parsed.data.MASTER_BOOTSTRAP_USERNAME,
     masterBootstrapPasswordHash: parsed.data.MASTER_BOOTSTRAP_PASSWORD_HASH,
     geoapifyApiKey: parsed.data.GEOAPIFY_API_KEY,
+    fcmProjectId: parsed.data.FCM_PROJECT_ID,
     mail: parsed.data.SMTP_HOST ? {
       host: parsed.data.SMTP_HOST, port: parsed.data.SMTP_PORT ?? 587,
       secure: parsed.data.SMTP_SECURE === 'true' || (parsed.data.SMTP_SECURE === undefined && parsed.data.SMTP_PORT === 465),

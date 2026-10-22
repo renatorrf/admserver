@@ -96,7 +96,7 @@ const corridaSelect = `SELECT c.*,
       'chegadaEm',s.chegada_em,'saidaEm',s.saida_em) ORDER BY s.ordem)
       FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id),
     'participantes', (SELECT jsonb_agg(jsonb_build_object('funcionarioId',p.funcionario_id,
-      'funcionarioNome',f.nome,'embarqueId',p.embarque_id,'desembarqueId',p.desembarque_id,
+      'funcionarioNome',f.nome,'funcionarioTelefone',f.telefone,'embarqueId',p.embarque_id,'desembarqueId',p.desembarque_id,
       'centroCustoId',p.centro_custo_id,'valor',p.valor::text,
       'estado',p.estado,'motivo',p.motivo,'embarqueEm',p.embarque_em,'desembarqueEm',p.desembarque_em) ORDER BY p.funcionario_id)
       FROM admtaxi.corrida_participacoes p JOIN admtaxi.funcionarios f ON f.empresa_id=p.empresa_id AND f.id=p.funcionario_id

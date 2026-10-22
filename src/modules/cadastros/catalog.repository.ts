@@ -15,6 +15,7 @@ export class CatalogRepository {
   async list(empresaId: string, query: CatalogListQuery): Promise<PaginatedResult<CatalogRecord>> {
     const values: unknown[] = [empresaId];
     const conditions = ['empresa_id = $1'];
+    if (this.definition.table === 'funcionarios') conditions.push('NOT avulso');
     const addCondition = (condition: string, value: unknown): void => {
       values.push(value);
       conditions.push(condition.replace('?', `$${values.length}`));

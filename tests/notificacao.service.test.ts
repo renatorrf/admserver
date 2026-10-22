@@ -45,6 +45,23 @@ function ride(): CorridaRecord {
 }
 
 describe('NotificacaoService', () => {
+  it('mantem identificacao, tag e topic em reenvios sem repetir o alerta', async () => {
+    const query = vi.fn().mockImplementation((sql: string) => {
+      if (sql.includes('INSERT INTO admtaxi.notificacoes_push')) return Promise.resolve({ rows: [{ id: subscriptionId }] });
+      if (sql.includes('FROM admtaxi.push_subscriptions')) return Promise.resolve({ rows: [subscriptionRow()] });
+      if (sql.includes('INSERT INTO admtaxi.push_tentativas')) return Promise.resolve({ rows: [{ id: 'attempt-id' }] });
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+    const send = vi.mocked(webpush.sendNotification).mockReset();
+    send.mockRejectedValueOnce({ statusCode: 503 }).mockResolvedValue({ statusCode: 201, body: '', headers: {} });
+    await new NotificacaoService({ query } as unknown as Database, config).sendTest(auth);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
+    expect(JSON.parse(send.mock.calls[0]![1] as string)).toMatchObject({
+      tag: `adm-${subscriptionId}`, renotify: false, data: { notificationId: subscriptionId },
+    });
+    expect(send.mock.calls[0]![2]).toMatchObject({ TTL: 300, urgency: 'high', topic: expect.stringMatching(/^[A-Za-z0-9_-]{32}$/) });
+  });
   it('limita a caixa normal a empresa e usuario, e a do motorista aos seus vinculos ativos', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
     const service = new NotificacaoService({ query } as unknown as Database);

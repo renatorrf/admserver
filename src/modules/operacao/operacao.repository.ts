@@ -166,7 +166,7 @@ export class OperacaoRepository {
   async listEmployees(auth: AuthContext, query: FuncionarioLookupQuery): Promise<FuncionarioLookup[]> {
     const scope = await this.scopeResolver.resolve(auth);
     const values: unknown[] = [auth.empresaId];
-    const conditions = ['f.empresa_id = $1', 'f.ativo = TRUE', 'c.ativo = TRUE', 's.ativo = TRUE'];
+    const conditions = ['f.empresa_id = $1', 'NOT f.avulso', 'f.ativo = TRUE', 'c.ativo = TRUE', 's.ativo = TRUE'];
     addCenterScope(conditions, values, scope, 'f.centro_custo_id');
     if (query.centroCustoId) {
       values.push(query.centroCustoId);
@@ -225,7 +225,7 @@ export class OperacaoRepository {
   async searchEmployees(auth: AuthContext, query: FuncionarioSearchQuery): Promise<PaginatedResult<FuncionarioLookup & { cpf: string | null; ativo: boolean }>> {
     const scope = await this.scopeResolver.resolve(auth);
     const values: unknown[] = [auth.empresaId];
-    const conditions = ['f.empresa_id = $1', 'c.ativo = TRUE', 's.ativo = TRUE'];
+    const conditions = ['f.empresa_id = $1', 'NOT f.avulso', 'c.ativo = TRUE', 's.ativo = TRUE'];
     if (query.ativo !== undefined) {
       values.push(query.ativo);
       conditions.push(`f.ativo = $${values.length}`);
@@ -363,7 +363,7 @@ export class OperacaoRepository {
     const scope = await this.scopeResolver.resolve(auth);
     const [setores, centrosCusto] = await Promise.all([this.listSectorsFromScope(scope), this.listCentersFromScope(scope)]);
     const values: unknown[] = [auth.empresaId];
-    const conditions = ['f.empresa_id = $1', 'f.ativo = TRUE', 'c.ativo = TRUE', 's.ativo = TRUE'];
+    const conditions = ['f.empresa_id = $1', 'NOT f.avulso', 'f.ativo = TRUE', 'c.ativo = TRUE', 's.ativo = TRUE'];
     addCenterScope(conditions, values, scope, 'f.centro_custo_id');
     const count = await this.database.query<{ total: string }>(
       `SELECT COUNT(*)::text AS total FROM admtaxi.funcionarios f

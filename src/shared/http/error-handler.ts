@@ -76,6 +76,10 @@ export function createErrorHandler(logger: Logger, auditDatabase?: Pick<Pool, 'q
     }
 
     if (typeof error === 'object' && error !== null && 'code' in error) {
+      if (error.code === 'P2601') {
+        response.status(409).json({ erro: { codigo: 'LIMITE_PASSAGEIROS', mensagem: 'Limite global de 200 passageiros atingido, incluindo reservas de corridas abertas. Aguarde uma vaga ou revise as corridas pendentes.' }, requisicaoId: request.id });
+        return;
+      }
       if (error.code === 'P1601' || error.code === 'P2001' || error.code === 'P2101') {
         response.status(409).json({ erro: { codigo: error.code === 'P2101' ? 'CONTA_FUNCIONARIO' : error.code === 'P2001' ? 'CONTA_MOTORISTA' : 'CONTA_GESTOR', mensagem: 'message' in error ? String(error.message) : 'Revise o vinculo da conta.' }, requisicaoId: request.id });
         return;

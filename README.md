@@ -432,3 +432,42 @@ para exibir o banner, nao repetem o historico no login e descartam respostas de 
 anteriores. Portaria abre somente Notificacoes. Motoristas veem avisos dos vinculos ativos.
 Web Push em segundo plano continua dependendo de HTTPS, permissao e VAPID configurado;
 a entrega real em iOS/Android e o push nativo do APK nao sao comprovados pelos testes locais.
+
+## Passageiros Avulsos e Plano Global
+
+A migracao 026 deve preceder o backend e o frontend. Nao cria logins, nao exclui
+cadastros e nao altera senhas. Passageiros avulsos usam os relacionamentos existentes
+de passageiros, com `avulso=true`, sem matricula ou conta de acesso. Nome, telefone
+com DDD e centro de custo sao obrigatorios; centro/setor devem estar ativos no escopo
+do solicitante. A portaria preserva esses dados aprovados e completa os enderecos.
+O telefone acompanha o itinerario do motorista; os custos seguem o centro escolhido
+para aquela participacao. Os avulsos nao aparecem na selecao de funcionarios.
+
+O limite e de **200 pessoas em toda a base**, nao por empresa. Pessoa ativa no plano:
+participacao DESEMBARCADO em corrida FINALIZADA ha menos de 62 dias. Legados sem
+participacoes usam finalizacao e desembarque registrados. Ausentes, cancelados,
+login e simples requisicao nao ativam a pessoa. Novos cadastros nao consomem vaga.
+A expiracao e calculada na consulta; nao depende de cron, CPU continua no Cloud Run
+ou bloqueio do login. Inatividade no plano e bloqueio administrativo sao independentes.
+
+Corridas abertas reservam vagas para seus passageiros ainda nao ativos, separadas
+do contador de ativos. Cancelamento/ausencia liberam reservas, salvo outro uso pendente.
+Trava global transacional e triggers impedem duas empresas de admitir a pessoa 201
+simultaneamente. A conclusao de uma corrida com vaga reservada nao e bloqueada.
+Ao atingir o limite, a API responde 409/LIMITE_PASSAGEIROS com orientacao clara.
+
+Contas de funcionario compartilhadas contam uma vez. Novos registros reutilizam a
+identidade de transporte de uma conta vinculada, CPF ou par nome/telefone normalizado
+ja identificado. Isso nao vincula logins nem compartilha permissoes. Contato editado
+nao troca a identidade historica. Homonimos e telefones divergentes exigem revisao,
+sem mesclar cadastros ou credenciais automaticamente.
+
+`GET /api/v1/passageiros/controle` e exclusivo do GESTOR: totais globais agregados,
+mas nomes, telefones e datas de viagem somente da empresa autenticada. Filtros:
+`busca`, `situacao=ATIVO|INATIVO|SEM_VIAGEM`, `pagina`; 20 registros por pagina.
+Na interface, Pessoas transportadas fica separada de Contas e dispositivos.
+
+Validacao: `npm test`, `npm run test:review:integration` (PostgreSQL local isolado),
+`npm run build` e `npm run lint`. A integracao cobre avulso do pedido a conclusao,
+conferencia imutavel, repeticao idempotente, custos, expiracao, isolamento e disputa
+da ultima vaga entre duas empresas. Nao use dados sinteticos no banco remoto.

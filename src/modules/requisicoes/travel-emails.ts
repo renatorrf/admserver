@@ -31,6 +31,8 @@ export class TravelEmails {
       return [person.id, `${person.nome}\nOrigem: ${data.origem?.descricao ?? 'A confirmar pela portaria'}\nDestino: ${data.destino?.descricao ?? 'A confirmar pela portaria'}`];
     }));
     const recipients = new Map<string,string>();
+    for (const data of request.dados.participantes) if (data.avulso) summaries.set(data.avulso.id,
+      `${data.avulso.nome} (avulso)\nTelefone: ${data.avulso.telefone}\nOrigem: ${data.origem?.descricao ?? 'A confirmar pela portaria'}\nDestino: ${data.destino?.descricao ?? 'A confirmar pela portaria'}`);
     // Each employee receives only their own addresses. Administrative recipients receive the full summary.
     for (const person of employees.rows) {
       const email = person.email?.trim().toLowerCase();

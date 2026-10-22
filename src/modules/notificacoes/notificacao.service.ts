@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import webpush from 'web-push';
 
@@ -10,6 +10,7 @@ import type { CorridaRecord } from '../corridas/corrida.types';
 import type { ItineraryAction } from '../corridas/itinerary';
 import { employeeRide } from '../corridas/corrida-visibility';
 import type { PushSubscriptionInput } from './notificacao.schemas';
+import type { FcmService } from './fcm.service';
 
 type SubscriptionRow = {
   id: string; empresa_id: string; usuario_id: string; endpoint: string; p256dh: string; auth: string;
@@ -48,9 +49,9 @@ export interface EmployeeUserResolver {
 }
 
 export interface CorridaNotificationPublisher {
-  publishRideCreated(ride: CorridaRecord): void;
+  publishRideCreated(ride: CorridaRecord): void | Promise<void>;
   publishRideUpdate(ride: CorridaRecord, event: RideNotificationEvent): void;
-  publishProviderRide(ride: CorridaRecord, event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA'): void;
+  publishProviderRide(ride: CorridaRecord, event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA'): void | Promise<void>;
   publishItineraryUpdate?(ride: CorridaRecord, action?: ItineraryAction): void;
 }
 
@@ -71,6 +72,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     private readonly database: Database,
     private readonly pushConfig?: PushConfig,
     private readonly employeeUsers?: EmployeeUserResolver,
+    private readonly fcm?: FcmService,
   ) {
     if (pushConfig && !vapidInitialized) {
       webpush.setVapidDetails(pushConfig.subject, pushConfig.publicKey, pushConfig.privateKey);
@@ -183,8 +185,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     });
   }
 
-  publishRideCreated(ride: CorridaRecord): void {
-    void Promise.all([this.sendAvailableRide(ride), this.sendEmployeeRide(ride, 'SOLICITADA')]).catch(() => undefined);
+  async publishRideCreated(ride: CorridaRecord): Promise<void> {
+    await Promise.all([this.sendAvailableRide(ride), this.sendEmployeeRide(ride, 'SOLICITADA')]).catch(() => undefined);
   }
 
   publishRideUpdate(ride: CorridaRecord, event: RideNotificationEvent): void {
@@ -193,8 +195,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     ]).catch(() => undefined);
   }
 
-  publishProviderRide(ride: CorridaRecord, event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA'): void {
-    void this.sendProviderRide(ride, event).catch(() => undefined);
+  async publishProviderRide(ride: CorridaRecord, event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA'): Promise<void> {
+    await this.sendProviderRide(ride, event).catch(() => undefined);
   }
 
   publishItineraryUpdate(ride: CorridaRecord, action?: ItineraryAction): void {
@@ -341,6 +343,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     );
     const notificationId = inserted.rows[0]?.id;
     if (!notificationId) return;
+    // The trigger persisted native jobs atomically with this notification.
+    await this.fcm?.process().catch(() => this.fcm?.kick());
     const values: unknown[] = [input.empresaId, input.usuarioId];
     const idFilter = input.subscriptionId ? ' AND id=$3' : '';
     if (input.subscriptionId) values.push(input.subscriptionId);
@@ -361,8 +365,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     const payload = JSON.stringify({
       title: input.title, body: input.body,
       icon: this.pushConfig.notificationIconUrl, badge: this.pushConfig.notificationBadgeUrl,
-      tag: `${input.event.toLowerCase()}-${input.corridaId ?? notificationId}`,
-      data: { type: input.event, corridaId: input.corridaId, openUrl: destination },
+      tag: `adm-${notificationId}`, renotify: false,
+      data: { notificationId, type: input.event, corridaId: input.corridaId, openUrl: destination },
     });
     const results = await Promise.all(subscriptions.rows.map((subscription) =>
       this.sendSubscription(input.empresaId, notificationId, subscription, payload)));
@@ -381,7 +385,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     const attemptId = attempt.rows[0]?.id;
     if (!attemptId) return true;
     try {
-      await this.sendWithRetry(subscription, payload);
+      await this.sendWithRetry(subscription, payload, notificationId);
       await Promise.all([
         this.database.query(
           `UPDATE admtaxi.push_tentativas SET status='ENVIADA',codigo_http=201,tentada_em=CURRENT_TIMESTAMP WHERE id=$1`,
@@ -412,15 +416,17 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     }
   }
 
-  private async sendWithRetry(subscription: SubscriptionRow, payload: string): Promise<void> {
+  private async sendWithRetry(subscription: SubscriptionRow, payload: string, notificationId: string): Promise<void> {
     const target = { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } };
+    const options = { TTL: 300, urgency: 'high' as const,
+      topic: createHash('sha256').update(notificationId).digest('base64url').slice(0, 32) };
     try {
-      await webpush.sendNotification(target, payload, { TTL: 300, urgency: 'high' });
+      await webpush.sendNotification(target, payload, options);
     } catch (error) {
       const status = Number((error as { statusCode?: number }).statusCode ?? 0);
       if (status !== 429 && status < 500) throw error;
       await new Promise((resolve) => setTimeout(resolve, 300));
-      await webpush.sendNotification(target, payload, { TTL: 300, urgency: 'high' });
+      await webpush.sendNotification(target, payload, options);
     }
   }
 

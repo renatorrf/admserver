@@ -40,14 +40,18 @@ import type { ScheduledEmailQueue } from './scheduled-emails';
 import { TravelEmails } from '../requisicoes/travel-emails';
 import { RequisitionService } from '../requisicoes/requisicao.service';
 import { requisitionRouter } from '../requisicoes/requisicao.routes';
+import { passengerControlRouter } from '../usuarios/passenger-control';
+import type { FcmService } from '../notificacoes/fcm.service';
 
 export function createOperationalRouter(
   pool: Pool, tokens: TokenService, realtime?: RealtimeBus, geoapifyApiKey?: string, pushConfig?: PushConfig,
   scheduledEmails?: ScheduledEmailQueue,
   travelEmails?: TravelEmails,
+  fcm?: FcmService,
 ): Router {
   const router = Router();
-  const notifications = new NotificacaoService(pool, pushConfig);
+  router.use('/passageiros/controle',createAuthenticate(tokens),passengerControlRouter(pool));
+  const notifications = new NotificacaoService(pool, pushConfig, undefined, fcm);
   const emails = travelEmails ?? new TravelEmails(pool, { warn: () => undefined, error: () => undefined });
   const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications, undefined, scheduledEmails, emails);
   router.use('/requisicoes', createAuthenticate(tokens), requisitionRouter(new RequisitionService(pool,new AuditRepository(pool),service,emails)));
@@ -68,7 +72,7 @@ export function createOperationalRouter(
   router.use('/corridas/:id/localizacoes', createAuthenticate(tokens), createLocalizacaoRouter(locations));
   router.use('/corridas', createAuthenticate(tokens), createCorridaRouter(service, new RideRouteService(geoapifyApiKey), new RideRouteOptimizer(geoapifyApiKey)));
   router.use('/enderecos', createAuthenticate(tokens), createEnderecoRouter(new EnderecoService(pool, geoapifyApiKey)));
-  router.use('/push', createNotificacaoRouter(notifications, tokens));
+  router.use('/push', createNotificacaoRouter(notifications, tokens, fcm));
   router.use('/dispositivos', createAuthenticate(tokens), createDispositivoRouter(new DispositivoService(pool)));
   router.patch(
     '/prestadores/minha-disponibilidade',

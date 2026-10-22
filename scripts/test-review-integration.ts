@@ -43,6 +43,8 @@ import { testScheduledEmails } from './test-scheduled-emails';
 import { UsuarioService } from '../src/modules/usuarios/usuario.service';
 import { NotificacaoService } from '../src/modules/notificacoes/notificacao.service';
 import { testRequisitions } from './test-requisitions';
+import { testGuestPassengers, testGlobalPassengerLimit } from './test-passenger-plan';
+import { testFcm } from './test-fcm';
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -578,6 +580,7 @@ async function main(): Promise<void> {
     const log = await pool.query('SELECT url_abertura FROM admtaxi.notificacoes_push WHERE id=$1', [inbox[0]!.id]);
     assert.equal(log.rows[0].url_abertura, '/app/notificacoes');
     await testRequisitions(pool,manager,portariaAuth,employeeIds,center,sector,otherCompany,drivers[1-winningIndex]!,vehicles[1-winningIndex]!,ok);
+    await testGuestPassengers(pool,manager,portariaAuth,center,drivers[1-winningIndex]!,vehicles[1-winningIndex]!,ok);
     await users.setActive(manager, portaria.id, false, {});
     await request(loginApp).post('/auth/login').send({ empresa: 'TEST_0', email: 'portaria@example.test', senha: '654321' }).expect(401);
     await request(loginApp).get('/protected').set('Authorization', `Bearer ${access.body.data.accessToken}`).expect(401);
@@ -647,6 +650,8 @@ async function main(): Promise<void> {
     await billing.cancel(manager, closedMonthly.value, { motivo: 'Teste de cancelamento mensal' }, {});
     assert.equal((await allocated()).rows[0].total, null);
     ok('MONTHLY policy snapshot, rides without prices, no-show exclusion, exact allocation, stale preview, concurrent closing, reports and cancellation');
+    await testGlobalPassengerLimit(pool,ok);
+    await testFcm(pool,ok);
     console.log(JSON.stringify({ result: 'passed', checks, database: 'temporary PostgreSQL 18, loopback only', remoteDatabaseUsed: false }));
   } finally {
     await pool?.end();

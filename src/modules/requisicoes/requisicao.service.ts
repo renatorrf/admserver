@@ -7,6 +7,7 @@ import { commandHash } from '../corridas/itinerary.repository';
 import { centerAllowed, OperationalScopeService } from '../escopo/operational-scope.service';
 import { conferenceData, requisicaoSchema, toRideInput, type RequisitionInput, type RequisitionRow } from './requisicao.schemas';
 import type { TravelEmails } from './travel-emails';
+import { resolveGuests } from './guest-passengers';
 
 export class RequisitionService {
   constructor(private readonly database: Database, private readonly audit: CorridaAuditWriter,
@@ -77,7 +78,8 @@ export class RequisitionService {
       if (row.status!=='AUTORIZADA') throw conflict('A viagem precisa estar autorizada pelo gestor.');
       const data = conferenceData(requisicaoSchema.parse(row.dados),participants);
       const { centers, monthly } = await this.validate(client,auth,data,true);
-      return { input: toRideInput(data,centers,monthly), complete: async (corridaId: string) => {
+      const resolved = await resolveGuests(client,auth.empresaId,data.participantes);
+      return { input: toRideInput(data,centers,monthly,resolved), complete: async (corridaId: string) => {
         const updated = await client.query<RequisitionRow>(`UPDATE admtaxi.requisicoes_viagem SET status='SOLICITADA',dados=$3,
           corrida_id=$4,conferente_id=$5,atualizada_em=CURRENT_TIMESTAMP WHERE empresa_id=$1 AND id=$2 RETURNING *`,
         [auth.empresaId,id,JSON.stringify(data),corridaId,auth.usuarioId]);
@@ -95,12 +97,22 @@ export class RequisitionService {
     const employees = await client.query<{ id: string; centro_custo_id: string }>(`SELECT f.id,f.centro_custo_id FROM admtaxi.funcionarios f
       JOIN admtaxi.centros_custo c ON c.empresa_id=f.empresa_id AND c.id=f.centro_custo_id AND c.ativo
       JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id AND s.ativo
-      WHERE f.empresa_id=$1 AND f.id=ANY($2::uuid[]) AND f.ativo FOR SHARE OF f,c,s`, [auth.empresaId,input.participantes.map(p => p.funcionarioId)]);
-    if (employees.rows.length!==input.participantes.length || employees.rows.some(p => !centerAllowed(scope,p.centro_custo_id)))
+      WHERE f.empresa_id=$1 AND f.id=ANY($2::uuid[]) AND f.ativo AND NOT f.avulso FOR SHARE OF f,c,s`, [auth.empresaId,input.participantes.flatMap(p => p.funcionarioId ? [p.funcionarioId] : [])]);
+    if (employees.rows.length!==input.participantes.filter(p=>p.funcionarioId).length || employees.rows.some(p => !centerAllowed(scope,p.centro_custo_id)))
       throw invalidReference('Revise os funcionarios e centros de custo ativos dentro do seu escopo.');
+    const centers = new Map(employees.rows.map(p => [p.id,p.centro_custo_id]));
+    for (const person of input.participantes) {
+      if (!person.avulso) continue;
+      const id=person.avulso.centroCustoId;
+      if (!centerAllowed(scope,id)) throw forbidden('Centro de custo do avulso fora do seu escopo.');
+      const found=await client.query(`SELECT c.id FROM admtaxi.centros_custo c JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
+        WHERE c.empresa_id=$1 AND c.id=$2 AND c.ativo AND s.ativo FOR SHARE OF c,s`,[auth.empresaId,id]);
+      if (!found.rowCount) throw invalidReference('Selecione um centro de custo com setor ativo para o avulso.');
+      centers.set(person.avulso.id,id);
+    }
     if (monthly && input.participantes.some(p => p.valor!==undefined)) throw invalidReference('Empresa com mensalidade fixa: nao informe valores individuais.');
     if (complete && !monthly && input.participantes.some(p => p.valor===undefined)) throw invalidReference('Informe o valor de cada funcionario antes de solicitar.');
-    return { monthly,centers: new Map(employees.rows.map(p => [p.id,p.centro_custo_id])) };
+    return { monthly,centers };
   }
   private authorize(auth: AuthContext): void { if (!['GESTOR','GERENTE','PORTARIA'].includes(auth.perfil)) throw forbidden(); }
   private record(client: QueryExecutor,auth: AuthContext,row: RequisitionRow,action: string,metadata: AuditMetadata) {
