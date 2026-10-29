@@ -4,6 +4,8 @@ import type { Logger } from 'pino';
 import { withTransaction, type Database, type QueryExecutor } from '../../db/pool';
 import type { ScheduledMailer } from '../corridas/scheduled-mailer';
 import type { RequisitionRow } from './requisicao.schemas';
+import type { MailConfig } from '../../config/env';
+import { prepareAccessEmail } from './access-email';
 
 export const travelSubjects: Record<string,string> = {
   PENDENTE: 'Requisicao de viagem - pendente de autorizacao',
@@ -15,7 +17,8 @@ export class TravelEmails {
   private timer?: ReturnType<typeof setInterval>;
   private stopping = false;
   constructor(private readonly database: Database, private readonly logger: Pick<Logger,'warn'|'error'>,
-    private readonly mailer?: ScheduledMailer) {}
+    private readonly mailer?: ScheduledMailer,
+    private readonly accessMail?: Pick<MailConfig,'resetUrl'|'resetTtlMinutes'>) {}
 
   async enqueue(client: QueryExecutor, request: RequisitionRow, event: string): Promise<void> {
     const employees = await client.query<{ id: string; nome: string; email: string | null }>(
@@ -32,7 +35,9 @@ export class TravelEmails {
     }));
     const recipients = new Map<string,string>();
     for (const data of request.dados.participantes) if (data.avulso) summaries.set(data.avulso.id,
-      `${data.avulso.nome} (avulso)\nTelefone: ${data.avulso.telefone}\nOrigem: ${data.origem?.descricao ?? 'A confirmar pela portaria'}\nDestino: ${data.destino?.descricao ?? 'A confirmar pela portaria'}`);
+      `${data.avulso.nome} (pre-cadastro)\nTelefone: ${data.avulso.telefone ?? 'A confirmar pela portaria'}\nOrigem: ${data.origem?.descricao ?? 'A confirmar pela portaria'}\nDestino: ${data.destino?.descricao ?? 'A confirmar pela portaria'}`);
+    for (const data of request.dados.participantes) if (data.avulso?.email)
+      recipients.set(data.avulso.email,summaries.get(data.avulso.id)!);
     // Each employee receives only their own addresses. Administrative recipients receive the full summary.
     for (const person of employees.rows) {
       const email = person.email?.trim().toLowerCase();
@@ -72,14 +77,23 @@ export class TravelEmails {
           ((status='PENDENTE' AND proxima_tentativa_em<=CURRENT_TIMESTAMP) OR (status='ENVIANDO' AND reservada_ate<CURRENT_TIMESTAMP))
           ORDER BY proxima_tentativa_em,id LIMIT 1 FOR UPDATE SKIP LOCKED`);
         if (!selected.rows[0]) return null;
-        const result = await client.query<{ id: string; reserva: string; destinatario: string; assunto: string; corpo: string; tentativas: number }>(
+        const result = await client.query<{ id: string; reserva: string; destinatario: string; assunto: string; corpo: string; tentativas: number; evento:string; empresa_id:string }>(
           `UPDATE admtaxi.emails_viagem SET status='ENVIANDO',tentativas=tentativas+1,reserva=$2,
             reservada_ate=CURRENT_TIMESTAMP+INTERVAL '2 minutes' WHERE id=$1 RETURNING *`, [selected.rows[0].id,randomUUID()]);
         return result.rows[0]!;
       });
       if (!row) break;
-      try { await this.mailer!.send({ id: row.id,to: row.destinatario,subject: row.assunto,text: row.corpo }); }
+      let tokenHash: string|undefined;
+      try {
+        let text=row.corpo;
+        if (/^(PRIMEIRO_ACESSO|ACESSO_EXISTENTE):/.test(row.evento)) {
+          const prepared=await prepareAccessEmail(this.database,row,this.accessMail);
+          text=prepared.text;tokenHash=prepared.tokenHash;
+        }
+        await this.mailer!.send({ id: row.id,to: row.destinatario,subject: row.assunto,text });
+      }
       catch {
+        if(tokenHash) await this.database.query('UPDATE admtaxi.recuperacoes_senha SET usado_em=CURRENT_TIMESTAMP WHERE token_hash=$1',[tokenHash]);
         await this.database.query(`UPDATE admtaxi.emails_viagem SET status=$3,ultimo_erro='FALHA_SMTP',reserva=NULL,reservada_ate=NULL,
           proxima_tentativa_em=CURRENT_TIMESTAMP+($4::integer*INTERVAL '1 minute') WHERE id=$1 AND reserva=$2`,
         [row.id,row.reserva,row.tentativas>=5 ? 'FALHOU' : 'PENDENTE',2 ** (row.tentativas-1)]);

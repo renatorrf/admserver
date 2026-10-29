@@ -13,6 +13,8 @@ export type SetorLookup = { id: string; codigo: string; nome: string };
 export type CentroCustoLookup = { id: string; setorId: string; codigo: string; nome: string };
 export type FuncionarioLookup = {
   id: string;
+  setorId?: string;
+  setorNome?: string;
   centroCustoId: string;
   nome: string;
   matricula: string;
@@ -252,10 +254,10 @@ export class OperacaoRepository {
     const result = await this.database.query<{
       id: string; centro_custo_id: string; nome: string; matricula: string; cpf: string | null;
       telefone: string | null; endereco_padrao: string | null; latitude_padrao: string | null;
-      longitude_padrao: string | null; ativo: boolean;
+      longitude_padrao: string | null; ativo: boolean; setor_id: string; setor_nome: string;
     }>(
       `SELECT f.id, f.centro_custo_id, f.nome, f.matricula, f.cpf, f.telefone, f.endereco_padrao,
-              f.latitude_padrao::text, f.longitude_padrao::text, f.ativo
+              f.latitude_padrao::text, f.longitude_padrao::text, f.ativo, s.id AS setor_id, s.nome AS setor_nome
          FROM admtaxi.funcionarios f
          JOIN admtaxi.centros_custo c ON c.empresa_id=f.empresa_id AND c.id=f.centro_custo_id
          JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
@@ -265,6 +267,7 @@ export class OperacaoRepository {
     );
     return paginate(result.rows.map((row) => ({
       id: row.id, centroCustoId: row.centro_custo_id, nome: row.nome, matricula: row.matricula,
+      setorId: row.setor_id, setorNome: row.setor_nome,
       cpf: row.cpf, telefone: row.telefone, enderecoPadrao: row.endereco_padrao, ativo: row.ativo,
       latitudePadrao: row.latitude_padrao === null ? null : Number(row.latitude_padrao),
       longitudePadrao: row.longitude_padrao === null ? null : Number(row.longitude_padrao),

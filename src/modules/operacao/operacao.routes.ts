@@ -29,7 +29,7 @@ export function createOperacaoRouter(service: OperacaoService): Router {
   router.get('/escopo', authorize('GERENTE', 'GESTOR'), asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.getScopeSummary(requireAuthContext(request)) });
   }));
-  router.get('/setores', authorize('GERENTE', 'GESTOR'), asyncHandler(async (request, response) => {
+  router.get('/setores', authorize('GERENTE', 'GESTOR', 'PORTARIA'), asyncHandler(async (request, response) => {
     response.status(200).json({ data: await service.listSectors(requireAuthContext(request)) });
   }));
 

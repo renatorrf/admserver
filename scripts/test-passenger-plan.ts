@@ -10,6 +10,7 @@ import { requisicaoSchema } from '../src/modules/requisicoes/requisicao.schemas'
 import { RequisitionService } from '../src/modules/requisicoes/requisicao.service';
 import { TravelEmails } from '../src/modules/requisicoes/travel-emails';
 import { passengerControl } from '../src/modules/usuarios/passenger-control';
+import { PasswordService } from '../src/modules/auth/password.service';
 
 export async function testGuestPassengers(pool:Pool,manager:AuthContext,gate:AuthContext,center:string,driver:AuthContext,vehicle:string,ok:(s:string)=>void) {
   const audit=new AuditRepository(pool);const emails=new TravelEmails(pool,pino({level:'silent'}));
@@ -25,15 +26,24 @@ export async function testGuestPassengers(pool:Pool,manager:AuthContext,gate:Aut
   await assert.rejects(service.dispatch(gate,req.id,tampered,{}),{statusCode:409});
   const invalid=structuredClone(input);invalid.chave=randomUUID();invalid.participantes[0]!.avulso!.centroCustoId=randomUUID();
   await assert.rejects(service.create(manager,invalid,{}),{statusCode:422});
-  let ride=await service.dispatch(gate,req.id,input.participantes,{});
+  await assert.rejects(service.dispatch(gate,req.id,input.participantes,{}),{statusCode:422});
+  const sector=(await pool.query('SELECT setor_id FROM admtaxi.centros_custo WHERE id=$1',[center])).rows[0].setor_id as string;
+  const conference=structuredClone(input.participantes);
+  Object.assign(conference[0]!.avulso!,{matricula:'PRE-001',setorId:sector});
+  const wrongSector=structuredClone(conference);wrongSector[0]!.avulso!.setorId=randomUUID();
+  await assert.rejects(service.dispatch(gate,req.id,wrongSector,{}),{statusCode:422});
+  let ride=await service.dispatch(gate,req.id,conference,{});
   assert.equal((await service.dispatch(gate,req.id,input.participantes,{})).id,ride.id);
   const id=ride.itinerario!.participantes[0]!.funcionarioId;
   const guest=(await pool.query('SELECT * FROM admtaxi.funcionarios WHERE id=$1',[id])).rows[0];
-  assert(guest.avulso);assert.equal(guest.matricula,null);assert.equal(guest.usuario_id,null);
+  assert.equal(guest.avulso,false);assert.equal(guest.matricula,'PRE-001');assert.equal(guest.usuario_id,null);
+  assert.equal(guest.endereco_padrao,address.descricao);
   assert.equal((await pool.query('SELECT count(*) FROM admtaxi.usuarios')).rows[0].count,users);
   assert.equal(ride.itinerario!.participantes[0]!.funcionarioTelefone,'34988881212');
   assert.equal(ride.itinerario!.participantes[0]!.centroCustoId,center);
-  assert(!(await new OperacaoRepository(pool).listEmployees(manager,{})).some(f=>f.id===id));
+  assert((await new OperacaoRepository(pool).listEmployees(manager,{})).some(f=>f.id===id));
+  const search=await new OperacaoRepository(pool).searchEmployees(manager,{busca:'Avulso de integracao',ativo:true,pagina:1,limite:8});
+  assert.equal(search.data[0]!.setorId,sector);assert(search.data[0]!.setorNome);
   assert((await pool.query('SELECT corpo FROM admtaxi.emails_viagem WHERE requisicao_id=$1',[req.id])).rows.every(r=>r.corpo.includes('Avulso de integracao')));
   ride=await rides.accept(driver,ride.id,{veiculoId:vehicle},{});
   while(ride.itinerario!.paradas.some(s=>s.estado!=='CONCLUIDA')) {
@@ -51,12 +61,64 @@ export async function testGuestPassengers(pool:Pool,manager:AuthContext,gate:Aut
   const control=await passengerControl(pool,manager.empresaId,{busca:'Avulso de integracao',situacao:'INATIVO'});
   assert.equal(control.data[0].cadastroAtivo,true);assert.equal(control.total,1);
   const other=await service.create(manager,{...input,chave:randomUUID()},{});
-  const repeat=await service.dispatch(gate,other.id,input.participantes,{});
+  const repeat=await service.dispatch(gate,other.id,conference,{});
   assert.equal(repeat.funcionarioId,id);assert.equal((await usage()).reservado,true);assert.equal((await usage()).ativo_plano,false);
   await rides.cancel(manager,repeat.id,{motivo:'Cancelamento sintetico de teste'},{});
   assert.equal((await usage()).reservado,false);
-  ok('GUESTS manual data, authorized center, immutable conference, phone on driver itinerary, no login, email summaries, reuse and rate allocation');
+  ok('PRE-REGISTRATION required enrollment/sector/phone, authorized center, searchable completed employee, no login without email, reuse and rate allocation');
   ok('PLAN 62-day expiry releases slot without blocking access; reservation, cancellation and reactivation remain distinct from completed transport');
+  await testPreRegistrationAccess(pool,manager,gate,center,sector,service,rides,ok);
+}
+
+async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:AuthContext,center:string,sector:string,
+  service:RequisitionService,rides:CorridaService,ok:(s:string)=>void) {
+  const email='precadastro@example.test';
+  const input=requisicaoSchema.parse({chave:randomUUID(),tipo:'IMEDIATA',participantes:[{
+    avulso:{id:randomUUID(),nome:'Pessoa pre cadastro acesso',centroCustoId:center,telefone:'34998882222'},valor:'5.00'}]});
+  const req=await service.create(manager,input,{});
+  assert.equal((await pool.query('SELECT id FROM admtaxi.funcionarios WHERE nome=$1',[input.participantes[0]!.avulso!.nome])).rowCount,0);
+  const address={descricao:'Rua teste de pre cadastro',latitude:-18.9,longitude:-48.2};
+  const complete=[{...input.participantes[0]!,origem:address,destino:address,
+    avulso:{...input.participantes[0]!.avulso!,matricula:'PRE-EMAIL',setorId:sector,telefone:'34998882222',email}}];
+  const unauthorized={...input,chave:randomUUID(),participantes:complete};
+  await assert.rejects(service.create(manager,unauthorized,{}),{statusCode:403});
+  const badAudit={record:async()=>{throw Error('synthetic audit failure');}};
+  const failed=new RequisitionService(pool,badAudit,new CorridaService(pool,badAudit),new TravelEmails(pool,pino({level:'silent'})));
+  await assert.rejects(failed.dispatch(gate,req.id,complete,{}),/synthetic audit failure/);
+  assert.equal((await pool.query('SELECT id FROM admtaxi.usuarios WHERE email=$1',[email])).rowCount,0);
+  assert.equal((await pool.query('SELECT id FROM admtaxi.emails_viagem WHERE destinatario=$1',[email])).rowCount,0);
+  const results=await Promise.all([service.dispatch(gate,req.id,complete,{}),service.dispatch(gate,req.id,complete,{})]);
+  assert.equal(results[0]!.id,results[1]!.id);
+  const user=(await pool.query('SELECT * FROM admtaxi.usuarios_autenticacao WHERE email=$1',[email])).rows[0];
+  assert(user && user.perfil==='FUNCIONARIO' && user.deve_alterar_senha);
+  assert.equal((await pool.query('SELECT id FROM admtaxi.usuarios WHERE email=$1',[email])).rowCount,1);
+  assert.equal((await pool.query("SELECT id FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento LIKE 'PRIMEIRO_ACESSO:%'",[req.id])).rowCount,1);
+  const logger=pino({level:'silent'});const config={resetUrl:'https://example.test/redefinir-senha',resetTtlMinutes:30};
+  const failureWorker=new TravelEmails(pool,logger,{send:async()=>{throw Error('synthetic SMTP failure');}},config);
+  while(await failureWorker.process()) { /* Drain due messages without contacting SMTP. */ }
+  assert.equal((await pool.query('SELECT count(*) FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1 AND usado_em IS NULL',[user.id])).rows[0].count,'0');
+  await pool.query("UPDATE admtaxi.emails_viagem SET proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='PENDENTE'");
+  const messages:{to:string;text:string;subject:string}[]=[];
+  const worker=new TravelEmails(pool,logger,{send:async message=>{messages.push(message);}},config);
+  while(await worker.process()) { /* Drain using the fake mailer. */ }
+  const welcome=messages.find(m=>m.to===email && m.subject==='Seu acesso ao ADM Taxi')!;
+  assert(welcome?.text.includes(`Login: ${email}`));
+  const token=welcome.text.match(/#token=([a-f0-9]{64})/)![1]!;
+  assert(!messages.some(m=>m.to!==email && m.text.includes(token)));
+  assert(!(await pool.query('SELECT corpo FROM admtaxi.emails_viagem WHERE destinatario=$1',[email])).rows.some(r=>r.corpo.includes(token)));
+  const passwords=new PasswordService(pool,logger);
+  await passwords.reset({token,novaSenha:'NovaSenha123'});
+  await assert.rejects(passwords.reset({token,novaSenha:'OutraSenha123'}),{statusCode:400});
+  const credential=(await pool.query('SELECT senha_hash,deve_alterar_senha FROM admtaxi.usuarios_autenticacao WHERE id=$1',[user.id])).rows[0];
+  assert.equal(credential.deve_alterar_senha,false);
+  await rides.cancel(manager,results[0]!.id,{motivo:'Teste de cadastro e acesso concluido'},{});
+  const again=await service.create(manager,{...input,chave:randomUUID()},{});
+  const repeated=await service.dispatch(gate,again.id,complete,{});
+  assert.equal(repeated.funcionarioId,results[0]!.funcionarioId);
+  assert.equal((await pool.query('SELECT senha_hash FROM admtaxi.usuarios_autenticacao WHERE id=$1',[user.id])).rows[0].senha_hash,credential.senha_hash);
+  assert.equal((await pool.query("SELECT id FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento LIKE 'PRIMEIRO_ACESSO:%'",[again.id])).rowCount,0);
+  await rides.cancel(manager,repeated.id,{motivo:'Teste de reutilizacao concluido'},{});
+  ok('PRE-REGISTRATION access atomic rollback, concurrent dispatch once, SMTP retry, private one-use link, password creation and existing credentials preserved');
 }
 
 export async function testGlobalPassengerLimit(pool:Pool,ok:(s:string)=>void) {

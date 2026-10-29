@@ -29,7 +29,7 @@ describe('Portaria permission boundary', () => {
   it.each(['/usuarios','/usuarios/controle','/empresas','/cadastros-unificados/funcionarios','/setores','/centros-custo','/funcionarios',
     '/prestadores','/veiculos','/auditoria','/dashboard','/paineis/meu','/faturamentos','/relatorios/corridas',
     '/corridas',`/corridas/${id}`,`/corridas/${id}/eventos`,`/corridas/${id}/rota`,`/corridas/${id}/localizacoes`,
-    '/operacao/escopo','/operacao/setores','/operacao/prestadores','/operacao/prestadores/pesquisa','/operacao/solicitantes',
+    '/operacao/escopo','/operacao/prestadores','/operacao/prestadores/pesquisa','/operacao/solicitantes',
     '/push/diagnostics','/dispositivos'])('denies GET %s', async path=> {
     const result = await request(app).get(`/api/v1${path}`).set('Authorization',`Bearer ${token}`);
     expect(result.status).toBe(403);
@@ -50,7 +50,7 @@ describe('Portaria permission boundary', () => {
     expect(result.status).toBe(200);
     expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('WHERE empresa_id=$1 AND usuario_id=$2'),[company,user]);
   });
-  it.each(['/operacao/centros-custo','/operacao/funcionarios','/operacao/funcionarios/pesquisa'])('allows request lookup %s with tenant scope',async path=> {
+  it.each(['/operacao/setores','/operacao/centros-custo','/operacao/funcionarios','/operacao/funcionarios/pesquisa'])('allows request lookup %s with tenant scope',async path=> {
     const result=await request(app).get(`/api/v1${path}`).set('Authorization',`Bearer ${token}`);
     expect(result.status).toBe(200);
     expect(vi.mocked(pool.query).mock.calls.some(([,values])=>Array.isArray(values)&&values[0]===company)).toBe(true);

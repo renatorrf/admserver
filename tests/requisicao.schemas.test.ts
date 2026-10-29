@@ -5,6 +5,18 @@ const employee=randomUUID(),center=randomUUID();
 const address={descricao:'Endereco completo',latitude:0,longitude:-48.2};
 const input=()=>requisicaoSchema.parse({chave:randomUUID(),tipo:'IMEDIATA',participantes:[{funcionarioId:employee}]});
 describe('requisicao e conferencia',()=>{
+  it('exige telefone na requisicao e matricula e setor na conferencia',()=>{
+    const guest={id:randomUUID(),nome:'Ana Nova',centroCustoId:center};
+    expect(()=>requisicaoSchema.parse({...input(),participantes:[{avulso:guest}]})).toThrow();
+    const data=requisicaoSchema.parse({...input(),participantes:[{avulso:{...guest,telefone:'34999991234'}}]});
+    const p={...data.participantes[0]!,origem:address,destino:address};
+    expect(()=>conferenceData(data,[p])).toThrow('matricula');
+    const complete={...p,avulso:{...p.avulso!,matricula:' m01 ',setorId:randomUUID(),telefone:'34999991234',email:'ANA@example.test'}};
+    const result=conferenceData(data,[complete]);
+    expect(result.participantes[0]!.avulso).toMatchObject({matricula:'M01',telefone:'34999991234',email:'ana@example.test'});
+    expect(()=>conferenceData(data,[{...complete,avulso:{...complete.avulso,centroCustoId:randomUUID()}}])).toThrow('centros');
+    expect(()=>conferenceData(data,[{...complete,avulso:{...complete.avulso,email:'nao-email'}}])).toThrow();
+  });
   it('permite enderecos pendentes mas nao coordenadas parciais ou fora do intervalo',()=>{
     expect(input().participantes[0]!.origem).toBeUndefined();
     expect(()=>requisicaoSchema.parse({...input(),participantes:[{funcionarioId:employee,origem:{descricao:'Rua',latitude:1}}]})).toThrow();

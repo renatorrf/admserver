@@ -36,6 +36,8 @@ export class RequisitionService {
   }
   async create(auth: AuthContext, input: RequisitionInput, metadata: AuditMetadata): Promise<RequisitionRow> {
     if (!['GESTOR','GERENTE'].includes(auth.perfil)) throw forbidden('Somente gestor ou supervisor cria requisicoes.');
+    if (input.participantes.some(p => p.avulso?.matricula || p.avulso?.setorId || p.avulso?.email))
+      throw forbidden('Somente a portaria completa matricula e setor na conferencia autorizada.');
     const result = await withTransaction(this.database,async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))',[auth.empresaId,`${auth.usuarioId}:${input.chave}`]);
       const previous = await client.query<RequisitionRow>('SELECT * FROM admtaxi.requisicoes_viagem WHERE empresa_id=$1 AND solicitante_id=$2 AND chave=$3', [auth.empresaId,auth.usuarioId,input.chave]);
@@ -78,7 +80,10 @@ export class RequisitionService {
       if (row.status!=='AUTORIZADA') throw conflict('A viagem precisa estar autorizada pelo gestor.');
       const data = conferenceData(requisicaoSchema.parse(row.dados),participants);
       const { centers, monthly } = await this.validate(client,auth,data,true);
-      const resolved = await resolveGuests(client,auth.empresaId,data.participantes);
+      const resolved = await resolveGuests(client,auth.empresaId,row.id,data.participantes,async (id,before,after) => {
+        await this.audit.record(client,{...metadata,empresaId:auth.empresaId,usuarioId:auth.usuarioId,
+          entidade:'funcionario',entidadeId:id,acao:'COMPLETAR_PRE_CADASTRO',dadosAnteriores:before,dadosNovos:after});
+      });
       return { input: toRideInput(data,centers,monthly,resolved), complete: async (corridaId: string) => {
         const updated = await client.query<RequisitionRow>(`UPDATE admtaxi.requisicoes_viagem SET status='SOLICITADA',dados=$3,
           corrida_id=$4,conferente_id=$5,atualizada_em=CURRENT_TIMESTAMP WHERE empresa_id=$1 AND id=$2 RETURNING *`,
@@ -105,9 +110,11 @@ export class RequisitionService {
       if (!person.avulso) continue;
       const id=person.avulso.centroCustoId;
       if (!centerAllowed(scope,id)) throw forbidden('Centro de custo do avulso fora do seu escopo.');
-      const found=await client.query(`SELECT c.id FROM admtaxi.centros_custo c JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
+      const found=await client.query<{id:string;setor_id:string}>(`SELECT c.id,c.setor_id FROM admtaxi.centros_custo c JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
         WHERE c.empresa_id=$1 AND c.id=$2 AND c.ativo AND s.ativo FOR SHARE OF c,s`,[auth.empresaId,id]);
       if (!found.rowCount) throw invalidReference('Selecione um centro de custo com setor ativo para o avulso.');
+      if (complete && person.avulso.setorId!==found.rows[0]!.setor_id)
+        throw invalidReference('O setor informado deve corresponder ao centro de custo autorizado.');
       centers.set(person.avulso.id,id);
     }
     if (monthly && input.participantes.some(p => p.valor!==undefined)) throw invalidReference('Empresa com mensalidade fixa: nao informe valores individuais.');

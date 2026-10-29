@@ -6,11 +6,20 @@ import { conflict, invalidReference } from '../../shared/errors/app-error';
 
 export const addressSchema = z.object({ descricao: z.string().trim().min(3).max(1000),
   latitude: coordinate.pipe(z.number().min(-90).max(90)), longitude: coordinate.pipe(z.number().min(-180).max(180)) }).strict();
-const guestSchema = z.object({ id: z.string().uuid(), nome: z.string().trim().min(2).max(150),
-  telefone: z.string().trim().max(30).transform(v => {
+const phoneSchema = z.string().trim().max(30).transform(v => {
     const digits=v.replace(/\D/g,''); return /^55\d{10,11}$/.test(digits)?digits.slice(2):digits;
-  }).pipe(z.string().regex(/^\d{10,11}$/, 'Informe o telefone com DDD.')),
-  centroCustoId: z.string().uuid('Selecione o centro de custo do avulso.') }).strict();
+  }).pipe(z.string().regex(/^\d{10,11}$/, 'Informe o telefone com DDD.'));
+const guestSchema = z.object({ id: z.string().uuid(), nome: z.string().trim().min(2).max(150),
+  telefone: phoneSchema,
+  email: z.email().trim().toLowerCase().max(254).optional(),
+  centroCustoId: z.string().uuid('Selecione o centro de custo do pre-cadastro.'),
+  matricula: z.string().trim().min(1).max(50).transform(v => v.toUpperCase()).optional(),
+  setorId: z.string().uuid('Selecione o setor do funcionario.').optional(),
+}).strict();
+export const completedGuestSchema = guestSchema.extend({ telefone: phoneSchema,
+  matricula: z.string().trim().min(1, 'Informe a matricula.').max(50).transform(v => v.toUpperCase()),
+  setorId: z.string().uuid('Selecione o setor do funcionario.'),
+});
 const passengerSchema = z.object({ funcionarioId: z.string().uuid().optional(), avulso: guestSchema.optional(),
   origem: addressSchema.nullable().optional(), destino: addressSchema.nullable().optional(), valor: passengerMoney.optional()
 }).strict().refine(p => !!p.funcionarioId !== !!p.avulso, { message: 'Selecione um funcionario ou informe um avulso, nunca os dois.' });
@@ -22,7 +31,7 @@ export const requisicaoSchema = z.object({
   participantes: z.array(passengerSchema).min(1).max(16),
 }).strict().superRefine((value, ctx) => {
   if (new Set(value.participantes.map(passengerKey)).size !== value.participantes.length
-    || new Set(value.participantes.filter(p=>p.avulso).map(p=>p.avulso!.telefone)).size !== value.participantes.filter(p=>p.avulso).length)
+    || new Set(value.participantes.filter(p=>p.avulso?.telefone).map(p=>p.avulso!.telefone)).size !== value.participantes.filter(p=>p.avulso?.telefone).length)
     ctx.addIssue({ code: 'custom', path: ['participantes'], message: 'Nao repita funcionarios.' });
   if (value.tipo === 'AGENDADA' && !value.agendadaPara)
     ctx.addIssue({ code: 'custom', path: ['agendadaPara'], message: 'Informe data e horario.' });
@@ -44,7 +53,7 @@ export function conferenceData(approved: RequisitionInput, participants: Requisi
     const candidate = participants.find(p => passengerKey(p) === passengerKey(person));
     if (!candidate) throw conflict('Mantenha os funcionarios da requisicao autorizada.');
     if (candidate.funcionarioId!==person.funcionarioId || candidate.avulso?.nome!==person.avulso?.nome
-      || candidate.avulso?.telefone!==person.avulso?.telefone || candidate.avulso?.centroCustoId!==person.avulso?.centroCustoId)
+      || (person.avulso?.telefone && candidate.avulso?.telefone!==person.avulso.telefone) || candidate.avulso?.centroCustoId!==person.avulso?.centroCustoId)
       throw conflict('Mantenha os passageiros e centros de custo da requisicao autorizada.');
     for (const field of ['origem','destino'] as const) {
       if (person[field] && (candidate[field]?.descricao !== person[field].descricao
@@ -53,6 +62,11 @@ export function conferenceData(approved: RequisitionInput, participants: Requisi
       if (!candidate[field]) throw invalidReference('Preencha origem e destino de todos os funcionarios.');
     }
     if (person.valor !== undefined && candidate.valor !== person.valor) throw conflict('Mantenha o valor autorizado.');
+    if (candidate.avulso) {
+      const completed = completedGuestSchema.safeParse(candidate.avulso);
+      if (!completed.success) throw invalidReference('Complete matricula, setor e telefone com DDD do pre-cadastro.');
+      return { ...candidate, avulso: completed.data };
+    }
     return candidate;
   }) };
 }

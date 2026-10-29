@@ -11,7 +11,7 @@ async function main(): Promise<void> {
   if (!config.mail) throw new Error('Configure SMTP antes de processar a fila de agendamentos.');
   const pool = createPool(config);
   const worker = new ScheduledRideEmails(pool, logger, new SmtpScheduledMailer(config.mail));
-  const travel = new TravelEmails(pool,logger,new SmtpScheduledMailer(config.mail));
+  const travel = new TravelEmails(pool,logger,new SmtpScheduledMailer(config.mail),config.mail);
   let stopping = false;
   const stop = (): void => { stopping = true; void worker.stop(); void travel.stop(); };
   process.once('SIGTERM', stop); process.once('SIGINT', stop);
