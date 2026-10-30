@@ -18,6 +18,7 @@ export class RequisitionService {
   async list(auth: AuthContext, offset = 0): Promise<RequisitionRow[]> {
     this.authorize(auth);
     const result = await this.database.query<RequisitionRow>(`SELECT r.*,u.nome AS solicitante,
+      (SELECT c.status FROM admtaxi.corridas c WHERE c.empresa_id=r.empresa_id AND c.id=r.corrida_id) AS "corridaStatus",
       (SELECT json_agg(json_build_object('id',f.id,'nome',f.nome)) FROM admtaxi.funcionarios f WHERE f.empresa_id=r.empresa_id
         AND f.id::text IN (SELECT p->>'funcionarioId' FROM jsonb_array_elements(r.dados->'participantes') p)) AS funcionarios
       FROM admtaxi.requisicoes_viagem r
@@ -30,6 +31,7 @@ export class RequisitionService {
   async get(auth: AuthContext, id: string, client: QueryExecutor = this.database, lock = false): Promise<RequisitionRow> {
     this.authorize(auth);
     const result = await client.query<RequisitionRow>(`SELECT r.*,
+      (SELECT c.status FROM admtaxi.corridas c WHERE c.empresa_id=r.empresa_id AND c.id=r.corrida_id) AS "corridaStatus",
       (SELECT json_agg(json_build_object('id',f.id,'nome',f.nome)) FROM admtaxi.funcionarios f WHERE f.empresa_id=r.empresa_id
         AND f.id::text IN (SELECT p->>'funcionarioId' FROM jsonb_array_elements(r.dados->'participantes') p)) AS funcionarios
       FROM admtaxi.requisicoes_viagem r

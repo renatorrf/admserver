@@ -70,6 +70,7 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   assert.equal(summary.status,'ACEITA');assert(summary.motoristaNome);assert.equal(summary.paradasConcluidas,0);
   assert.deepEqual(Object.keys(summary).sort(),['motoristaNome','paradasConcluidas','paradasTotal','passageirosAusentes','status'].sort());
   assert.equal((await service.get(supervisor,created.id)).corridaResumo,undefined);
+  assert.equal((await service.get(supervisor,created.id)).corridaStatus,'ACEITA');
   assert.equal((await service.list(manager)).find(row=>row.id===created.id)?.corridaResumo,undefined);
   assert(!((await service.list({...gate,empresaId:otherCompany})).some(row=>row.id===created.id)));
   while(ride.itinerario!.paradas.some(s=>s.estado!=='CONCLUIDA')) {
@@ -85,6 +86,10 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   await rides.finish(driver,ride.id,{valorFinal:'20.00'},{}); await rides.finish(driver,ride.id,{valorFinal:'20.00'},{});
   summary=(await service.get(gate,created.id)).corridaResumo!;
   assert.equal(summary.status,'FINALIZADA');assert.equal(summary.paradasConcluidas,summary.paradasTotal);
+  for(const auth of [supervisor,manager,gate]) {
+    assert.equal((await service.get(auth,created.id)).corridaStatus,'FINALIZADA');
+    assert.equal((await service.list(auth)).find(row=>row.id===created.id)?.corridaStatus,'FINALIZADA');
+  }
   assert(rideChanges.filter(id=>id===ride.id).length>5);
   ok('REQUISITIONS-LIVE post-commit events, restricted portaria summary, driver acceptance, itinerary progress, completion and tenant isolation');
   assert.equal((await pool.query("SELECT count(*) FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='FINALIZADA'",[created.id])).rows[0].count,'5');

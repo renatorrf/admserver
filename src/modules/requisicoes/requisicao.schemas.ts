@@ -44,7 +44,7 @@ export type RequisitionRideSummary = { status: StatusCorrida; motoristaNome: str
   paradasTotal: number; paradasConcluidas: number; passageirosAusentes: number };
 export type RequisitionRow = { id: string; empresa_id: string; solicitante_id: string; dados: RequisitionInput;
   status: 'PENDENTE' | 'AUTORIZADA' | 'REJEITADA' | 'SOLICITADA'; corrida_id: string | null;
-  motivo: string | null; criada_em: string; conteudo_hash: string; solicitante?: string; corridaResumo?: RequisitionRideSummary | null };
+  motivo: string | null; criada_em: string; conteudo_hash: string; solicitante?: string; corridaStatus?: StatusCorrida | null; corridaResumo?: RequisitionRideSummary | null };
 export const decisionSchema = z.object({ autorizar: z.boolean(), motivo: z.string().trim().max(1000).optional() }).strict()
   .refine(v => v.autorizar || (v.motivo?.length ?? 0) >= 5, { path: ['motivo'], message: 'Informe o motivo da recusa (minimo 5 caracteres).' });
 export const conferenceSchema = z.object({ participantes: requisicaoSchema.shape.participantes }).strict();
