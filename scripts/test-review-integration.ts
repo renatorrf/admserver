@@ -39,6 +39,7 @@ import { prestadorUnificadoCreateSchema } from '../src/modules/prestadores/prest
 import { createPrestadorUnificadoRouter } from '../src/modules/prestadores/prestador-unificado.routes';
 import { testSharedDriverAccounts } from './test-shared-driver-accounts';
 import { testSharedEmployeeAccounts } from './test-shared-employee-accounts';
+import { testTenantLogin } from './test-tenant-login';
 import { testScheduledEmails } from './test-scheduled-emails';
 import { UsuarioService } from '../src/modules/usuarios/usuario.service';
 import { NotificacaoService } from '../src/modules/notificacoes/notificacao.service';
@@ -541,6 +542,7 @@ async function main(): Promise<void> {
     ok('DUPLICATES normalized names/phones/emails/plates, inactive records, tenant scope, unchanged edits, atomic rollback and concurrent writes');
     await testSharedDriverAccounts(pool, ok);
     await testSharedEmployeeAccounts(pool, ok);
+    await testTenantLogin(pool, ok);
     await testScheduledEmails(pool, ok);
     const users = new UsuarioService(pool, new AuditRepository(pool));
     const portaria = await users.create(manager, {

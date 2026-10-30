@@ -22,6 +22,7 @@ import type { PasswordService } from './modules/auth/password.service';
 import type { ManagerLoginService } from './modules/auth/manager-login.service';
 import type { EmployeeLoginService } from './modules/auth/employee-login.service';
 import type { DriverLoginService } from './modules/auth/driver-login.service';
+import type { TenantLoginService } from './modules/auth/tenant-login.service';
 
 export type AppDependencies = {
   config: AppConfig;
@@ -37,6 +38,7 @@ export type AppDependencies = {
   managers?: ManagerLoginService;
   employees?: EmployeeLoginService;
   drivers?: DriverLoginService;
+  tenants?: TenantLoginService;
 };
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -93,7 +95,7 @@ export function createApp(dependencies: AppDependencies): Express {
     }
   });
 
-  app.use('/api/v1/auth', createAuthRouter(auth, tokens, dependencies.passwords, dependencies.managers, dependencies.drivers, dependencies.employees));
+  app.use('/api/v1/auth', createAuthRouter(auth, tokens, dependencies.passwords, dependencies.managers, dependencies.drivers, dependencies.employees, dependencies.tenants));
   if (masterRouter) app.use('/api/v1/master', masterRouter);
   if (provisioningRouter) app.use('/api/v1/provisionamento', provisioningRouter);
   if (operationalRouter) app.use('/api/v1', operationalRouter);

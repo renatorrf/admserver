@@ -26,6 +26,7 @@ import { MasterRecoveryService } from './modules/master/master-recovery.service'
 import { ManagerLoginService } from './modules/auth/manager-login.service';
 import { DriverLoginService } from './modules/auth/driver-login.service';
 import { EmployeeLoginService } from './modules/auth/employee-login.service';
+import { TenantLoginService } from './modules/auth/tenant-login.service';
 import { EnderecoService } from './modules/enderecos/endereco.service';
 import { ScheduledRideEmails } from './modules/corridas/scheduled-emails';
 import { SmtpScheduledMailer } from './modules/corridas/scheduled-mailer';
@@ -67,6 +68,7 @@ const app = createApp({
   managers: new ManagerLoginService(pool, tokenService, config.jwtAccessExpiresInSeconds),
   drivers: new DriverLoginService(pool, tokenService, config.jwtAccessExpiresInSeconds),
   employees: new EmployeeLoginService(pool, tokenService, config.jwtAccessExpiresInSeconds),
+  tenants: new TenantLoginService(pool, tokenService, config.jwtAccessExpiresInSeconds),
   passwords: new PasswordService(pool, logger, config.mail, config.mail ? new SmtpPasswordMailer(config.mail) : undefined),
 });
 const server = createServer(app);

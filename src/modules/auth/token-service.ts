@@ -23,6 +23,13 @@ type TokenConfig = Pick<
   'jwtAccessSecret' | 'jwtRefreshSecret' | 'jwtAccessExpiresInSeconds' | 'jwtRefreshExpiresInSeconds'
 >;
 
+const tenantSelectionSchema = z.object({
+  tipo: z.literal('tenant-company-selection'),
+  email: z.string().email(),
+  usuarios: z.array(z.object({ sub: z.string().uuid(), versao: z.number().int().nonnegative(),
+    perfil: z.enum(['GERENTE', 'PORTARIA']) })).min(1).max(20),
+});
+
 export type IssuedTokens = {
   accessToken: string;
   refreshToken: string;
@@ -152,5 +159,17 @@ export class TokenService {
     } catch {
       throw unauthorized('Sessao invalida ou expirada.');
     }
+  }
+
+  issueTenantSelection(email: string, usuarios: z.infer<typeof tenantSelectionSchema>['usuarios']): string {
+    return jwt.sign(tenantSelectionSchema.parse({ tipo: 'tenant-company-selection', email, usuarios }), this.config.jwtAccessSecret,
+      { expiresIn: 300, issuer: 'adm-taxi', audience: 'adm-taxi-tenant-selection', jwtid: randomUUID() });
+  }
+
+  verifyTenantSelection(token: string): z.infer<typeof tenantSelectionSchema> {
+    try {
+      return tenantSelectionSchema.parse(jwt.verify(token, this.config.jwtAccessSecret,
+        { algorithms: ['HS256'], issuer: 'adm-taxi', audience: 'adm-taxi-tenant-selection' }));
+    } catch { throw unauthorized('Selecao expirada. Informe seu email e senha novamente.'); }
   }
 }

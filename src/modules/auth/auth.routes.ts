@@ -17,9 +17,10 @@ import { z } from 'zod';
 import type { ManagerLoginService } from './manager-login.service';
 import type { DriverLoginService } from './driver-login.service';
 import type { EmployeeLoginService } from './employee-login.service';
-import { AppError } from '../../shared/errors/app-error';
+import type { TenantLoginService } from './tenant-login.service';
+import { AppError, unauthorized } from '../../shared/errors/app-error';
 
-export function createAuthRouter(auth: AuthApplication, tokens: TokenService, passwords?: PasswordService, managers?: ManagerLoginService, drivers?: DriverLoginService, employees?: EmployeeLoginService): Router {
+export function createAuthRouter(auth: AuthApplication, tokens: TokenService, passwords?: PasswordService, managers?: ManagerLoginService, drivers?: DriverLoginService, employees?: EmployeeLoginService, tenants?: TenantLoginService): Router {
   const router = Router();
   const controller = new AuthController(auth);
   const authenticate = createAuthenticate(tokens, true);
@@ -43,13 +44,20 @@ export function createAuthRouter(auth: AuthApplication, tokens: TokenService, pa
   if (drivers && managers) router.post('/acesso', sensitiveRouteLimiter, validateBody(loginSchema.omit({ empresa: true })), asyncHandler(async (req, res) => {
     const session = await drivers.identify(req.body);
     if (session) { res.json({ data: { sessao: session } }); return; }
-    try {
-      res.json({ data: await managers.identify(req.body) });
-    } catch (error) {
-      if (!employees || !(error instanceof AppError) || error.statusCode !== 401) throw error;
-      res.json({ data: await employees.identify(req.body) });
+    for (const service of [managers, employees, tenants].filter(service => service !== undefined)) {
+      try {
+        res.json({ data: await service.identify(req.body) });
+        return;
+      } catch (error) {
+        if (!(error instanceof AppError) || error.statusCode !== 401) throw error;
+      }
     }
+    throw unauthorized('E-mail ou senha invalidos.');
   }));
+  if (tenants) router.post('/empresa/selecionar', sensitiveRouteLimiter,
+    validateBody(z.object({ selecaoToken: z.string().min(1).max(4096), empresaId: z.string().uuid() }).strict()), asyncHandler(async (req, res) => {
+      res.json({ data: await tenants.select(req.body) });
+    }));
   if (employees) router.post('/funcionario/empresa', sensitiveRouteLimiter,
     validateBody(z.object({ selecaoToken: z.string().min(1).max(4096), empresaId: z.string().uuid() }).strict()), asyncHandler(async (req, res) => {
       res.json({ data: await employees.select(req.body) });
