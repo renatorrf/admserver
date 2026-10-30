@@ -7,8 +7,10 @@ import { authorize, requireAuthContext } from '../auth/auth.middleware';
 import { auditMetadataFromRequest } from '../auditoria/audit.types';
 import { conferenceSchema, decisionSchema, requisicaoSchema } from './requisicao.schemas';
 import type { RequisitionService } from './requisicao.service';
+import type { RequisitionAccessService } from './requisition-access';
+import { unavailable } from '../../shared/errors/app-error';
 
-export function requisitionRouter(service: RequisitionService): Router {
+export function requisitionRouter(service: RequisitionService, access?: RequisitionAccessService): Router {
   const router = Router();
   router.use(authorize('GESTOR','GERENTE','PORTARIA'));
   router.get('/',asyncHandler(async (req,res) => {
@@ -28,5 +30,18 @@ export function requisitionRouter(service: RequisitionService): Router {
     const ride = await service.dispatch(requireAuthContext(req),getValidatedParams<UuidParams>(req).id,conferenceSchema.parse(req.body).participantes,auditMetadataFromRequest(req));
     res.json({ data: { id: ride.id } });
   }));
+  router.get('/:id/acessos',authorize('PORTARIA'),validateParams(uuidParamsSchema),asyncHandler(async (req,res) => {
+    if (!access) throw unavailable('Envio de acesso nao configurado.');
+    res.setHeader('Cache-Control','no-store');
+    res.json({data:await access.list(requireAuthContext(req),getValidatedParams<UuidParams>(req).id)});
+  }));
+  const accessParams = z.object({id:z.string().uuid(),funcionarioId:z.string().uuid()}).strict();
+  router.post('/:id/acessos/:funcionarioId/whatsapp',authorize('PORTARIA'),validateParams(accessParams),
+    validateBody(z.object({}).strict()),asyncHandler(async (req,res) => {
+      if (!access) throw unavailable('Envio de acesso nao configurado.');
+      const params=getValidatedParams<z.infer<typeof accessParams>>(req);
+      res.setHeader('Cache-Control','no-store');
+      res.json({data:await access.prepare(requireAuthContext(req),params.id,params.funcionarioId,auditMetadataFromRequest(req))});
+    }));
   return router;
 }

@@ -51,7 +51,7 @@ const scheduledEmails = new ScheduledRideEmails(pool, logger, config.mail ? new 
 const travelEmails = new TravelEmails(pool,logger,config.mail ? new SmtpScheduledMailer(config.mail) : undefined,config.mail);
 const adminRouter = createAdminRouter(pool, tokenService);
 const operationalRouter = createOperationalRouter(
-  pool, tokenService, realtime, config.geoapifyApiKey, config.push, scheduledEmails, travelEmails, fcm,
+  pool, tokenService, realtime, config.geoapifyApiKey, config.push, scheduledEmails, travelEmails, fcm, config.mail,
 );
 const provisioningRouter = config.provisioningSecret
   ? createProvisionamentoRouter(new ProvisionamentoService(pool), config.provisioningSecret)

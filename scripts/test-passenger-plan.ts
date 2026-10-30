@@ -11,6 +11,8 @@ import { RequisitionService } from '../src/modules/requisicoes/requisicao.servic
 import { TravelEmails } from '../src/modules/requisicoes/travel-emails';
 import { passengerControl } from '../src/modules/usuarios/passenger-control';
 import { PasswordService } from '../src/modules/auth/password.service';
+import { RequisitionAccessService } from '../src/modules/requisicoes/requisition-access';
+import { hashResetToken } from '../src/modules/auth/password.service';
 
 export async function testGuestPassengers(pool:Pool,manager:AuthContext,gate:AuthContext,center:string,driver:AuthContext,vehicle:string,ok:(s:string)=>void) {
   const audit=new AuditRepository(pool);const emails=new TravelEmails(pool,pino({level:'silent'}));
@@ -38,6 +40,9 @@ export async function testGuestPassengers(pool:Pool,manager:AuthContext,gate:Aut
   const guest=(await pool.query('SELECT * FROM admtaxi.funcionarios WHERE id=$1',[id])).rows[0];
   assert.equal(guest.avulso,false);assert.equal(guest.matricula,'PRE-001');assert.equal(guest.usuario_id,null);
   assert.equal(guest.endereco_padrao,address.descricao);
+  const noAccess = new RequisitionAccessService(pool,audit,{resetUrl:'https://example.test/redefinir-senha',resetTtlMinutes:30});
+  assert((await noAccess.list(gate,req.id))[0]!.indisponivel?.includes('sem acesso'));
+  await assert.rejects(noAccess.prepare(gate,req.id,id,{}),{statusCode:409});
   assert.equal((await pool.query('SELECT count(*) FROM admtaxi.usuarios')).rows[0].count,users);
   assert.equal(ride.itinerario!.participantes[0]!.funcionarioTelefone,'34988881212');
   assert.equal(ride.itinerario!.participantes[0]!.centroCustoId,center);
@@ -107,8 +112,33 @@ async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:Auth
   assert(!messages.some(m=>m.to!==email && m.text.includes(token)));
   assert(!(await pool.query('SELECT corpo FROM admtaxi.emails_viagem WHERE destinatario=$1',[email])).rows.some(r=>r.corpo.includes(token)));
   const passwords=new PasswordService(pool,logger);
-  await passwords.reset({token,novaSenha:'NovaSenha123'});
+  const access=new RequisitionAccessService(pool,new AuditRepository(pool),config);
+  const employeeId=results[0]!.funcionarioId!;
+  await assert.rejects(access.list(manager,req.id),{statusCode:403});
+  await assert.rejects(access.list({...gate,empresaId:randomUUID()},req.id),{statusCode:404});
+  await assert.rejects(access.prepare(gate,req.id,randomUUID(),{}),{statusCode:404});
+  const contact=(await access.list(gate,req.id))[0]!;
+  assert.equal(contact.funcionarioId,employeeId);assert.equal(contact.indisponivel,null);assert.equal(contact.primeiroAcesso,true);
+  const beforeTokens=(await pool.query('SELECT count(*) FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1',[user.id])).rows[0].count;
+  await assert.rejects(new RequisitionAccessService(pool,badAudit,config).prepare(gate,req.id,employeeId,{}),/synthetic audit failure/);
+  assert.equal((await pool.query('SELECT count(*) FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1',[user.id])).rows[0].count,beforeTokens);
+  const whatsapp=await access.prepare(gate,req.id,employeeId,{});
+  assert.equal(whatsapp.telefone,'5534998882222');assert(whatsapp.mensagem.includes('Android:'));assert(whatsapp.mensagem.includes('iPhone:'));
+  assert(whatsapp.mensagem.includes(`Login: ${email}`));assert(whatsapp.expiraEm);
+  const whatsappToken=whatsapp.mensagem.match(/#token=([a-f0-9]{64})/)![1]!;
+  const stored=(await pool.query('SELECT token_hash,usado_em FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1',[user.id])).rows;
+  assert(stored.some(r=>r.token_hash===hashResetToken(whatsappToken)));
+  assert(stored.some(r=>r.token_hash===hashResetToken(token)&&r.usado_em===null));
+  assert(!(await pool.query('SELECT dados_novos::text FROM admtaxi.auditoria WHERE entidade_id=$1',[req.id])).rows.some(r=>r.dados_novos?.includes(whatsappToken)));
+  const limits=await Promise.allSettled(Array.from({length:5},()=>access.prepare(gate,req.id,employeeId,{})));
+  assert(limits.some(r=>r.status==='rejected'&&r.reason.statusCode===429));
+  assert(Number((await pool.query('SELECT count(*) FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1',[user.id])).rows[0].count)<=5);
+  await passwords.reset({token:whatsappToken,novaSenha:'NovaSenha123'});
+  await assert.rejects(passwords.reset({token:whatsappToken,novaSenha:'OutraSenha123'}),{statusCode:400});
   await assert.rejects(passwords.reset({token,novaSenha:'OutraSenha123'}),{statusCode:400});
+  const existing=await access.prepare(gate,req.id,employeeId,{});
+  assert.equal(existing.expiraEm,null);assert(!existing.mensagem.includes('#token='));assert(existing.mensagem.includes('senha atual'));
+  ok('WHATSAPP gate-only tenant/participant scope, hashed one-use token, atomic rollback, concurrent limit, email coexistence, existing password preserved');
   const credential=(await pool.query('SELECT senha_hash,deve_alterar_senha FROM admtaxi.usuarios_autenticacao WHERE id=$1',[user.id])).rows[0];
   assert.equal(credential.deve_alterar_senha,false);
   await rides.cancel(manager,results[0]!.id,{motivo:'Teste de cadastro e acesso concluido'},{});

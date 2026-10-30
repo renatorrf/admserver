@@ -16,6 +16,7 @@ import { createErrorHandler } from '../src/shared/http/error-handler';
 import { createAuthenticate } from '../src/modules/auth/auth.middleware';
 import { TokenService } from '../src/modules/auth/token-service';
 import { RealtimeBus } from '../src/realtime/realtime-bus';
+import { RequisitionAccessService } from '../src/modules/requisicoes/requisition-access';
 
 export async function testRequisitions(pool: Pool,manager: AuthContext,gate: AuthContext,employeeIds: string[],center: string,sector: string,otherCompany: string,driver: AuthContext,vehicle: string,ok: (s: string)=>void) {
   const logger=pino({level:'silent'}); const audit=new AuditRepository(pool);
@@ -106,8 +107,17 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   ok('REQUISITIONS optional addresses, supervisor scope, approval, rejection, manager auto-authorization, conference-only release and atomic idempotency');
 
   const tokens=new TokenService({jwtAccessSecret:randomUUID()+randomUUID(),jwtRefreshSecret:randomUUID()+randomUUID(),jwtAccessExpiresInSeconds:900,jwtRefreshExpiresInSeconds:3600});
-  const app=express();app.use(express.json());app.use('/requisicoes',createAuthenticate(tokens),requisitionRouter(service));app.use('/corridas',createAuthenticate(tokens),createCorridaRouter(rides));app.use(createErrorHandler(logger));
+  const access=new RequisitionAccessService(pool,audit,{resetUrl:'https://example.test/redefinir-senha',resetTtlMinutes:30});
+  const app=express();app.use(express.json());app.use('/requisicoes',createAuthenticate(tokens),requisitionRouter(service,access));app.use('/corridas',createAuthenticate(tokens),createCorridaRouter(rides));app.use(createErrorHandler(logger));
   const bearer=(auth:AuthContext)=>`Bearer ${tokens.issueTokens(auth).accessToken}`;
+  for(const auth of [manager,supervisor,driver]) {
+    await request(app).get(`/requisicoes/${created.id}/acessos`).set('Authorization',bearer(auth)).expect(403);
+    await request(app).post(`/requisicoes/${created.id}/acessos/${employeeIds[0]}/whatsapp`).set('Authorization',bearer(auth)).send({}).expect(403);
+  }
+  await request(app).get(`/requisicoes/${created.id}/acessos`).set('Authorization',bearer(gate)).expect('Cache-Control','no-store').expect(200);
+  await request(app).get(`/requisicoes/${created.id}/acessos`).set('Authorization',bearer({...gate,empresaId:otherCompany})).expect(404);
+  await request(app).get(`/requisicoes/${auto.id}/acessos`).set('Authorization',bearer(gate)).expect(409);
+  await request(app).post(`/requisicoes/${created.id}/acessos/${employeeIds[0]}/whatsapp`).set('Authorization',bearer(gate)).send({telefone:'11999999999'}).expect(422);
   for(const auth of [manager,supervisor,gate]) await request(app).post('/corridas').set('Authorization',bearer(auth)).send({}).expect(403);
   await request(app).post('/requisicoes').set('Authorization',bearer(gate)).send(input).expect(403);
   await request(app).post(`/requisicoes/${auto.id}/decisao`).set('Authorization',bearer(gate)).send({autorizar:true}).expect(403);

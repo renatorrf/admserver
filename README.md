@@ -471,3 +471,30 @@ Validacao: `npm test`, `npm run test:review:integration` (PostgreSQL local isola
 `npm run build` e `npm run lint`. A integracao cobre avulso do pedido a conclusao,
 conferencia imutavel, repeticao idempotente, custos, expiracao, isolamento e disputa
 da ultima vaga entre duas empresas. Nao use dados sinteticos no banco remoto.
+
+### Primeiro acesso pelo WhatsApp na Portaria
+
+Depois de concluir o pre-cadastro e solicitar a corrida, a Portaria pode selecionar
+**Enviar acesso pelo WhatsApp** para cada passageiro. O mesmo painel fica disponivel
+ao reabrir uma requisicao ja solicitada. A previa mostra o destinatario, login,
+instrucoes de instalacao Android/iPhone e, quando elegivel, o link de primeiro acesso.
+**Abrir WhatsApp** apenas abre a conversa; o operador confirma o envio manualmente.
+Nao ha API WhatsApp, envio automatico nem confirmacao de entrega pelo sistema.
+
+- `GET /api/v1/requisicoes/:id/acessos`: contatos dos participantes da corrida.
+- `POST /api/v1/requisicoes/:id/acessos/:funcionarioId/whatsapp`: corpo `{}`;
+  prepara a mensagem, sem aceitar telefone, e-mail ou empresa enviados pelo cliente.
+- Ambos exclusivos de `PORTARIA`, com empresa derivada da sessao e `Cache-Control: no-store`.
+- O e-mail informado na conferencia continua necessario para criar o login. Sem
+  conta ou telefone valido, a interface explica o impedimento; a corrida nao e bloqueada.
+- Link de ativacao somente para conta criada nessa conferencia e ainda sem senha
+  definida. Conta existente recebe instrucoes para utilizar a senha atual.
+- Usa `PASSWORD_RESET_URL` e `PASSWORD_RESET_TTL_MINUTES` da configuracao existente.
+  Nao exige migracao ou credencial WhatsApp. E-mails continuam sendo enviados normalmente.
+- O token aleatorio e armazenado apenas como hash; nao entra na auditoria nem na
+  fila de e-mails. Limite de cinco links por conta/hora, contando recuperacoes e
+  primeiro acesso por e-mail. Usar um link revoga os outros conforme o fluxo de senha.
+- A auditoria registra `PREPARAR_ACESSO_WHATSAPP`, nunca presume envio ou entrega.
+
+Validado com banco PostgreSQL temporario local e mailer simulado. O teste de interface
+inspeciona o link `wa.me` sem abrir conversas ou enviar mensagens reais.
