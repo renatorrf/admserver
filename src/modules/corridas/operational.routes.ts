@@ -54,7 +54,7 @@ export function createOperationalRouter(
   const notifications = new NotificacaoService(pool, pushConfig, undefined, fcm);
   const emails = travelEmails ?? new TravelEmails(pool, { warn: () => undefined, error: () => undefined });
   const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications, undefined, scheduledEmails, emails);
-  router.use('/requisicoes', createAuthenticate(tokens), requisitionRouter(new RequisitionService(pool,new AuditRepository(pool),service,emails)));
+  router.use('/requisicoes', createAuthenticate(tokens), requisitionRouter(new RequisitionService(pool,new AuditRepository(pool),service,emails,realtime)));
   const locations = new LocalizacaoService(pool, service, realtime);
   router.use('/dashboard', createAuthenticate(tokens), createDashboardRouter(new DashboardService(new DashboardRepository(pool))));
   router.use('/paineis', createAuthenticate(tokens), createPainelParticipanteRouter(

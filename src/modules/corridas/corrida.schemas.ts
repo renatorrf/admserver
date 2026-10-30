@@ -105,6 +105,7 @@ export const corridaFinishSchema = z.object({
 export const disponibilidadeSchema = z.object({ disponivel: z.boolean() }).strict();
 
 export const corridaListSchema = paginationSchema.extend({
+  ordenacao: z.literal('SOLICITACAO').optional(),
   status: z.enum(statusCorrida).optional(),
   tipo: z.enum(tiposCorrida).optional(),
   centroCustoId: z.string().uuid('Centro de custo invalido.').optional(),

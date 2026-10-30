@@ -18,7 +18,7 @@ import type { LocalizacaoService } from '../modules/localizacoes/localizacao.ser
 import type { LocalizacaoRecord } from '../modules/localizacoes/localizacao.types';
 import { AppError } from '../shared/errors/app-error';
 import type { RealtimeBus } from './realtime-bus';
-import type { CorridaRealtimeEvent, FaturamentoRealtimeEvent, FaturamentoRealtimePayload } from './realtime-bus';
+import type { CorridaRealtimeEvent, FaturamentoRealtimeEvent, FaturamentoRealtimePayload, RequisitionInvalidation } from './realtime-bus';
 
 type SocketData = {
   auth: AuthContext;
@@ -41,6 +41,7 @@ type ClientToServerEvents = {
 
 type RideInvalidation = Pick<CorridaRecord, 'id' | 'empresaId' | 'status' | 'itinerarioVersao' | 'atualizadoEm'>;
 type ServerToClientEvents = {
+  'requisicao:atualizada': (payload: RequisitionInvalidation) => void;
   'corrida:atualizada': (ride: RideInvalidation) => void;
   'corrida:criada': (ride: RideInvalidation) => void;
   'corrida:ofertada': (ride: RideInvalidation) => void;
@@ -169,8 +170,8 @@ export function attachSocketServer(
     });
 
     void socket.join(userRoom(socket.data.auth.empresaId, socket.data.auth.usuarioId));
-    if (socket.data.auth.perfil === 'GESTOR') {
-      void socket.join(profileRoom(socket.data.auth.empresaId, 'GESTOR'));
+    if (['GESTOR', 'PORTARIA'].includes(socket.data.auth.perfil)) {
+      void socket.join(profileRoom(socket.data.auth.empresaId, socket.data.auth.perfil));
     }
     if (database && socket.data.auth.perfil === 'GERENTE') {
       void database.query<{ centro_custo_id: string }>(
@@ -288,8 +289,10 @@ export function attachSocketServer(
       // Rooms carry invalidation only; HTTP/snapshot access resolves personal data per recipient.
       const update = { id: ride.id, empresaId: ride.empresaId, status: ride.status,
         itinerarioVersao: ride.itinerarioVersao, atualizadoEm: ride.atualizadoEm };
-      io.to(targets).emit('corrida:atualizada', update);
-      io.to(targets).emit(event as CorridaRealtimeEvent, update);
+      io.to(targets).except(profileRoom(ride.empresaId, 'PORTARIA')).emit('corrida:atualizada', update);
+      // Portaria refreshes a restricted HTTP summary, never a ride/GPS subscription.
+      io.to(profileRoom(ride.empresaId, 'PORTARIA')).emit('requisicao:atualizada', { empresaId: ride.empresaId });
+      io.to(targets).except(profileRoom(ride.empresaId, 'PORTARIA')).emit(event as CorridaRealtimeEvent, update);
       if (event === 'corrida:criada' || event === 'corrida:aceita' || event === 'corrida:cancelada') {
         io.to(profileRoom(ride.empresaId, 'PRESTADOR')).emit('corrida:lista-invalidada', { corridaId: ride.id });
       }
@@ -302,6 +305,11 @@ export function attachSocketServer(
     const rooms = [profileRoom(payload.empresaId, 'GESTOR')];
     if (payload.prestadorId) rooms.push(providerRoom(payload.empresaId, payload.prestadorId));
     io.to(rooms).emit(event as FaturamentoRealtimeEvent, payload);
+  });
+
+  realtime.onRequisition(({ empresaId, id, solicitanteId }) => {
+    io.to([profileRoom(empresaId, 'GESTOR'), profileRoom(empresaId, 'PORTARIA'), userRoom(empresaId, solicitanteId)])
+      .emit('requisicao:atualizada', { empresaId, id });
   });
 
   io.engine.on('connection_error', (error) => {

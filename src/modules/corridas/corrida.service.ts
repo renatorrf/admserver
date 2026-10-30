@@ -19,6 +19,7 @@ import type {
 } from './corrida.schemas';
 import { assertTransition, isActiveRide } from './state-machine';
 import { employeeRide } from './corrida-visibility';
+import { employeeEvent, type EmployeeHistoryScope } from './employee-history';
 import { advanceItinerary, itineraryResolved, itinerarySchema, moneyCents, passengerTotal, type ItineraryAction, type ItineraryInput } from './itinerary';
 import { commandHash, ItineraryRepository } from './itinerary.repository';
 import { assertRouteNotStarted, type OptimizeRouteInput, type RideRouteOptimizer } from './route-optimizer';
@@ -50,7 +51,7 @@ export interface CorridaStore {
     metadata?: Record<string, unknown>,
   ): Promise<void>;
   markDisembark(executor: QueryExecutor, empresaId: string, id: string): Promise<CorridaRecord>;
-  listEvents(empresaId: string, corridaId: string, query: EventoListQuery): Promise<PaginatedResult<CorridaEventoRecord>>;
+  listEvents(empresaId: string, corridaId: string, query: EventoListQuery, employee?: EmployeeHistoryScope): Promise<PaginatedResult<CorridaEventoRecord>>;
   getProviderByUser(executor: QueryExecutor, empresaId: string, usuarioId: string, lock?: boolean): Promise<PrestadorContext | null>;
   getEmployeeByUser(executor: QueryExecutor, empresaId: string, usuarioId: string): Promise<FuncionarioContext | null>;
   validateProviderAndVehicle(
@@ -111,11 +112,12 @@ export class CorridaService {
     query: EventoListQuery,
   ): Promise<PaginatedResult<CorridaEventoRecord>> {
     auth = await driverRideContext(this.database, auth, id);
-    await this.get(auth, id);
-    const result = await this.repository.listEvents(auth.empresaId, id, query);
-    return auth.perfil === 'FUNCIONARIO' ? { ...result, data: result.data.map(event => ({
-      ...event, usuarioId: null, descricao: 'Viagem atualizada.', metadata: {},
-    })) } : result;
+    const ride = await this.get(auth, id);
+    const own = ride.itinerario?.participantes.find(person => person.funcionarioId === ride.funcionarioId);
+    const audience = auth.perfil === 'FUNCIONARIO' ? { funcionarioId: ride.funcionarioId,
+      embarqueId: own?.embarqueId, desembarqueId: own?.desembarqueId, legacy: !ride.itinerarioVersao } : undefined;
+    const result = await this.repository.listEvents(auth.empresaId, id, query, audience);
+    return audience ? { ...result, data: result.data.map(event => employeeEvent(event, audience)) } : result;
   }
 
   create(auth: AuthContext, input: CorridaCreateInput, metadata: AuditMetadata): Promise<CorridaRecord> {

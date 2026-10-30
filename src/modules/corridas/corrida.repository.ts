@@ -1,5 +1,6 @@
 import type { QueryResultRow } from 'pg';
 import { commandHash, ItineraryRepository } from './itinerary.repository';
+import { employeeGlobalEvents, employeeLegacyEvents, employeePersonalEvents, employeeStopEvents, type EmployeeHistoryScope } from './employee-history';
 
 import { queryOne, type Database, type QueryExecutor } from '../../db/pool';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
@@ -224,7 +225,7 @@ export class CorridaRepository {
     values.push(query.limite, (query.pagina - 1) * query.limite);
     const result = await this.database.query<CorridaRow>(
       `${corridaSelect} WHERE ${where}
-       ORDER BY COALESCE(c.agendada_para, c.solicitada_em) DESC, c.id DESC
+       ORDER BY ${query.ordenacao === 'SOLICITACAO' ? 'c.solicitada_em' : 'COALESCE(c.agendada_para, c.solicitada_em)'} DESC, c.id DESC
        LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values,
     );
@@ -391,19 +392,28 @@ export class CorridaRepository {
     empresaId: string,
     corridaId: string,
     query: EventoListQuery,
+    employee?: EmployeeHistoryScope,
   ): Promise<PaginatedResult<CorridaEventoRecord>> {
+    const values: unknown[] = [empresaId, corridaId];
+    let visibility = '';
+    if (employee) {
+      values.push([...employeeGlobalEvents, ...(employee.legacy ? employeeLegacyEvents : [])], employeePersonalEvents,
+        employee.funcionarioId, employeeStopEvents, [employee.embarqueId, employee.desembarqueId].filter(Boolean));
+      visibility = ` AND (tipo_evento=ANY($3::text[]) OR (tipo_evento=ANY($4::text[]) AND metadata->>'funcionarioId'=$5::text)
+        OR (tipo_evento=ANY($6::text[]) AND metadata->>'paradaId'=ANY($7::text[])))`;
+    }
     const count = await this.database.query<{ total: string }>(
-      'SELECT COUNT(*)::text AS total FROM admtaxi.corrida_eventos WHERE empresa_id = $1 AND corrida_id = $2',
-      [empresaId, corridaId],
+      `SELECT COUNT(*)::text AS total FROM admtaxi.corrida_eventos WHERE empresa_id = $1 AND corrida_id = $2${visibility}`,
+      values,
     );
     const total = Number(count.rows[0]?.total ?? 0);
     const result = await this.database.query<EventoRow>(
       `SELECT id::text, corrida_id, usuario_id, tipo_evento, status_anterior::text,
               status_novo::text, descricao, metadata, criado_em
          FROM admtaxi.corrida_eventos
-        WHERE empresa_id = $1 AND corrida_id = $2
-        ORDER BY criado_em DESC, id DESC LIMIT $3 OFFSET $4`,
-      [empresaId, corridaId, query.limite, (query.pagina - 1) * query.limite],
+        WHERE empresa_id = $1 AND corrida_id = $2${visibility}
+        ORDER BY criado_em DESC, id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, query.limite, (query.pagina - 1) * query.limite],
     );
     return paginate(result.rows.map(mapEvento), total, query);
   }

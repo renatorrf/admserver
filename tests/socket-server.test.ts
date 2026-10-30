@@ -92,6 +92,39 @@ describe('Socket.IO', () => {
     expect(error.message).toBe('NAO_AUTORIZADO');
   });
 
+  it('portaria recebe apenas invalidacao das requisicoes da empresa, sem detalhe da corrida ou GPS', async () => {
+    const tokens=new TokenService(config),bus=new RealtimeBus();
+    httpServer=createServer();
+    ioServer=attachSocketServer(httpServer,config,tokens,{snapshot:vi.fn(),create:vi.fn()} as unknown as LocalizacaoService,bus,pino({level:'silent'}));
+    client=createClient(await listen(httpServer),{auth:{token:tokens.issueTokens({...auth,perfil:'PORTARIA'}).accessToken}});
+    await connected(client);
+    const notices=vi.fn(),rides=vi.fn(),gps=vi.fn();
+    client.on('requisicao:atualizada',notices);client.on('corrida:atualizada',rides);client.on('localizacao:atualizada',gps);
+    bus.publishRequisition({empresaId:auth.empresaId,id:'request',solicitanteId:'someone'});
+    await vi.waitFor(()=>expect(notices).toHaveBeenCalledTimes(1));
+    expect(notices.mock.calls[0]![0]).toEqual({empresaId:auth.empresaId,id:'request'});
+    bus.publishRequisition({empresaId:'other-company',id:'private',solicitanteId:'someone'});
+    bus.publishRide({id:corridaId,empresaId:auth.empresaId,solicitanteUsuarioId:auth.usuarioId,status:'ACEITA',prestadorNome:'Private name'} as Parameters<RealtimeBus['publishRide']>[0]);
+    bus.publishLocation({corridaId,empresaId:auth.empresaId,latitude:0,longitude:0} as Parameters<RealtimeBus['publishLocation']>[0]);
+    await vi.waitFor(()=>expect(notices).toHaveBeenCalledTimes(2));
+    expect(notices.mock.calls[1]![0]).toEqual({empresaId:auth.empresaId});
+    expect(rides).not.toHaveBeenCalled();expect(gps).not.toHaveBeenCalled();
+    expect(ioServer.sockets.adapter.rooms.has(`empresa:${auth.empresaId}:corrida:${corridaId}`)).toBe(false);
+  });
+
+  it('supervisor recebe invalidacao somente das suas requisicoes',async()=>{
+    const tokens=new TokenService(config),bus=new RealtimeBus();
+    httpServer=createServer();
+    ioServer=attachSocketServer(httpServer,config,tokens,{snapshot:vi.fn(),create:vi.fn()} as unknown as LocalizacaoService,bus,pino({level:'silent'}));
+    client=createClient(await listen(httpServer),{auth:{token:tokens.issueTokens({...auth,perfil:'GERENTE'}).accessToken}});
+    await connected(client);const received=vi.fn();client.on('requisicao:atualizada',received);
+    bus.publishRequisition({empresaId:auth.empresaId,id:'other-request',solicitanteId:'other-user'});
+    bus.publishRequisition({empresaId:'other-company',id:'foreign',solicitanteId:auth.usuarioId});
+    bus.publishRequisition({empresaId:auth.empresaId,id:'own-request',solicitanteId:auth.usuarioId});
+    await vi.waitFor(()=>expect(received).toHaveBeenCalledTimes(1));
+    expect(received.mock.calls[0]![0]).toEqual({empresaId:auth.empresaId,id:'own-request'});
+  });
+
   it('mantem passageiro na room mas libera GPS apenas na sua vez', async () => {
     const tokens = new TokenService(config); const bus = new RealtimeBus();
     const employee = { ...auth, perfil: 'FUNCIONARIO' as const };

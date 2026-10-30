@@ -303,6 +303,24 @@ async function main(): Promise<void> {
     assert.equal(executionEvents.data.filter(e => e.tipoEvento === 'PARADA_INICIAR').length, 4);
     assert(executionEvents.data.some(e => e.descricao?.includes('Embarque confirmado: Passageiro sintetico')));
     ok('EXECUTION-01 automatic stages persisted, deduplicated and passenger GPS released sequentially');
+    for (const employee of employees.slice(0, 2)) {
+      const ownRide = await service.get(employee, a.id);
+      const own = ownRide.itinerario!.participantes[0]!;
+      const history = await service.listEvents(employee, a.id, { pagina: 1, limite: 100 });
+      const ownStops = [own.embarqueId, own.desembarqueId];
+      const expected = executionEvents.data.filter(e => !e.tipoEvento.startsWith('PARADA_') ||
+        (e.metadata.funcionarioId ? e.metadata.funcionarioId === own.funcionarioId : ownStops.includes(e.metadata.paradaId as string)));
+      assert.equal(history.meta.total, expected.length);
+      assert.deepEqual(history.data.map(e => e.id), expected.map(e => e.id));
+      assert(history.data.some(e => e.descricao === 'Seu embarque foi confirmado.'));
+      assert(history.data.some(e => e.descricao === 'Seu desembarque foi confirmado.'));
+      assert(history.data.some(e => e.descricao === 'Motorista chegou ao seu embarque.'));
+      assert(history.data.every(e => e.usuarioId === null && Object.keys(e.metadata).length === 0 && !e.descricao?.includes('sintetico')));
+      const page = await service.listEvents(employee, a.id, { pagina: 1, limite: 2 });
+      assert.equal(page.meta.total, expected.length);
+      assert.deepEqual(page.data.map(e => e.id), history.data.slice(0, 2).map(e => e.id));
+    }
+    ok('EMPLOYEE-HISTORY safe own stages, other passenger excluded before pagination');
     assert(ride.itinerario!.participantes.every(p => p.estado === 'DESEMBARCADO'));
     assert(ride.desembarqueEm);
     ok('TRIP-02/11 individual journey and command deduplication');
@@ -406,6 +424,16 @@ async function main(): Promise<void> {
     const recent = await operations.recentEmployeeDestinations(manager, employeeIds[4]!);
     assert.deepEqual(recent.map(a => a.descricao), ['Destino 0', 'Destino 6', 'Destino 5', 'Destino 4', 'Destino 3']);
     assert.equal(recent[0]?.latitude, 0);
+    await pool.query(`UPDATE admtaxi.corridas SET solicitada_em=criado_em,
+      tipo=(CASE WHEN destino_descricao='Destino 6' THEN 'AGENDADA' ELSE 'IMEDIATA' END)::admtaxi.tipo_corrida,
+      agendada_para=CASE WHEN destino_descricao='Destino 6' THEN CURRENT_TIMESTAMP + interval '1 year' ELSE NULL END
+      WHERE empresa_id=$1 AND funcionario_id=$2`, [company, employeeIds[4]]);
+    const latest = await service.list(employees[4]!, { pagina: 1, limite: 10, ordenacao: 'SOLICITACAO' });
+    assert.equal(latest.data.length, 8);
+    assert.equal(latest.data[0]!.destinoDescricao, 'Destino 0');
+    assert(latest.data.every((row, i, rows) => i === 0 || Date.parse(rows[i - 1]!.solicitadaEm) >= Date.parse(row.solicitadaEm)));
+    assert(latest.data.every(row => row.funcionarioId === employeeIds[4]));
+    ok('EMPLOYEE-RECENT latest solicitation order, no month restriction and employee isolation');
     await pool.query(`UPDATE admtaxi.corridas SET status='CANCELADA', cancelada_em=CURRENT_TIMESTAMP, motivo_cancelamento='Cancelamento sintetico'
       WHERE empresa_id=$1 AND funcionario_id=$2 AND destino_descricao='Destino 0'`, [company, employeeIds[4]]);
     assert.equal((await operations.recentEmployeeDestinations(manager, employeeIds[4]!))[0]?.descricao, 'Destino 6');

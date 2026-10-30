@@ -8,10 +8,13 @@ import { centerAllowed, OperationalScopeService } from '../escopo/operational-sc
 import { conferenceData, requisicaoSchema, toRideInput, type RequisitionInput, type RequisitionRow } from './requisicao.schemas';
 import type { TravelEmails } from './travel-emails';
 import { resolveGuests } from './guest-passengers';
+import type { RequisitionRealtimePublisher } from '../../realtime/realtime-bus';
+import type { RequisitionRideSummary } from './requisicao.schemas';
 
 export class RequisitionService {
   constructor(private readonly database: Database, private readonly audit: CorridaAuditWriter,
-    private readonly rides: CorridaService, private readonly emails: TravelEmails) {}
+    private readonly rides: CorridaService, private readonly emails: TravelEmails,
+    private readonly realtime?: RequisitionRealtimePublisher) {}
   async list(auth: AuthContext, offset = 0): Promise<RequisitionRow[]> {
     this.authorize(auth);
     const result = await this.database.query<RequisitionRow>(`SELECT r.*,u.nome AS solicitante,
@@ -21,6 +24,7 @@ export class RequisitionService {
       JOIN admtaxi.usuarios u ON u.empresa_id=r.empresa_id AND u.id=r.solicitante_id
       WHERE r.empresa_id=$1 AND ($2::uuid IS NULL OR r.solicitante_id=$2)
       ORDER BY r.criada_em DESC,r.id LIMIT 50 OFFSET $3`, [auth.empresaId,auth.perfil==='GERENTE' ? auth.usuarioId : null,offset]);
+    await this.addRideSummaries(auth, result.rows, this.database);
     return result.rows;
   }
   async get(auth: AuthContext, id: string, client: QueryExecutor = this.database, lock = false): Promise<RequisitionRow> {
@@ -32,6 +36,7 @@ export class RequisitionService {
       WHERE empresa_id=$1 AND id=$2 AND ($3::uuid IS NULL OR solicitante_id=$3) ${lock ? 'FOR UPDATE' : ''}`,
     [auth.empresaId,id,auth.perfil==='GERENTE' ? auth.usuarioId : null]);
     if (!result.rows[0]) throw notFound('Requisicao');
+    if (!lock) await this.addRideSummaries(auth, result.rows, client);
     return result.rows[0];
   }
   async create(auth: AuthContext, input: RequisitionInput, metadata: AuditMetadata): Promise<RequisitionRow> {
@@ -54,7 +59,7 @@ export class RequisitionService {
       await this.record(client,auth,row,'CRIAR',metadata);
       await this.emails.enqueue(client,row,row.status); return row;
     });
-    this.emails.kick(); return result;
+    this.publish(result); this.emails.kick(); return result;
   }
   async decide(auth: AuthContext,id: string,decision: { autorizar: boolean; motivo?: string },metadata: AuditMetadata): Promise<RequisitionRow> {
     if (auth.perfil!=='GESTOR') throw forbidden('Somente o gestor autoriza viagens.');
@@ -69,13 +74,15 @@ export class RequisitionService {
       await this.record(client,auth,updated.rows[0]!,status,metadata);
       await this.emails.enqueue(client,updated.rows[0]!,status); return updated.rows[0]!;
     });
-    this.emails.kick(); return result;
+    this.publish(result); this.emails.kick(); return result;
   }
   async dispatch(auth: AuthContext,id: string,participants: RequisitionInput['participantes'],metadata: AuditMetadata) {
     if (auth.perfil!=='PORTARIA') throw forbidden('Somente a portaria pode solicitar a corrida apos conferencia.');
+    let request: RequisitionRow | undefined;
     // The hook runs inside the ride transaction and locks the request through creation and linking.
-    return this.rides.createConferred(auth,metadata,async client => {
+    const ride = await this.rides.createConferred(auth,metadata,async client => {
       const row = await this.get(auth,id,client,true);
+      request = row;
       if (row.corrida_id) return { existingId: row.corrida_id };
       if (row.status!=='AUTORIZADA') throw conflict('A viagem precisa estar autorizada pelo gestor.');
       const data = conferenceData(requisicaoSchema.parse(row.dados),participants);
@@ -92,6 +99,26 @@ export class RequisitionService {
         await this.emails.enqueue(client,updated.rows[0]!,'SOLICITADA');
       } };
     });
+    if (request) this.publish(request);
+    return ride;
+  }
+  private publish(row: RequisitionRow): void {
+    this.realtime?.publishRequisition({ empresaId: row.empresa_id, id: row.id, solicitanteId: row.solicitante_id });
+  }
+
+  private async addRideSummaries(auth: AuthContext, rows: RequisitionRow[], db: QueryExecutor): Promise<void> {
+    if (auth.perfil !== 'PORTARIA') return;
+    const ids = rows.flatMap(row => row.corrida_id ? [row.corrida_id] : []);
+    if (!ids.length) return;
+    const result = await db.query<RequisitionRideSummary & { id: string }>(
+      `SELECT c.id,c.status,p.nome AS "motoristaNome",
+         (SELECT count(*)::int FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id) AS "paradasTotal",
+         (SELECT count(*)::int FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id AND s.estado='CONCLUIDA') AS "paradasConcluidas",
+         (SELECT count(*)::int FROM admtaxi.corrida_participacoes cp WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND cp.estado='AUSENTE') AS "passageirosAusentes"
+       FROM admtaxi.corridas c LEFT JOIN admtaxi.prestadores p ON p.empresa_id=c.empresa_id AND p.id=c.prestador_id
+       WHERE c.empresa_id=$1 AND c.id=ANY($2::uuid[])`, [auth.empresaId, ids]);
+    const summaries = new Map(result.rows.map(({ id, ...summary }) => [id, summary]));
+    for (const row of rows) row.corridaResumo = row.corrida_id ? summaries.get(row.corrida_id) ?? null : null;
   }
   private async validate(client: QueryExecutor,auth: AuthContext,input: RequisitionInput,complete = false) {
     if (input.tipo==='AGENDADA' && new Date(input.agendadaPara!).getTime()<=Date.now()) throw invalidReference('Informe um horario futuro para a viagem agendada.');

@@ -15,12 +15,17 @@ import { TravelEmails } from '../src/modules/requisicoes/travel-emails';
 import { createErrorHandler } from '../src/shared/http/error-handler';
 import { createAuthenticate } from '../src/modules/auth/auth.middleware';
 import { TokenService } from '../src/modules/auth/token-service';
+import { RealtimeBus } from '../src/realtime/realtime-bus';
 
 export async function testRequisitions(pool: Pool,manager: AuthContext,gate: AuthContext,employeeIds: string[],center: string,sector: string,otherCompany: string,driver: AuthContext,vehicle: string,ok: (s: string)=>void) {
   const logger=pino({level:'silent'}); const audit=new AuditRepository(pool);
   const emails=new TravelEmails(pool,logger);
-  const rides=new CorridaService(pool,audit,undefined,undefined,undefined,undefined,undefined,emails);
-  const service=new RequisitionService(pool,audit,rides,emails);
+  const bus=new RealtimeBus();
+  const changes:Parameters<RealtimeBus['publishRequisition']>[0][]=[];
+  const rideChanges:string[]=[];
+  bus.onRequisition(event=>changes.push(event));bus.onRide(ride=>rideChanges.push(ride.id));
+  const rides=new CorridaService(pool,audit,undefined,bus,undefined,undefined,undefined,emails);
+  const service=new RequisitionService(pool,audit,rides,emails,bus);
   const supervisor: AuthContext={...manager,usuarioId:randomUUID(),perfil:'GERENTE'};
   await pool.query(`INSERT INTO admtaxi.usuarios(id,empresa_id,nome,email,senha_hash,perfil) VALUES($1,$2,'Supervisor requisicoes','supervisor-travel@example.test','synthetic','GERENTE')`,[supervisor.usuarioId,manager.empresaId]);
   await pool.query('INSERT INTO admtaxi.gerente_setores(empresa_id,gerente_usuario_id,setor_id) VALUES($1,$2,$3)',[manager.empresaId,supervisor.usuarioId,sector]);
@@ -32,6 +37,7 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   const before=Number((await pool.query('SELECT count(*) FROM admtaxi.corridas WHERE empresa_id=$1',[manager.empresaId])).rows[0].count);
   const created=await service.create(supervisor,input,{});
   assert.equal(created.status,'PENDENTE');
+  assert.deepEqual(changes[0],{empresaId:manager.empresaId,id:created.id,solicitanteId:supervisor.usuarioId});
   assert.equal((await service.create(supervisor,input,{})).id,created.id);
   assert.equal(Number((await pool.query('SELECT count(*) FROM admtaxi.corridas WHERE empresa_id=$1',[manager.empresaId])).rows[0].count),before);
   assert.equal((await service.list(supervisor))[0]!.id,created.id);
@@ -60,14 +66,27 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   const own=queue.rows.find(r=>r.evento==='SOLICITADA'&&r.destinatario===email);
   assert(own); assert(own.corpo.includes('Origem privada 0')); assert(!own.corpo.includes('Origem privada 1'));
   let ride=await rides.accept(driver,results[0]!.id,{veiculoId:vehicle},{});
+  let summary=(await service.list(gate)).find(row=>row.id===created.id)!.corridaResumo!;
+  assert.equal(summary.status,'ACEITA');assert(summary.motoristaNome);assert.equal(summary.paradasConcluidas,0);
+  assert.deepEqual(Object.keys(summary).sort(),['motoristaNome','paradasConcluidas','paradasTotal','passageirosAusentes','status'].sort());
+  assert.equal((await service.get(supervisor,created.id)).corridaResumo,undefined);
+  assert.equal((await service.list(manager)).find(row=>row.id===created.id)?.corridaResumo,undefined);
+  assert(!((await service.list({...gate,empresaId:otherCompany})).some(row=>row.id===created.id)));
   while(ride.itinerario!.paradas.some(s=>s.estado!=='CONCLUIDA')) {
     const stop=ride.itinerario!.paradas.find(s=>s.estado!=='CONCLUIDA')!;
     const person=ride.itinerario!.participantes.find(p=>p.embarqueId===stop.id||p.desembarqueId===stop.id)!;
     const action=stop.estado==='PENDENTE'?'INICIAR':stop.estado==='EM_DESLOCAMENTO'?'CHEGAR':person.embarqueId===stop.id?'EMBARCAR':'DESEMBARCAR';
     ride=await rides.executeItinerary(driver,ride.id,{chave:randomUUID(),versao:ride.itinerario!.versao,paradaId:stop.id,
       acao:action,funcionarioId:person.funcionarioId,avancoAutomatico:true},{});
+    summary=(await service.get(gate,created.id)).corridaResumo!;
+    assert.equal(summary.status,ride.status);
+    assert.equal(summary.paradasConcluidas,ride.itinerario!.paradas.filter(stop=>stop.estado==='CONCLUIDA').length);
   }
   await rides.finish(driver,ride.id,{valorFinal:'20.00'},{}); await rides.finish(driver,ride.id,{valorFinal:'20.00'},{});
+  summary=(await service.get(gate,created.id)).corridaResumo!;
+  assert.equal(summary.status,'FINALIZADA');assert.equal(summary.paradasConcluidas,summary.paradasTotal);
+  assert(rideChanges.filter(id=>id===ride.id).length>5);
+  ok('REQUISITIONS-LIVE post-commit events, restricted portaria summary, driver acceptance, itinerary progress, completion and tenant isolation');
   assert.equal((await pool.query("SELECT count(*) FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='FINALIZADA'",[created.id])).rows[0].count,'5');
   const auto=await service.create(manager,{...input,chave:randomUUID(),participantes:[participants[0]!]},{ });
   assert.equal(auto.status,'AUTORIZADA');
@@ -75,8 +94,10 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   const rejected=await service.create(supervisor,{...input,chave:randomUUID()},{});
   await service.decide(manager,rejected.id,{autorizar:false,motivo:'Sem necessidade operacional'},{});
   await assert.rejects(service.dispatch(gate,rejected.id,participants,{}),{statusCode:409});
-  const failing=new RequisitionService(pool,{record:async()=>{throw Error('audit unavailable');}},rides,emails);
+  const failing=new RequisitionService(pool,{record:async()=>{throw Error('audit unavailable');}},rides,emails,bus);
+  const eventCount=changes.length;
   await assert.rejects(failing.create(manager,{...input,chave:randomUUID()},{}),/audit unavailable/);
+  assert.equal(changes.length,eventCount);
   ok('REQUISITIONS optional addresses, supervisor scope, approval, rejection, manager auto-authorization, conference-only release and atomic idempotency');
 
   const tokens=new TokenService({jwtAccessSecret:randomUUID()+randomUUID(),jwtRefreshSecret:randomUUID()+randomUUID(),jwtAccessExpiresInSeconds:900,jwtRefreshExpiresInSeconds:3600});
@@ -87,6 +108,9 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   await request(app).post(`/requisicoes/${auto.id}/decisao`).set('Authorization',bearer(gate)).send({autorizar:true}).expect(403);
   await request(app).post(`/requisicoes/${auto.id}/solicitar`).set('Authorization',bearer(manager)).send({participantes:participants}).expect(403);
   await request(app).get('/requisicoes').set('Authorization',bearer({...manager,perfil:'PRESTADOR'})).expect(403);
+  const gateList=await request(app).get('/requisicoes').set('Authorization',bearer(gate)).expect(200);
+  assert.equal(gateList.body.data.find((row:{id:string})=>row.id===created.id).corridaResumo.status,'FINALIZADA');
+  await request(app).get(`/corridas/${ride.id}`).set('Authorization',bearer(gate)).expect(403);
   await request(app).post('/requisicoes').set('Authorization',bearer(supervisor)).send({...input,chave:randomUUID(),empresaId:otherCompany}).expect(422);
   await request(app).post(`/requisicoes/${created.id}/decisao`).set('Authorization',bearer(manager)).send({autorizar:false}).expect(422);
   ok('REQUISITIONS HTTP boundaries prevent bypass, tenant injection, driver access and unauthorized decision/release');

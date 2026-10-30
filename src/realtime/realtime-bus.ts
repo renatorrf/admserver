@@ -20,6 +20,11 @@ export interface LocalizacaoRealtimePublisher {
   publishLocation(location: LocalizacaoRecord): void;
 }
 
+export type RequisitionInvalidation = { empresaId: string; id?: string };
+export interface RequisitionRealtimePublisher {
+  publishRequisition(payload: RequisitionInvalidation & { solicitanteId: string }): void;
+}
+
 export class RealtimeBus implements CorridaRealtimePublisher, LocalizacaoRealtimePublisher {
   private readonly emitter = new EventEmitter();
 
@@ -33,6 +38,15 @@ export class RealtimeBus implements CorridaRealtimePublisher, LocalizacaoRealtim
 
   publishLocation(location: LocalizacaoRecord): void {
     this.emitter.emit('location', location);
+  }
+
+  publishRequisition(payload: RequisitionInvalidation & { solicitanteId: string }): void {
+    this.emitter.emit('requisition', payload);
+  }
+
+  onRequisition(listener: (payload: RequisitionInvalidation & { solicitanteId: string }) => void): () => void {
+    this.emitter.on('requisition', listener);
+    return () => this.emitter.off('requisition', listener);
   }
 
   onRide(listener: (ride: CorridaRecord, event: CorridaRealtimeEvent) => void): () => void {
