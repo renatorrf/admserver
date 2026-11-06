@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { paginationSchema } from '../../shared/pagination/pagination';
 import { cpf, optionalEmail, optionalText } from '../../shared/validation/common.schemas';
+import { validadeCnhSchema } from './cnh';
 
 const accessFields = {
   nome: z.string().trim().min(2).max(150),
@@ -20,11 +21,7 @@ const providerFields = {
   telefone: z.string().trim().min(8).max(20).optional(),
   email: optionalEmail,
   numeroCnh: z.string().trim().min(3).max(20).transform((value) => value.toUpperCase()),
-  validadeCnh: z.iso.date('Informe uma data de validade valida.').refine((value) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return new Date(`${value}T00:00:00`).getTime() >= today.getTime();
-  }, 'A validade da CNH nao pode ser anterior a data atual.'),
+  validadeCnh: validadeCnhSchema,
   disponivel: z.boolean().default(true),
   ativo: z.boolean().default(true),
 };

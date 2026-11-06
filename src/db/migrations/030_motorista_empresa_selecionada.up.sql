@@ -1,0 +1,12 @@
+SET LOCAL lock_timeout = '10s';
+SET LOCAL statement_timeout = '60s';
+
+-- A device belongs to the membership selected at login, not every company of its account.
+CREATE OR REPLACE VIEW admtaxi.fcm_destinatarios AS
+ SELECT d.*,r.empresa_id AS destino_empresa_id,r.id AS destino_usuario_id
+ FROM admtaxi.dispositivos_push d
+ JOIN admtaxi.usuarios_autenticacao owner ON owner.empresa_id=d.empresa_id AND owner.id=d.usuario_id
+ JOIN admtaxi.usuarios r ON r.id=owner.id AND r.empresa_id=owner.empresa_id AND r.perfil='PRESTADOR'
+ JOIN admtaxi.motorista_vinculos_ativos m ON m.usuario_id=r.id AND m.empresa_id=r.empresa_id
+ WHERE d.ativo AND d.plataforma='ANDROID' AND d.vinculo_id IS NOT NULL
+   AND owner.perfil='PRESTADOR' AND owner.senha_versao=d.senha_versao AND NOT owner.deve_alterar_senha;

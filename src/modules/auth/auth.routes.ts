@@ -43,7 +43,7 @@ export function createAuthRouter(auth: AuthApplication, tokens: TokenService, pa
   router.get('/empresas', asyncHandler(controller.companies));
   if (drivers && managers) router.post('/acesso', sensitiveRouteLimiter, validateBody(loginSchema.omit({ empresa: true })), asyncHandler(async (req, res) => {
     const session = await drivers.identify(req.body);
-    if (session) { res.json({ data: { sessao: session } }); return; }
+    if (session) { res.json({ data: session }); return; }
     for (const service of [managers, employees, tenants].filter(service => service !== undefined)) {
       try {
         res.json({ data: await service.identify(req.body) });

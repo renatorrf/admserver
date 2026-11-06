@@ -4,6 +4,7 @@ import { invalidReference } from '../../shared/errors/app-error';
 import { paginationSchema } from '../../shared/pagination/pagination';
 import { cpf, optionalEmail } from '../../shared/validation/common.schemas';
 import type { CatalogDefinition } from '../cadastros/catalog.types';
+import { cnhDate, validadeCnhSchema } from './cnh';
 
 const fields = {
   nome: z.string().trim().min(2).max(150),
@@ -12,11 +13,7 @@ const fields = {
   email: optionalEmail,
   usuarioId: z.string().uuid('Usuario invalido.').nullable().optional(),
   numeroCnh: z.string().trim().min(3).max(20).transform((value) => value.toUpperCase()),
-  validadeCnh: z.iso.date('Informe uma data de validade valida.').refine((value) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return new Date(`${value}T00:00:00`).getTime() >= today.getTime();
-  }, 'A validade da CNH nao pode ser anterior a data atual.'),
+  validadeCnh: validadeCnhSchema,
   disponivel: z.boolean().optional(),
 };
 
@@ -64,7 +61,7 @@ export const prestadorDefinition: CatalogDefinition = {
     telefone: row.telefone as string,
     email: row.email as string | null,
     numeroCnh: row.numero_cnh as string,
-    validadeCnh: row.validade_cnh as string,
+    validadeCnh: cnhDate(row.validade_cnh as Date | string | null),
     disponivel: row.disponivel as boolean,
     ativo: row.ativo as boolean,
     criadoEm: row.criado_em as Date,

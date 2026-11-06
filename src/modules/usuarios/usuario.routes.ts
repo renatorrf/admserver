@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import { z } from 'zod';
+import { rateLimit } from 'express-rate-limit';
+import { authorize } from '../auth/auth.middleware';
 
 import { asyncHandler } from '../../shared/http/async-handler';
 import { getValidatedParams, getValidatedQuery, validateBody, validateParams, validateQuery } from '../../shared/validation/validate';
@@ -21,6 +24,23 @@ import type { UsuarioService } from './usuario.service';
 
 export function createUsuarioRouter(service: UsuarioService): Router {
   const router = Router();
+  const accountLimiter = rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false });
+  router.get('/contas-gestor', authorize('GESTOR'), accountLimiter,
+    validateQuery(z.object({ email: z.string().trim().email().max(254).toLowerCase() }).strict()), asyncHandler(async (request, response) => {
+      response.json({ data: await service.findStaffAccounts(requireAuthContext(request), getValidatedQuery<{ email: string }>(request).email, 'manager') });
+    }));
+  router.post('/vincular-gestor', authorize('GESTOR'), accountLimiter,
+    validateBody(z.object({ contaId: z.string().uuid() }).strict()), asyncHandler(async (request, response) => {
+      response.status(201).json({ data: await service.linkStaffAccount(requireAuthContext(request), { contaId: request.body.contaId, perfil: 'GESTOR' }, auditMetadataFromRequest(request)) });
+    }));
+  router.get('/contas-equipe', authorize('GESTOR'), accountLimiter,
+    validateQuery(z.object({ email: z.string().trim().email().max(254).toLowerCase() }).strict()), asyncHandler(async (request, response) => {
+      response.json({ data: await service.findStaffAccounts(requireAuthContext(request), getValidatedQuery<{ email: string }>(request).email) });
+    }));
+  router.post('/vincular-conta', authorize('GESTOR'), accountLimiter,
+    validateBody(z.object({ contaId: z.string().uuid(), perfil: z.enum(['GERENTE', 'PORTARIA']) }).strict()), asyncHandler(async (request, response) => {
+      response.status(201).json({ data: await service.linkStaffAccount(requireAuthContext(request), request.body, auditMetadataFromRequest(request)) });
+    }));
 
   router.get('/', validateQuery(usuarioListSchema), asyncHandler(async (request, response) => {
     const result = await service.list(requireAuthContext(request), getValidatedQuery<UsuarioListQuery>(request));

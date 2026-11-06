@@ -118,6 +118,10 @@ async function main(): Promise<void> {
     await pool.query('ROLLBACK');
     assert.equal((await pool.query("SELECT count(*) FROM pg_proc WHERE proname='normalizar_cadastro'")).rows[0].count, '0');
     ok('DUPLICATES migration refuses historical conflicts and rolls back without changing data');
+    for (const [index, empresa] of [company, otherCompany].entries()) {
+      await pool.query(`INSERT INTO admtaxi.usuarios(empresa_id,nome,email,senha_hash,perfil)
+        VALUES($1,'Supervisor legado','legacy.staff@example.test',$2,'GERENTE')`, [empresa, `legacy-hash-${index}`]);
+    }
     const migrate = (): void => {
       const result = spawnSync(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'src/db/migrate.ts', 'up'], {
         env: { ...process.env, DATABASE_URL: `postgres://postgres:${password}@127.0.0.1:${port}/postgres?sslmode=disable` }, encoding: 'utf8', windowsHide: true,
@@ -125,6 +129,11 @@ async function main(): Promise<void> {
       assert.equal(result.status, 0, result.stderr || result.stdout);
     };
     migrate(); migrate();
+    const legacyStaff = (await pool.query(`SELECT u.senha_hash AS original,c.senha_hash AS canonical,c.id
+      FROM admtaxi.usuarios u JOIN admtaxi.contas_equipe c ON c.id=u.conta_equipe_id WHERE c.email='legacy.staff@example.test'`)).rows;
+    assert.equal(legacyStaff.length, 2); assert.notEqual(legacyStaff[0].id, legacyStaff[1].id);
+    for (const row of legacyStaff) assert.equal(row.original, row.canonical);
+    ok('STAFF-MIGRATION preserves separate legacy identities and credentials without email-based merging');
     assert.equal((await pool.query(`SELECT count(*) FROM admtaxi.usuarios u JOIN admtaxi.contas_funcionario c ON c.id=u.conta_funcionario_id
       WHERE u.perfil='FUNCIONARIO' AND (u.senha_hash<>c.senha_hash OR u.senha_versao<>c.senha_versao OR u.deve_alterar_senha<>c.deve_alterar_senha)`)).rows[0].count, '0');
     assert.equal((await pool.query('SELECT COUNT(*) FROM admtaxi.schema_migrations WHERE versao=18')).rows[0].count, '1');
@@ -501,10 +510,18 @@ async function main(): Promise<void> {
     const driverRegistration = prestadorUnificadoCreateSchema.parse({
       acesso: { nome: 'Motorista temporario', email: 'driver.temp@example.test', telefone: '(34) 99999-1234',
         senha: '123456', formaAtivacao: 'SENHA_TEMPORARIA' },
-      prestador: { cpf: '11144477735', numeroCnh: 'TEMP12345', validadeCnh: '2035-01-01', reutilizarDadosAcesso: true },
+      prestador: { cpf: '11144477735', numeroCnh: 'TEMP12345', reutilizarDadosAcesso: true },
       veiculo: { modo: 'NOVO', dados: { placa: 'qat-1b23', marca: 'Teste', modelo: 'Teste', cor: 'Prata', ano: 2026, capacidadePassageiros: 4 } },
     });
     const registeredDriver = await providers.create(manager, driverRegistration, {});
+    assert.equal(registeredDriver.prestador.validadeCnh, null);
+    await providers.update(manager, registeredDriver.id, { prestador: { validadeCnh: '2035-12-31' } }, {});
+    assert.equal((await providers.get(manager, registeredDriver.id)).prestador.validadeCnh, '2035-12-31');
+    await providers.update(manager, registeredDriver.id, { prestador: { disponivel: false } }, {});
+    assert.equal((await providers.get(manager, registeredDriver.id)).prestador.validadeCnh, '2035-12-31');
+    await providers.update(manager, registeredDriver.id, { prestador: { validadeCnh: null, disponivel: true } }, {});
+    assert.equal((await providers.get(manager, registeredDriver.id)).prestador.validadeCnh, null);
+    ok('CNH optional create, date-only read, unchanged date preserved and explicit clearing');
     const loginTokens = new TokenService({ jwtAccessSecret: randomUUID() + randomUUID(), jwtRefreshSecret: randomUUID() + randomUUID(),
       jwtAccessExpiresInSeconds: 900, jwtRefreshExpiresInSeconds: 3600 }, context => authRepository.accessAllowed(context));
     const loginApp = express(); loginApp.use(express.json());

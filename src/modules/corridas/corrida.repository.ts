@@ -185,8 +185,8 @@ export class CorridaRepository {
   }
 
   async list(empresaId: string, scope: CorridaScope, query: CorridaListQuery): Promise<PaginatedResult<CorridaRecord>> {
-    const values: unknown[] = scope.kind === 'MOTORISTA' ? [] : [empresaId];
-    const conditions = scope.kind === 'MOTORISTA' ? [] : ['c.empresa_id = $1'];
+    const values: unknown[] = [empresaId];
+    const conditions = ['c.empresa_id = $1'];
     this.addScope(conditions, values, scope);
     const add = (sql: string, value: unknown): void => {
       values.push(value);

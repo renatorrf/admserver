@@ -59,12 +59,11 @@ let vapidInitialized = false;
 
 export class NotificacaoService implements CorridaNotificationPublisher {
   async listOwn(auth: AuthContext) {
-    const shared = auth.perfil === 'PRESTADOR' && auth.contaMotoristaId;
     const result = await this.database.query<{ id: string; titulo: string; corpo: string; criadoEm: Date; corridaId: string | null; urlAbertura: string }>(
       `SELECT n.id,n.titulo,n.corpo,n.criado_em AS "criadoEm",n.corrida_id AS "corridaId",n.url_abertura AS "urlAbertura" FROM admtaxi.notificacoes_push n
-       WHERE ${shared ? 'EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.conta_id=$1 AND m.empresa_id=n.empresa_id AND m.usuario_id=n.usuario_id)' : 'empresa_id=$1 AND usuario_id=$2'}
+       WHERE empresa_id=$1 AND usuario_id=$2
        ORDER BY n.criado_em DESC,n.id DESC LIMIT 50`,
-      shared ? [shared] : [auth.empresaId, auth.usuarioId],
+      [auth.empresaId, auth.usuarioId],
     );
     return result.rows;
   }
@@ -109,8 +108,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   async listDevices(auth: AuthContext): Promise<PushDevice[]> {
     const result = await this.database.query<SubscriptionRow>(
       `SELECT * FROM admtaxi.push_subscriptions
-        WHERE (empresa_id=$1 AND usuario_id=$2 OR usuario_id IN(SELECT sibling.id FROM admtaxi.usuarios sibling JOIN admtaxi.usuarios root
-          ON sibling.conta_motorista_id=root.conta_motorista_id WHERE root.empresa_id=$1 AND root.id=$2)) ORDER BY ativo DESC,atualizado_em DESC`,
+        WHERE empresa_id=$1 AND usuario_id=$2 ORDER BY ativo DESC,atualizado_em DESC`,
       [auth.empresaId, auth.usuarioId],
     );
     return result.rows.map((row) => this.mapDevice(row));
@@ -119,8 +117,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   async revoke(auth: AuthContext, id: string): Promise<void> {
     const result = await this.database.query(
       `UPDATE admtaxi.push_subscriptions SET ativo=FALSE
-        WHERE (empresa_id=$1 AND usuario_id=$2 OR usuario_id IN(SELECT sibling.id FROM admtaxi.usuarios sibling JOIN admtaxi.usuarios root
-          ON sibling.conta_motorista_id=root.conta_motorista_id WHERE root.empresa_id=$1 AND root.id=$2)) AND id=$3 AND ativo=TRUE`,
+        WHERE empresa_id=$1 AND usuario_id=$2 AND id=$3 AND ativo=TRUE`,
       [auth.empresaId, auth.usuarioId, id],
     );
     if (result.rowCount !== 1) throw notFound('Inscricao Web Push');
@@ -350,11 +347,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     if (input.subscriptionId) values.push(input.subscriptionId);
     const subscriptions = await this.database.query<SubscriptionRow>(
       `SELECT * FROM admtaxi.push_subscriptions
-        WHERE (empresa_id=$1 AND usuario_id=$2 OR usuario_id IN (
-          SELECT sibling.id FROM admtaxi.usuarios sibling JOIN admtaxi.usuarios recipient
-            ON recipient.conta_motorista_id=sibling.conta_motorista_id
-          WHERE recipient.empresa_id=$1 AND recipient.id=$2 AND recipient.ativo AND recipient.perfil='PRESTADOR'
-            AND EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.usuario_id=recipient.id)))
+        WHERE empresa_id=$1 AND usuario_id=$2
         AND ativo=TRUE${idFilter}`, values,
     );
     if (!this.pushConfig || subscriptions.rows.length === 0) {

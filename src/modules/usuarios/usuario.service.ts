@@ -1,7 +1,7 @@
 import argon2 from 'argon2';
 import type { Database, QueryExecutor } from '../../db/pool';
 import { withTransaction } from '../../db/pool';
-import { conflict, invalidReference, notFound } from '../../shared/errors/app-error';
+import { conflict, forbidden, invalidReference, notFound } from '../../shared/errors/app-error';
 import type { PaginatedResult } from '../../shared/pagination/pagination';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditEntry, AuditMetadata } from '../auditoria/audit.types';
@@ -62,6 +62,45 @@ export class UsuarioService {
     const user = await this.repository.findById(this.pool, auth.empresaId, id);
     if (!user) throw notFound('Usuario');
     return user;
+  }
+
+  async findStaffAccounts(auth: AuthContext, email: string, kind: 'staff' | 'manager' = 'staff') {
+    if (auth.perfil !== 'GESTOR') throw forbidden();
+    const table = kind === 'manager' ? 'contas_gestor' : 'contas_equipe';
+    const column = kind === 'manager' ? 'conta_gestor_id' : 'conta_equipe_id';
+    const roles = kind === 'manager' ? ['GESTOR'] : ['GERENTE', 'PORTARIA'];
+    const result = await this.pool.query<{ id: string; nome: string; email: string; vinculado: boolean }>(
+      `SELECT c.id,c.nome,c.email::text,EXISTS(SELECT 1 FROM admtaxi.usuarios WHERE ${column}=c.id AND empresa_id=$2) AS vinculado
+       FROM admtaxi.${table} c WHERE c.email=$1 AND EXISTS(
+         SELECT 1 FROM admtaxi.usuarios u JOIN admtaxi.empresas e ON e.id=u.empresa_id
+         WHERE u.${column}=c.id AND u.ativo AND e.ativo AND u.perfil::text=ANY($3::text[]))
+       ORDER BY c.id LIMIT 20`, [email, auth.empresaId, roles]);
+    return result.rows;
+  }
+
+  async linkStaffAccount(auth: AuthContext, input: { contaId: string; perfil: 'GESTOR' | 'GERENTE' | 'PORTARIA' }, metadata: AuditMetadata): Promise<UsuarioRecord> {
+    if (auth.perfil !== 'GESTOR') throw forbidden();
+    const table = input.perfil === 'GESTOR' ? 'contas_gestor' : 'contas_equipe';
+    const column = input.perfil === 'GESTOR' ? 'conta_gestor_id' : 'conta_equipe_id';
+    const roles = input.perfil === 'GESTOR' ? ['GESTOR'] : ['GERENTE', 'PORTARIA'];
+    return withTransaction(this.pool, async client => {
+      const account = (await client.query<{ id: string; nome: string; email: string; telefone: string | null; senha_hash: string }>(
+        `SELECT c.* FROM admtaxi.${table} c WHERE c.id=$1 AND EXISTS(
+           SELECT 1 FROM admtaxi.usuarios u JOIN admtaxi.empresas e ON e.id=u.empresa_id
+           WHERE u.${column}=c.id AND u.ativo AND e.ativo AND u.perfil::text=ANY($2::text[])) FOR UPDATE OF c`, [input.contaId, roles])).rows[0];
+      if (!account) throw notFound('Conta ativa');
+      if ((await client.query(`SELECT id FROM admtaxi.usuarios WHERE ${column}=$1 AND empresa_id=$2`, [account.id, auth.empresaId])).rowCount) {
+        throw conflict('Esta conta ja esta vinculada a esta empresa. Edite ou reative o cadastro existente.');
+      }
+      const inserted = (await client.query<{ id: string }>(
+        `INSERT INTO admtaxi.usuarios(empresa_id,nome,email,telefone,senha_hash,perfil,${column})
+         VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [auth.empresaId, account.nome, account.email, account.telefone, account.senha_hash, input.perfil, account.id])).rows[0]!;
+      const created = (await this.repository.findById(client, auth.empresaId, inserted.id))!;
+      await this.audit.record(client, { ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
+        entidade: 'usuario', entidadeId: created.id, acao: 'VINCULAR', dadosNovos: { contaId: account.id, perfil: input.perfil } });
+      return created;
+    });
   }
 
   async create(auth: AuthContext, input: UsuarioCreateInput, metadata: AuditMetadata): Promise<UsuarioRecord> {

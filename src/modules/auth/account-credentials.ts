@@ -2,8 +2,13 @@ import type { PoolClient } from 'pg';
 
 // Lock the credential owner, not a single membership, across reset/refresh/link operations.
 export async function lockCredentials(client: PoolClient, usuarioId: string, empresaId: string): Promise<string | null> {
-  const result = await client.query<{ conta_gestor_id: string | null; conta_motorista_id: string | null; conta_funcionario_id: string | null }>(
-    'SELECT conta_gestor_id,conta_motorista_id,conta_funcionario_id FROM admtaxi.usuarios WHERE id=$1 AND empresa_id=$2', [usuarioId, empresaId]);
+  const result = await client.query<{ conta_gestor_id: string | null; conta_motorista_id: string | null; conta_funcionario_id: string | null; conta_equipe_id: string | null }>(
+    'SELECT conta_gestor_id,conta_motorista_id,conta_funcionario_id,conta_equipe_id FROM admtaxi.usuarios WHERE id=$1 AND empresa_id=$2', [usuarioId, empresaId]);
+  const staff = result.rows[0]?.conta_equipe_id;
+  if (staff) {
+    await client.query('SELECT id FROM admtaxi.contas_equipe WHERE id=$1 FOR UPDATE', [staff]);
+    return staff;
+  }
   const employee = result.rows[0]?.conta_funcionario_id;
   if (employee) {
     await client.query('SELECT id FROM admtaxi.contas_funcionario WHERE id=$1 FOR UPDATE', [employee]);
@@ -21,6 +26,11 @@ export async function lockCredentials(client: PoolClient, usuarioId: string, emp
 }
 
 export async function setPassword(client: PoolClient, account: string | null, usuarioId: string, empresaId: string, hash: string): Promise<void> {
+  const staff = await client.query('SELECT id FROM admtaxi.usuarios WHERE id=$1 AND empresa_id=$2 AND conta_equipe_id=$3', [usuarioId, empresaId, account]);
+  if (staff.rowCount) {
+    await client.query('UPDATE admtaxi.contas_equipe SET senha_hash=$2,deve_alterar_senha=FALSE WHERE id=$1', [account, hash]);
+    return;
+  }
   const employee = await client.query('SELECT id FROM admtaxi.usuarios WHERE id=$1 AND empresa_id=$2 AND conta_funcionario_id=$3', [usuarioId, empresaId, account]);
   if (employee.rowCount) {
     await client.query('UPDATE admtaxi.contas_funcionario SET senha_hash=$2,deve_alterar_senha=FALSE WHERE id=$1', [account, hash]);

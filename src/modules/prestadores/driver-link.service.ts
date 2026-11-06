@@ -26,7 +26,7 @@ export class DriverLinkService {
       if ((await client.query('SELECT id FROM admtaxi.usuarios WHERE conta_motorista_id=$1 AND empresa_id=$2', [accountId, auth.empresaId])).rowCount) {
         throw conflict('Este motorista ja possui cadastro nesta empresa. Localize-o nos ativos ou inativos para editar.');
       }
-      const source = (await client.query<{ id: string; empresa_id: string; nome: string; cpf: string; telefone: string; email: string; numero_cnh: string; validade_cnh: string; disponivel: boolean }>(
+      const source = (await client.query<{ id: string; empresa_id: string; nome: string; cpf: string; telefone: string; email: string; numero_cnh: string; validade_cnh: Date | string | null; disponivel: boolean }>(
         `SELECT p.* FROM admtaxi.motorista_vinculos_ativos m JOIN admtaxi.prestadores p ON p.id=m.prestador_id AND p.empresa_id=m.empresa_id
          WHERE m.conta_id=$1 ORDER BY p.criado_em,p.id LIMIT 1`, [accountId])).rows[0];
       if (!source) throw notFound('Motorista ativo');

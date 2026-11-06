@@ -1,4 +1,5 @@
 import argon2 from 'argon2';
+import { cnhDate } from './cnh';
 import type { QueryResultRow } from 'pg';
 
 import { queryOne, type Database, type QueryExecutor, withTransaction } from '../../db/pool';
@@ -14,7 +15,7 @@ import type {
 type EntityRow = QueryResultRow & { id: string };
 type ProviderContext = QueryResultRow & {
   id: string; empresa_id: string; usuario_id: string; nome: string; cpf: string; telefone: string;
-  email: string | null; numero_cnh: string; validade_cnh: string; disponivel: boolean; ativo: boolean;
+  email: string | null; numero_cnh: string; validade_cnh: Date | string | null; disponivel: boolean; ativo: boolean;
   usuario_nome: string; usuario_email: string; usuario_telefone: string | null; usuario_ativo: boolean;
 };
 
@@ -38,7 +39,7 @@ export class PrestadorUnificadoService {
            (empresa_id, usuario_id, nome, cpf, telefone, email, numero_cnh, validade_cnh, disponivel, ativo)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
         [auth.empresaId, user.id, providerData.nome, input.prestador.cpf, providerData.telefone,
-          providerData.email, input.prestador.numeroCnh, input.prestador.validadeCnh,
+          providerData.email, input.prestador.numeroCnh, input.prestador.validadeCnh ?? null,
           input.prestador.disponivel && effectiveActive, effectiveActive],
       );
       const providerId = providerResult.rows[0]?.id;
@@ -242,7 +243,7 @@ export class PrestadorUnificadoService {
       usuarioId: provider.usuario_id,
       acesso: { nome: provider.usuario_nome, email: provider.usuario_email, telefone: provider.usuario_telefone, perfil: 'PRESTADOR', ativo: provider.usuario_ativo },
       prestador: { nome: provider.nome, cpf: provider.cpf, telefone: provider.telefone, email: provider.email,
-        numeroCnh: provider.numero_cnh, validadeCnh: provider.validade_cnh, disponivel: provider.disponivel, ativo: provider.ativo },
+        numeroCnh: provider.numero_cnh, validadeCnh: cnhDate(provider.validade_cnh), disponivel: provider.disponivel, ativo: provider.ativo },
       veiculos: vehicles.rows.map((row) => ({ id: row.id, placa: row.placa, marca: row.marca, modelo: row.modelo,
         cor: row.cor, ano: row.ano, capacidadePassageiros: row.capacidade_passageiros, ativo: row.ativo })),
       dispositivos: devices.rows.map((row) => ({

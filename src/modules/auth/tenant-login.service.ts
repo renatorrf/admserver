@@ -4,13 +4,14 @@ import { withTransaction } from '../../db/pool';
 import { unauthorized } from '../../shared/errors/app-error';
 import { PgAuthRepository } from './auth.repository';
 import type { TokenService } from './token-service';
+import { lockCredentials } from './account-credentials';
 
 type Candidate = {
   id: string; empresaId: string; codigoAcesso: string; nomeFantasia: string;
   perfil: 'GERENTE' | 'PORTARIA'; senhaHash: string; senhaVersao: number;
 };
 
-// These roles keep independent credentials per company, unlike shared personal accounts.
+// Memberships retain their own role and scope; credentials belong to the shared account.
 export class TenantLoginService {
   constructor(private readonly pool: Pool, private readonly tokens: TokenService, private readonly expires: number) {}
 
@@ -18,7 +19,7 @@ export class TenantLoginService {
     const candidates = await this.pool.query<Candidate>(
       `SELECT u.id,u.empresa_id AS "empresaId",u.perfil,u.senha_hash AS "senhaHash",u.senha_versao AS "senhaVersao",
          e.codigo_acesso::text AS "codigoAcesso",e.nome_fantasia AS "nomeFantasia"
-       FROM admtaxi.usuarios u JOIN admtaxi.empresas e ON e.id=u.empresa_id
+       FROM admtaxi.usuarios_autenticacao u JOIN admtaxi.empresas e ON e.id=u.empresa_id
        WHERE u.email=$1 AND u.perfil IN ('GERENTE','PORTARIA') AND u.ativo AND e.ativo
        ORDER BY e.nome_fantasia,e.id LIMIT 21`, [input.email]);
     if (candidates.rows.length > 20) throw unauthorized('E-mail ou senha invalidos. Utilize o acesso por empresa.');
@@ -37,10 +38,12 @@ export class TenantLoginService {
     const repository = new PgAuthRepository(this.pool);
     const session = await withTransaction(this.pool, async client => {
       const member = await client.query<{ id: string }>(
-        `SELECT id FROM admtaxi.usuarios WHERE id=ANY($1::uuid[]) AND empresa_id=$2 FOR UPDATE`,
+        `SELECT id FROM admtaxi.usuarios WHERE id=ANY($1::uuid[]) AND empresa_id=$2`,
         [selection.usuarios.map(user => user.sub), input.empresaId]);
       const selected = selection.usuarios.find(user => user.sub === member.rows[0]?.id);
       if (!selected) throw unauthorized('Vinculo indisponivel. Entre novamente.');
+      await lockCredentials(client, selected.sub, input.empresaId);
+      await client.query('SELECT id FROM admtaxi.usuarios WHERE id=$1 FOR UPDATE', [selected.sub]);
       const user = await repository.findById({ usuarioId: selected.sub, empresaId: input.empresaId, perfil: selected.perfil }, client);
       if (!user?.ativo || !user.empresaAtiva || user.perfil !== selected.perfil || user.senhaVersao !== selected.versao
         || user.email.toLowerCase() !== selection.email.toLowerCase()) throw unauthorized('Acesso alterado. Entre novamente.');
@@ -48,7 +51,8 @@ export class TenantLoginService {
       await client.query('INSERT INTO admtaxi.refresh_tokens(id,empresa_id,usuario_id,token_hash,expira_em) VALUES($1,$2,$3,$4,$5)',
         [issued.refreshRecord.id, user.empresaId, user.usuarioId, issued.refreshRecord.tokenHash, issued.refreshRecord.expiraEm]);
       return { accessToken: issued.accessToken, refreshToken: issued.refreshToken, tokenTipo: 'Bearer', expiraEmSegundos: this.expires,
-        usuario: { usuarioId: user.usuarioId, empresaId: user.empresaId, nome: user.nome, email: user.email, perfil: user.perfil, deveAlterarSenha: user.deveAlterarSenha } };
+        usuario: { usuarioId: user.usuarioId, empresaId: user.empresaId, nome: user.nome, email: user.email, perfil: user.perfil,
+          ...(user.contaMotoristaId ? { contaMotoristaId: user.contaMotoristaId } : {}), deveAlterarSenha: user.deveAlterarSenha } };
     });
     await repository.updateLastAccess(session.usuario);
     return session;

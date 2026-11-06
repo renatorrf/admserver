@@ -5,11 +5,17 @@ import { io as connectSocket } from 'socket.io-client';
 import type { Pool } from 'pg';
 import pino from 'pino';
 import webpush from 'web-push';
+import express from 'express';
+import request from 'supertest';
+import { createAuthRouter } from '../src/modules/auth/auth.routes';
+import { ManagerLoginService } from '../src/modules/auth/manager-login.service';
+import { createErrorHandler } from '../src/shared/http/error-handler';
 import { AuditRepository } from '../src/modules/auditoria/audit.repository';
 import { PrestadorUnificadoService } from '../src/modules/prestadores/prestador-unificado.service';
 import { prestadorUnificadoCreateSchema } from '../src/modules/prestadores/prestador-unificado.schemas';
 import { DriverLinkService } from '../src/modules/prestadores/driver-link.service';
 import { DriverLoginService } from '../src/modules/auth/driver-login.service';
+import { TenantLoginService } from '../src/modules/auth/tenant-login.service';
 import { PgAuthRepository } from '../src/modules/auth/auth.repository';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { PasswordService } from '../src/modules/auth/password.service';
@@ -47,13 +53,23 @@ export async function testSharedDriverAccounts(pool: Pool, ok: (label: string) =
   const repo = new PgAuthRepository(pool);
   const tokens = new TokenService({ jwtAccessSecret: randomUUID() + randomUUID(), jwtRefreshSecret: randomUUID() + randomUUID(), jwtAccessExpiresInSeconds: 900, jwtRefreshExpiresInSeconds: 3600 }, auth => repo.accessAllowed(auth));
   const login = new DriverLoginService(pool, tokens, 900);
+  const selectionService = new TenantLoginService(pool, tokens, 900);
+  const app = express(); app.use(express.json());
+  app.use('/auth', createAuthRouter(new AuthService(repo, tokens), tokens, undefined, new ManagerLoginService(pool, tokens, 900), login, undefined, selectionService));
+  app.use(createErrorHandler(pino({ level: 'silent' })));
+  const loginSession = async (senha: string, empresaId = a.company) => {
+    const selection = (await request(app).post('/auth/acesso').send({ email: 'shared.driver@example.test', senha }).expect(200)).body.data;
+    assert(selection);
+    assert.equal(selection.sessao, undefined); assert.equal(selection.perfilSelecao, 'EMPRESA');
+    return (await request(app).post('/auth/empresa/selecionar').send({ selecaoToken: selection.selecaoToken, empresaId }).expect(200)).body.data;
+  };
   assert.equal(await login.identify({ email: 'shared.driver@example.test', senha: 'wrong' }), null);
-  const first = (await login.identify({ email: 'shared.driver@example.test', senha: '123456' }))!;
+  const first = await loginSession('123456');
   assert.equal(first.usuario.deveAlterarSenha, true);
   await assert.rejects(tokens.authenticateAccess(first.accessToken), { code: 'TROCA_SENHA_OBRIGATORIA' });
   const passwords = new PasswordService(pool, pino({ level: 'silent' }));
   await passwords.change(tokens.verifyAccess(first.accessToken), { senhaAtual: '123456', novaSenha: '654321' });
-  const session = (await login.identify({ email: 'shared.driver@example.test', senha: '654321' }))!;
+  const session = await loginSession('654321');
   const driver = await tokens.authenticateAccess(session.accessToken);
   assert(driver.contaMotoristaId);
   const links = new DriverLinkService(pool);
@@ -62,7 +78,13 @@ export async function testSharedDriverAccounts(pool: Pool, ok: (label: string) =
   const linked = await links.link(b.auth, driver.contaMotoristaId, true, {});
   await assert.rejects(links.link(b.auth, driver.contaMotoristaId, true, {}), { statusCode: 409 });
   assert.equal((await pool.query('SELECT count(*) FROM admtaxi.contas_motorista WHERE email=$1', ['shared.driver@example.test'])).rows[0].count, '1');
-  assert.equal((await login.identify({ email: 'shared.driver@example.test', senha: '654321' }))!.usuario.contaMotoristaId, driver.contaMotoristaId);
+  const selection = (await login.identify({ email: 'shared.driver@example.test', senha: '654321' }))!;
+  assert.deepEqual(new Set(selection.empresas.map(e => e.empresaId)), new Set([a.company, b.company]));
+  await assert.rejects(selectionService.select({ selecaoToken: selection.selecaoToken, empresaId: tenants[2]!.company }), { statusCode: 401 });
+  await assert.rejects(selectionService.select({ selecaoToken: selection.selecaoToken + 'bad', empresaId: a.company }), { statusCode: 401 });
+  const otherSession = await loginSession('654321', b.company);
+  const otherDriver = await tokens.authenticateAccess(otherSession.accessToken);
+  assert.equal(otherDriver.contaMotoristaId, driver.contaMotoristaId);
   await assert.rejects(providers.update(b.auth, linked.id, { acesso: { senha: '999999' } }, {}), { code: 'P2001' });
   ok('SHARED-01 one credential owner, direct authorized link, no other-tenant data, same password, duplicate link and shared-password protection');
 
@@ -72,36 +94,50 @@ export async function testSharedDriverAccounts(pool: Pool, ok: (label: string) =
     VALUES($1,$2,$3,$4,'IMEDIATA','Origem','Destino') RETURNING id`, [t.company, t.auth.usuarioId, t.employee, t.center])).rows[0]!.id;
   const rideIds = await Promise.all(tenants.map(makeRide));
   const listed = await rides.list(driver, { pagina: 1, limite: 100 });
-  assert.deepEqual(new Set(listed.data.map(r => r.empresaId)), new Set([a.company, b.company]));
+  assert.deepEqual(new Set(listed.data.map(r => r.empresaId)), new Set([a.company]));
+  assert.deepEqual(new Set((await rides.list(otherDriver, { pagina: 1, limite: 100 })).data.map(r => r.empresaId)), new Set([b.company]));
+  await assert.rejects(rides.get(driver, rideIds[1]!), { statusCode: 404 });
   assert(listed.data.every(r => r.empresaNome));
   await assert.rejects(rides.get(driver, rideIds[2]!), { statusCode: 404 });
   const vehicles = await operations.listMyVehicles(driver) as { id: string; empresaId: string }[];
-  assert.equal(vehicles.length, 2);
-  const results = await Promise.allSettled([a, b].map((t, i) => rides.accept(driver, rideIds[i]!, { veiculoId: vehicles.find(v => v.empresaId === t.company)!.id }, {})));
+  assert.equal(vehicles.length, 1);
+  assert.equal(vehicles[0]!.empresaId, a.company);
+  await pool.query("UPDATE admtaxi.empresas SET modo_cobranca='MENSAL_FIXO' WHERE id=$1", [a.company]);
+  assert.equal((await operations.getConfiguration(driver)).exibirFinanceiro, false);
+  assert.equal((await operations.getConfiguration(otherDriver)).exibirFinanceiro, true);
+  await pool.query("UPDATE admtaxi.empresas SET modo_cobranca='MANUAL' WHERE id=$1", [a.company]);
+  const otherVehicles = await operations.listMyVehicles(otherDriver);
+  await assert.rejects(rides.accept(driver, rideIds[1]!, { veiculoId: otherVehicles[0]!.id }, {}), { statusCode: 404 });
+  const results = await Promise.allSettled([
+    rides.accept(driver, rideIds[0]!, { veiculoId: vehicles[0]!.id }, {}),
+    rides.accept(otherDriver, rideIds[1]!, { veiculoId: otherVehicles[0]!.id }, {}),
+  ]);
   assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
   const winner = results.findIndex(r => r.status === 'fulfilled'), rideId = rideIds[winner]!, tenant = tenants[winner]!;
+  const winnerDriver = winner === 0 ? driver : otherDriver;
+  const winnerSession = winner === 0 ? session : otherSession;
   assert.equal((results[1-winner] as PromiseRejectedResult).reason.statusCode, 409);
-  const location = await locations.create(driver, rideId, { latitude: -18.9, longitude: -48.2, precisaoMetros: 4 });
+  const location = await locations.create(winnerDriver, rideId, { latitude: -18.9, longitude: -48.2, precisaoMetros: 4 });
   assert.equal(location.empresaId, tenant.company);
-  assert.equal((await locations.snapshot(driver, rideId)).corrida.empresaId, tenant.company);
+  assert.equal((await locations.snapshot(winnerDriver, rideId)).corrida.empresaId, tenant.company);
   await assert.rejects(locations.create(driver, rideIds[2]!, { latitude: 0, longitude: 0 }), { statusCode: 404 });
-  assert.equal((await operations.getMyProvider(driver))!.disponivel, false);
-  await assert.rejects(rides.setAvailability(driver, { disponivel: true }, {}), { statusCode: 409 });
-  const panel = await new PainelParticipanteRepository(pool).get(driver, { pagina: 1, limite: 100 });
+  assert.equal((await operations.getMyProvider(winnerDriver))!.disponivel, false);
+  await assert.rejects(rides.setAvailability(winnerDriver, { disponivel: true }, {}), { statusCode: 409 });
+  const panel = await new PainelParticipanteRepository(pool).get(winnerDriver, { pagina: 1, limite: 100 });
   assert.equal(panel.resumo.emAndamento, 1); assert.equal(panel.corridas.meta.total, 1);
-  const oldPanel = await new PainelParticipanteRepository(pool).get(driver, { pagina: 1, limite: 100, inicio: '2020-01-01', fim: '2020-01-31' });
+  const oldPanel = await new PainelParticipanteRepository(pool).get(winnerDriver, { pagina: 1, limite: 100, inicio: '2020-01-01', fim: '2020-01-31' });
   assert.equal(oldPanel.resumo.emAndamento, 0); assert.equal(oldPanel.disponibilidade, false);
-  ok('SHARED-02 combined list/pagination/panel, company labels, tenant-specific vehicles, cross-company acceptance race and GPS authorization');
+  ok('SHARED-02 selected-company list/panel/vehicles, foreign membership denied, global acceptance race and GPS authorization');
 
   const devices = new DispositivoService(pool), deviceKey = randomUUID();
   await devices.syncCurrent(driver, { chaveDispositivo: deviceKey, plataforma: 'ANDROID', nomeDispositivo: 'Synthetic', modoAcesso: 'PWA', notificacoesStatus: 'ATIVA', geolocalizacaoStatus: 'ATIVA' });
-  assert.equal((await pool.query('SELECT count(*) FROM admtaxi.dispositivos_usuario WHERE chave_dispositivo=$1 AND ativo', [deviceKey])).rows[0].count, '2');
+  assert.equal((await pool.query('SELECT count(*) FROM admtaxi.dispositivos_usuario WHERE chave_dispositivo=$1 AND ativo', [deviceKey])).rows[0].count, '1');
   await devices.deactivateCurrent(driver, deviceKey);
   assert.equal((await pool.query('SELECT count(*) FROM admtaxi.dispositivos_usuario WHERE chave_dispositivo=$1 AND ativo', [deviceKey])).rows[0].count, '0');
   const push = new NotificacaoService(pool);
   const subscription = await push.register(driver, { endpoint: 'https://push.example.test/shared', keys: { auth: 'synthetic', p256dh: 'synthetic-key-not-a-real-key' } }, null);
   const sibling = (await pool.query<{ usuario_id: string }>('SELECT usuario_id FROM admtaxi.prestadores WHERE id=$1', [linked.id])).rows[0]!;
-  assert.equal((await push.listDevices({ ...driver, empresaId: b.company, usuarioId: sibling.usuario_id }))[0]!.id, subscription.id);
+  assert.equal((await push.listDevices({ ...driver, empresaId: b.company, usuarioId: sibling.usuario_id })).length, 0);
   const pushKeys = webpush.generateVAPIDKeys();
   const sending = new NotificacaoService(pool, { ...pushKeys, subject: 'mailto:push@example.test', appUrl: 'https://app.example.test', defaultOpenUrl: '/app', rideOpenUrl: '/app/corridas' });
   const originalSend = webpush.sendNotification;
@@ -109,20 +145,22 @@ export async function testSharedDriverAccounts(pool: Pool, ok: (label: string) =
   webpush.sendNotification = async () => { deliveries++; return { statusCode: 201, body: '', headers: {} }; };
   try {
     await sending.sendTest({ ...driver, empresaId: b.company, usuarioId: sibling.usuario_id });
+    assert.equal(deliveries, 0);
+    await sending.sendTest(driver);
     assert.equal(deliveries, 1);
     const attempt = (await pool.query('SELECT empresa_id,subscription_empresa_id,status FROM admtaxi.push_tentativas WHERE subscription_id=$1', [subscription.id])).rows[0];
-    assert.deepEqual(attempt, { empresa_id: b.company, subscription_empresa_id: a.company, status: 'ENVIADA' });
+    assert.deepEqual(attempt, { empresa_id: a.company, subscription_empresa_id: a.company, status: 'ENVIADA' });
     await sending.sendTest(tenants[2]!.auth);
     const foreign = (await pool.query('SELECT id FROM admtaxi.notificacoes_push WHERE empresa_id=$1 AND evento=\'TESTE\'', [tenants[2]!.company])).rows[0];
     await assert.rejects(pool.query(`INSERT INTO admtaxi.push_tentativas(empresa_id,notificacao_id,subscription_id,subscription_empresa_id)
       VALUES($1,$2,$3,$4)`, [tenants[2]!.company, foreign.id, subscription.id, a.company]), { code: '23514' });
   } finally { webpush.sendNotification = originalSend; }
-  ok('SHARED-03 device permissions, cross-company push delivery/logging (transport mocked), foreign subscription denied by database');
+  ok('SHARED-03 device permissions and push restricted to selected membership (transport mocked), foreign subscription denied');
 
   const http = createServer(), io = attachSocketServer(http, { appOrigins: [] }, tokens, locations, bus, pino({ level: 'silent' }), pool);
   await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
   const address = http.address(); assert(address && typeof address !== 'string');
-  const socket = connectSocket(`http://127.0.0.1:${address.port}`, { auth: { token: session.accessToken }, transports: ['websocket'], reconnection: false });
+  const socket = connectSocket(`http://127.0.0.1:${address.port}`, { auth: { token: winnerSession.accessToken }, transports: ['websocket'], reconnection: false });
   try {
     await new Promise<void>((resolve, reject) => { socket.once('connect', resolve); socket.once('connect_error', reject); });
     const snap = await socket.timeout(5000).emitWithAck('corrida:acompanhar', { corridaId: rideId });
@@ -131,12 +169,15 @@ export async function testSharedDriverAccounts(pool: Pool, ok: (label: string) =
       const timer = setTimeout(() => reject(new Error('GPS socket timeout')), 5000);
       socket.once('localizacao:atualizada', payload => { clearTimeout(timer); resolve(payload); });
     });
-    await locations.create(driver, rideId, { latitude: -18.90001, longitude: -48.2 });
+    await locations.create(winnerDriver, rideId, { latitude: -18.90001, longitude: -48.2 });
     assert.equal((await update).empresaId, tenant.company);
     socket.disconnect(); socket.connect();
     await new Promise<void>((resolve, reject) => { socket.once('connect', resolve); socket.once('connect_error', reject); });
     assert.equal((await socket.timeout(5000).emitWithAck('corrida:acompanhar', { corridaId: rideId })).ok, true);
     assert.equal((await socket.timeout(5000).emitWithAck('corrida:acompanhar', { corridaId: rideIds[2] })).ok, false);
+    assert.equal((await socket.timeout(5000).emitWithAck('corrida:acompanhar', { corridaId: rideIds[1-winner] })).ok, false);
+    const rooms = [...io.sockets.sockets.values()][0]!.rooms;
+    assert([...rooms].filter(r => r.startsWith('empresa:')).every(r => r.startsWith(`empresa:${tenant.company}:`)));
   } finally { socket.disconnect(); await new Promise<void>(resolve => io.close(() => resolve())); }
   ok('SHARED-04 real Socket.IO room, GPS delivery, reconnect and foreign ride denial');
 
@@ -145,9 +186,10 @@ export async function testSharedDriverAccounts(pool: Pool, ok: (label: string) =
   assert.equal((await rides.list(driver, { pagina: 1, limite: 100 })).data.filter(r => r.status === 'SOLICITADA').length, 0);
   await rides.setAvailability(driver, { disponivel: true }, {});
   await providers.update(a.auth, created.id, { acesso: { ativo: false } }, {});
-  assert.equal(await repo.accessAllowed(driver), true);
-  assert.deepEqual(new Set((await rides.list(driver, { pagina: 1, limite: 100 })).data.map(r => r.empresaId)), new Set([b.company]));
-  const remaining = (await login.identify({ email: 'shared.driver@example.test', senha: '654321' }))!;
+  assert.equal(await repo.accessAllowed(driver), false);
+  await assert.rejects(new AuthService(repo, tokens).refresh({ refreshToken: session.refreshToken }), { statusCode: 401 });
+  assert.deepEqual((await login.identify({ email: 'shared.driver@example.test', senha: '654321' }))!.empresas.map(e => e.empresaId), [b.company]);
+  const remaining = await loginSession('654321', b.company);
   assert.equal(remaining.usuario.empresaId, b.company);
   await passwords.change(tokens.verifyAccess(remaining.accessToken), { senhaAtual: '654321', novaSenha: '987654' });
   await assert.rejects(tokens.authenticateAccess(session.accessToken), { statusCode: 401 });
@@ -169,5 +211,5 @@ export async function testSharedDriverAccounts(pool: Pool, ok: (label: string) =
   assert(await login.identify({ email: 'shared.driver@example.test', senha: '765432' }));
   await providers.update(b.auth, linked.id, { acesso: { ativo: false } }, {});
   assert.equal(await login.identify({ email: 'shared.driver@example.test', senha: '765432' }), null);
-  ok('SHARED-05 global availability, membership-only deactivation, remaining company access, global password/session revocation and company-free email recovery');
+  ok('SHARED-05 tenant availability, selected membership revocation, remaining company choice, shared password and email recovery');
 }

@@ -50,7 +50,7 @@ export class OperacaoRepository {
     if (auth.perfil === 'PRESTADOR' && auth.contaMotoristaId) {
       const linked = await this.database.query<{ manual: boolean }>(`SELECT EXISTS(
         SELECT 1 FROM admtaxi.motorista_vinculos_ativos m JOIN admtaxi.empresas e ON e.id=m.empresa_id
-        WHERE m.conta_id=$1 AND e.modo_cobranca='MANUAL') AS manual`, [auth.contaMotoristaId]);
+        WHERE m.conta_id=$1 AND m.empresa_id=$2 AND e.modo_cobranca='MANUAL') AS manual`, [auth.contaMotoristaId, auth.empresaId]);
       return { ...configuration, exibirFinanceiro: linked.rows[0]?.manual === true };
     }
     return { ...configuration, exibirFinanceiro: configuration.modoCobranca === 'MANUAL' };
@@ -278,7 +278,7 @@ export class OperacaoRepository {
     if (auth.contaMotoristaId) return (await this.database.query<VeiculoLookup>(
       `SELECT v.id,v.placa,v.marca,v.modelo,v.cor,v.capacidade_passageiros AS "capacidadePassageiros",v.empresa_id AS "empresaId",m.empresa_nome AS "empresaNome"
        FROM admtaxi.veiculos v JOIN admtaxi.motorista_vinculos_ativos m ON m.empresa_id=v.empresa_id AND m.prestador_id=v.prestador_id
-       WHERE m.conta_id=$1 AND v.ativo ORDER BY m.empresa_nome,v.placa,v.id`, [auth.contaMotoristaId])).rows;
+       WHERE m.conta_id=$1 AND m.empresa_id=$2 AND m.usuario_id=$3 AND v.ativo ORDER BY m.empresa_nome,v.placa,v.id`, [auth.contaMotoristaId, auth.empresaId, auth.usuarioId])).rows;
     const result = await this.database.query<VeiculoLookup>(
       `SELECT v.id, v.placa, v.marca, v.modelo, v.cor,
               v.capacidade_passageiros AS "capacidadePassageiros"

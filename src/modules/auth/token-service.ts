@@ -27,7 +27,7 @@ const tenantSelectionSchema = z.object({
   tipo: z.literal('tenant-company-selection'),
   email: z.string().email(),
   usuarios: z.array(z.object({ sub: z.string().uuid(), versao: z.number().int().nonnegative(),
-    perfil: z.enum(['GERENTE', 'PORTARIA']) })).min(1).max(20),
+    perfil: z.enum(['GERENTE', 'PORTARIA', 'PRESTADOR']) })).min(1).max(20),
 });
 
 export type IssuedTokens = {

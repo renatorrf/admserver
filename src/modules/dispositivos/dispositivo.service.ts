@@ -48,7 +48,7 @@ export class DispositivoService {
   async deactivateCurrent(auth: AuthContext, deviceKey: string): Promise<void> {
     if (auth.contaMotoristaId) {
       await this.database.query(`UPDATE admtaxi.dispositivos_usuario SET ativo=FALSE,ultimo_uso_em=CURRENT_TIMESTAMP
-        WHERE chave_dispositivo=$2 AND usuario_id IN(SELECT id FROM admtaxi.usuarios WHERE conta_motorista_id=$1)`, [auth.contaMotoristaId, deviceKey]);
+        WHERE chave_dispositivo=$2 AND empresa_id=$3 AND usuario_id=$4 AND usuario_id IN(SELECT id FROM admtaxi.usuarios WHERE conta_motorista_id=$1)`, [auth.contaMotoristaId, deviceKey, auth.empresaId, auth.usuarioId]);
       return;
     }
     await this.database.query(

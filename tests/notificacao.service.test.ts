@@ -62,14 +62,14 @@ describe('NotificacaoService', () => {
     });
     expect(send.mock.calls[0]![2]).toMatchObject({ TTL: 300, urgency: 'high', topic: expect.stringMatching(/^[A-Za-z0-9_-]{32}$/) });
   });
-  it('limita a caixa normal a empresa e usuario, e a do motorista aos seus vinculos ativos', async () => {
+  it('limita a caixa de todos os perfis a empresa e usuario selecionados', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
     const service = new NotificacaoService({ query } as unknown as Database);
     await service.listOwn({ ...auth, perfil: 'FUNCIONARIO' });
     expect(query).toHaveBeenLastCalledWith(expect.stringContaining('empresa_id=$1 AND usuario_id=$2'), [auth.empresaId, auth.usuarioId]);
     await service.listOwn({ ...auth, contaMotoristaId: 'shared-driver' });
-    expect(query).toHaveBeenLastCalledWith(expect.stringContaining('m.empresa_id=n.empresa_id AND m.usuario_id=n.usuario_id'), ['shared-driver']);
-    expect(query.mock.calls[1]![0]).toContain('motorista_vinculos_ativos');
+    expect(query).toHaveBeenLastCalledWith(expect.stringContaining('empresa_id=$1 AND usuario_id=$2'), [auth.empresaId, auth.usuarioId]);
+    expect(query.mock.calls[1]![0]).not.toContain('motorista_vinculos_ativos');
   });
   it('direciona etapa individual apenas ao passageiro afetado com deduplicacao por versao', async () => {
     const query = vi.fn().mockImplementation((sql: string) => {

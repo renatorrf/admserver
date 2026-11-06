@@ -1,5 +1,15 @@
 # ADM Taxi Backend
 
+## Conta unica de Supervisor e Portaria
+
+- A migracao `029_contas_equipe` preserva as identidades e senhas existentes, sem mesclar emails repetidos.
+- Aplique a migracao antes de iniciar/publicar esta versao da API.
+- Em Cadastros, o gestor pode buscar pelo email completo e vincular uma conta de Supervisor/Portaria a empresa autenticada.
+- `GET /api/v1/usuarios/contas-equipe?email=...` retorna apenas id, nome, email e se ja existe vinculo local.
+- `POST /api/v1/usuarios/vincular-conta` recebe `contaId` e `perfil` (`GERENTE` ou `PORTARIA`). Nao aceita `empresaId` nem copia escopo de outras empresas.
+- Cada vinculo tem perfil, status e setores/centros independentes. A senha e unica, inclusive na recuperacao por email.
+- Cadastros empresariais nao podem sobrescrever email/senha de uma conta compartilhada; a troca de senha e feita pelo titular e revoga todas as sessoes anteriores.
+
 ## Funcionarios vinculados a varias empresas (021)
 
 Migration `021_contas_funcionario` aplicada no banco remoto em 19/10/2026 com autorizacao explicita.
@@ -18,7 +28,7 @@ Verificacao: 4 contas e 4 vinculos; nenhuma divergencia de credenciais; 2 empres
   `selecaoToken` e apenas os vinculos ativos. `POST /api/v1/auth/funcionario/empresa` revalida a
   conta, sua versao e o vinculo, emitindo uma sessao restrita a empresa selecionada.
 - A selecao expira em cinco minutos e nao pode ser usada como token de API ou de gestor.
-  Motoristas continuam entrando diretamente, sem selecionar empresa.
+  Motoristas tambem selecionam a unidade desde a migracao 030; uma unica empresa entra automaticamente.
 - Senha temporaria continua exigindo troca. Alteracao/recuperacao pessoal revoga as sessoes de
   todas as empresas; recuperacao aceita apenas e-mail. Gestores nao podem alterar senha/e-mail
   de uma conta compartilhada. Inativar um cadastro bloqueia somente aquele vinculo.
@@ -40,6 +50,12 @@ O backend verifica a migration 016 na inicializacao. A sintaxe usa `EXECUTE PROC
 - Portal master: criar empresa com `gestor: { nome, email, telefone, senha }` ou
   `gestor: { contaId }`. O segundo formato vincula a conta existente, sem criar outra senha.
 - `GET /api/v1/master/gestores?busca=...&pagina=1&limite=20`: pesquisa paginada restrita ao master.
+- Dentro da unidade, o GESTOR pode usar `GET /api/v1/usuarios/contas-gestor?email=...` e
+  `POST /api/v1/usuarios/vincular-gestor` com `{ contaId }`. A empresa vem exclusivamente do token;
+  a busca por email completo nao expoe empresas, historicos ou permissoes externas.
+- Cadastros oferece "Usar cadastro existente em outra unidade" para todos os perfis empresariais.
+  Funcionario recebe matricula/centro de custo locais; Supervisor recebe setores/centros locais.
+  Gestor e Portaria conservam suas permissoes de perfil somente na unidade autenticada.
 - `POST /api/v1/auth/gestor/login` recebe `{ email, senha }` e retorna `{ selecaoToken, empresas }`.
   Nao cria sessao empresarial. A lista contem somente vinculos ativos em empresas ativas.
 - `POST /api/v1/auth/gestor/empresa` recebe `{ selecaoToken, empresaId }`, revalida o vinculo
@@ -347,25 +363,25 @@ os indicadores em `docs/DASHBOARD_E_RELATORIOS.md`. Faturamento e push estao doc
 
 ## Qualidade
 
-### Motoristas vinculados a varias empresas (020)
+### Motoristas vinculados a varias empresas (020 e 030)
 
 - O gestor pesquisa o e-mail completo em `GET /api/v1/motoristas/vinculos` e confirma o vinculo
   com `POST /api/v1/motoristas/vinculos` (`contaId`, `copiarVeiculo`). A pesquisa nao revela
   empresas, clientes ou corridas de terceiros. O vinculo e direto, auditado e transacional.
-- `POST /api/v1/auth/acesso` recebe somente e-mail/senha. Motoristas recebem a sessao diretamente;
-  gestores continuam com a selecao de empresas. O login antigo por empresa permanece compativel.
+- `POST /api/v1/auth/acesso` recebe somente e-mail/senha. Motoristas recebem empresas autorizadas
+  e `perfilSelecao: EMPRESA`; `/auth/empresa/selecionar` emite a sessao da unidade escolhida.
+  Com uma unica empresa, o frontend confirma automaticamente. O login por empresa continua compativel.
 - A credencial pertence a `contas_motorista`; os registros locais de usuario/prestador/veiculo
   preservam historicos e isolamento. A empresa de cada operacao vem do vinculo autenticado e
-  da corrida consultada no servidor, nunca de um seletor do motorista.
-- Corridas, painel, faturamentos, GPS e rooms abrangem os vinculos ativos. O aceite usa trava
+  do token validado no servidor, nunca de um `empresaId` enviado nas operacoes.
+- Corridas, painel, faturamentos, GPS, dispositivos e rooms abrangem somente a unidade selecionada. O aceite usa trava
   da conta para impedir duas corridas simultaneas entre empresas. Inativar um vinculo nao
   inativa os demais. As rooms sao reconciliadas a cada 15 segundos e a cada reconexao.
 - Troca/recuperacao de senha altera a credencial unica e revoga sessoes de todos os vinculos.
   Gestores nao podem redefinir a senha de uma conta compartilhada pelo cadastro local.
-- O push usa as inscricoes da conta, mantendo a notificacao na empresa de origem e verificando
-  no banco se a inscricao de outra empresa pertence ao mesmo motorista. A 020 preserva as
-  tentativas existentes, separando suas duas empresas na chave estrangeira do dispositivo.
-- Aplicar a 020 antes de publicar o backend e depois atualizar frontend/APK. Fazer novo login
+- O push usa somente a inscricao da unidade selecionada. A 030 restringe `fcm_destinatarios`,
+  preservando os logs; a troca de unidade reassocia o dispositivo e invalida entregas pendentes antigas.
+- Aplicar a 030 antes de publicar o backend e depois atualizar frontend/APK. Fazer novo login
   para obter o token com `contaMotoristaId`. A migracao preserva senhas e nao mescla contas antigas
   automaticamente. O rollback destrutivo esta bloqueado; usar uma correcao forward se necessario.
 

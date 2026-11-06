@@ -367,6 +367,28 @@ export const openApiDocument = {
       },
     },
     '/usuarios': usuarios.collection,
+    '/usuarios/contas-gestor': {
+      get: { tags: ['Usuarios'], summary: 'Busca gestor existente pelo email completo; somente GESTOR', security: bearerSecurity,
+        parameters: [{ name: 'email', in: 'query', required: true, schema: { type: 'string', format: 'email' } }],
+        responses: { 200: { description: 'id, nome, email e vinculado; sem expor outras unidades' }, 403: { description: 'Acesso negado' } } },
+    },
+    '/usuarios/vincular-gestor': {
+      post: { tags: ['Usuarios'], summary: 'Usar cadastro de gestor existente na unidade autenticada; somente GESTOR', security: bearerSecurity,
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
+          required: ['contaId'], properties: { contaId: { type: 'string', format: 'uuid' } } } } } },
+        responses: { 201: { description: 'Vinculo local criado com a mesma credencial' }, 403: { description: 'Acesso negado' }, 404: { description: 'Conta ativa nao encontrada' }, 409: { description: 'Vinculo existente ou conflito cadastral' } } },
+    },
+    '/usuarios/contas-equipe': {
+      get: { tags: ['Usuarios'], summary: 'Busca conta de Supervisor ou Portaria pelo email completo; somente GESTOR', security: bearerSecurity,
+        parameters: [{ name: 'email', in: 'query', required: true, schema: { type: 'string', format: 'email' } }],
+        responses: { 200: { description: 'Dados minimos: id, nome, email e vinculado. Sem empresas ou permissoes de origem.' }, 403: { description: 'Acesso negado' } } },
+    },
+    '/usuarios/vincular-conta': {
+      post: { tags: ['Usuarios'], summary: 'Vincula conta existente na empresa autenticada; somente GESTOR', security: bearerSecurity,
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
+          required: ['contaId', 'perfil'], properties: { contaId: { type: 'string', format: 'uuid' }, perfil: { type: 'string', enum: ['GERENTE', 'PORTARIA'] } } } } } },
+        responses: { 201: { description: 'Vinculo criado, sem copiar escopo de outra empresa' }, 403: { description: 'Acesso negado' }, 409: { description: 'Conta ja vinculada ou conflito cadastral' }, 422: { description: 'Dados invalidos' } } },
+    },
     '/usuarios/controle': {
       get: {
         tags: ['Usuarios'], security: bearerSecurity, summary: 'Controle de usuarios e acessos da empresa (GESTOR)',
@@ -979,11 +1001,11 @@ export const openApiDocument = {
           },
           prestador: {
             type: 'object', additionalProperties: false,
-            required: ['reutilizarDadosAcesso', 'cpf', 'numeroCnh', 'validadeCnh', 'disponivel', 'ativo'],
+            required: ['reutilizarDadosAcesso', 'cpf', 'numeroCnh', 'disponivel', 'ativo'],
             properties: {
               reutilizarDadosAcesso: { type: 'boolean' }, nome: { type: 'string', minLength: 2, maxLength: 150 },
               cpf: { type: 'string' }, telefone: { type: 'string', maxLength: 20 }, email: { type: ['string', 'null'], format: 'email' },
-              numeroCnh: { type: 'string' }, validadeCnh: { type: 'string', format: 'date' },
+              numeroCnh: { type: 'string' }, validadeCnh: { type: 'string', format: 'date', nullable: true },
               disponivel: { type: 'boolean' }, ativo: { type: 'boolean' },
             },
           },
