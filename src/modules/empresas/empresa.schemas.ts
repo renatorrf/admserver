@@ -14,7 +14,7 @@ const nullableCoordinate = (minimum: number, maximum: number, message: string) =
   z.coerce.number().min(minimum, message).max(maximum, message).nullable().optional(),
 );
 
-export const empresaUpdateSchema = z.object({
+const empresaUpdateFields = z.object({
   modoCobranca: z.enum(['MANUAL', 'MENSAL_FIXO']).optional(),
   ...companyAddressFields,
   codigoAcesso: z.string().trim().min(2).max(50)
@@ -35,15 +35,22 @@ export const empresaUpdateSchema = z.object({
   ]).optional(),
   latitudePadrao: nullableCoordinate(-90, 90, 'Latitude padrao invalida.'),
   longitudePadrao: nullableCoordinate(-180, 180, 'Longitude padrao invalida.'),
-}).strict().refine((value) => Object.values(value).some((item) => item !== undefined), {
-  message: 'Informe ao menos um campo para atualizar.',
-}).superRefine((value, context) => {
+}).strict();
+
+function validateCompanyUpdate(value: z.infer<typeof empresaUpdateFields>, context: z.RefinementCtx): void {
+  if (!Object.values(value).some(item => item !== undefined))
+    context.addIssue({ code: 'custom', message: 'Informe ao menos um campo para atualizar.' });
   validateCompanyAddress(value, context);
   const latitudeProvided = value.latitudePadrao !== undefined;
   const longitudeProvided = value.longitudePadrao !== undefined;
   if (latitudeProvided !== longitudeProvided) {
     context.addIssue({ code: 'custom', path: ['latitudePadrao'], message: 'Informe latitude e longitude padrao juntas.' });
   }
-});
+}
 
+export const empresaUpdateSchema = empresaUpdateFields.superRefine(validateCompanyUpdate);
+export const masterEmpresaUpdateSchema = empresaUpdateFields.extend({
+  exigeAprovacaoGestor: z.boolean().optional(),
+}).superRefine(validateCompanyUpdate);
 export type EmpresaUpdateInput = z.infer<typeof empresaUpdateSchema>;
+export type MasterEmpresaUpdateInput = z.infer<typeof masterEmpresaUpdateSchema>;

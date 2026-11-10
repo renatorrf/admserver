@@ -44,9 +44,9 @@ export type OperationalScopeSummary = {
 
 export class OperacaoRepository {
   async getConfiguration(auth: AuthContext) {
-    const result = await this.database.query<{ modoCobranca: string }>(
-      'SELECT modo_cobranca AS "modoCobranca" FROM admtaxi.empresas WHERE id=$1 AND ativo=TRUE', [auth.empresaId]);
-    const configuration = result.rows[0] ?? { modoCobranca: 'MANUAL' };
+    const result = await this.database.query<{ modoCobranca: string; exigeAprovacaoGestor: boolean }>(
+      'SELECT modo_cobranca AS "modoCobranca",exige_aprovacao_gestor AS "exigeAprovacaoGestor" FROM admtaxi.empresas WHERE id=$1 AND ativo=TRUE', [auth.empresaId]);
+    const configuration = result.rows[0] ?? { modoCobranca: 'MANUAL', exigeAprovacaoGestor: true };
     if (auth.perfil === 'PRESTADOR' && auth.contaMotoristaId) {
       const linked = await this.database.query<{ manual: boolean }>(`SELECT EXISTS(
         SELECT 1 FROM admtaxi.motorista_vinculos_ativos m JOIN admtaxi.empresas e ON e.id=m.empresa_id

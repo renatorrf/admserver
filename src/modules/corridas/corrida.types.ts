@@ -1,4 +1,5 @@
 import type { ItinerarySnapshot } from './itinerary';
+import type { Parcel } from './parcel';
 
 export const statusCorrida = [
   'SOLICITADA',
@@ -35,7 +36,8 @@ export type CorridaRecord = Record<string, unknown> & {
   empresaId: string;
   empresaNome?: string;
   solicitanteUsuarioId: string;
-  funcionarioId: string;
+  funcionarioId: string | null;
+  encomenda?: Parcel | null;
   centroCustoId: string;
   prestadorId: string | null;
   veiculoId: string | null;

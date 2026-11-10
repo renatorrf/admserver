@@ -10,7 +10,7 @@ import { MasterRepository, publicMaster } from './master.repository';
 import type { MasterContext, MasterPublic, MasterSession } from './master.types';
 import type { MasterTokenService } from './master-token.service';
 import { empresaFieldColumns, mapEmpresa } from '../empresas/empresa.service';
-import type { EmpresaUpdateInput } from '../empresas/empresa.schemas';
+import type { MasterEmpresaUpdateInput } from '../empresas/empresa.schemas';
 
 export type PlatformCompany = {
   id: string; codigoAcesso: string; razaoSocial: string; nomeFantasia: string;
@@ -111,7 +111,7 @@ export class MasterService {
     return mapEmpresa(result.rows[0]);
   }
 
-  async updateCompany(context: MasterContext, id: string, input: EmpresaUpdateInput, metadata: ProvisionamentoMetadata) {
+  async updateCompany(context: MasterContext, id: string, input: MasterEmpresaUpdateInput, metadata: ProvisionamentoMetadata) {
     return withTransaction(this.pool, async client => {
       await this.requireReady(context, client, true);
       const current = await client.query('SELECT * FROM admtaxi.empresas WHERE id = $1 FOR UPDATE', [id]);
@@ -119,7 +119,7 @@ export class MasterService {
       const values: unknown[] = [id];
       const assignments = Object.entries(input).filter(([, value]) => value !== undefined).map(([key, value]) => {
         values.push(value);
-        return `${empresaFieldColumns[key as keyof EmpresaUpdateInput]} = $${values.length}`;
+        return `${empresaFieldColumns[key as keyof MasterEmpresaUpdateInput]} = $${values.length}`;
       });
       const result = await client.query(`UPDATE admtaxi.empresas SET ${assignments.join(', ')} WHERE id = $1 RETURNING *`, values);
       const updated = mapEmpresa(result.rows[0]);

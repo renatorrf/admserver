@@ -5,11 +5,14 @@ import type { AuditMetadata } from '../auditoria/audit.types';
 import type { CorridaAuditWriter, CorridaService } from '../corridas/corrida.service';
 import { commandHash } from '../corridas/itinerary.repository';
 import { centerAllowed, OperationalScopeService } from '../escopo/operational-scope.service';
-import { conferenceData, requisicaoSchema, toRideInput, type RequisitionInput, type RequisitionRow } from './requisicao.schemas';
+import { conferenceData, parcelRideInput, requisicaoSchema, toRideInput, type RequisitionInput, type RequisitionRow } from './requisicao.schemas';
 import type { TravelEmails } from './travel-emails';
 import { resolveGuests } from './guest-passengers';
 import type { RequisitionRealtimePublisher } from '../../realtime/realtime-bus';
 import type { RequisitionRideSummary } from './requisicao.schemas';
+
+const parcelCenterLabel = `(SELECT cc.codigo || ' · ' || cc.nome FROM admtaxi.centros_custo cc
+  WHERE cc.empresa_id=r.empresa_id AND cc.id=(r.dados->'encomenda'->>'centroCustoId')::uuid) AS "encomendaCentroCusto"`;
 
 export class RequisitionService {
   constructor(private readonly database: Database, private readonly audit: CorridaAuditWriter,
@@ -17,7 +20,7 @@ export class RequisitionService {
     private readonly realtime?: RequisitionRealtimePublisher) {}
   async list(auth: AuthContext, offset = 0): Promise<RequisitionRow[]> {
     this.authorize(auth);
-    const result = await this.database.query<RequisitionRow>(`SELECT r.*,u.nome AS solicitante,
+    const result = await this.database.query<RequisitionRow>(`SELECT r.*,u.nome AS solicitante,${parcelCenterLabel},
       (SELECT c.status FROM admtaxi.corridas c WHERE c.empresa_id=r.empresa_id AND c.id=r.corrida_id) AS "corridaStatus",
       (SELECT json_agg(json_build_object('id',f.id,'nome',f.nome)) FROM admtaxi.funcionarios f WHERE f.empresa_id=r.empresa_id
         AND f.id::text IN (SELECT p->>'funcionarioId' FROM jsonb_array_elements(r.dados->'participantes') p)) AS funcionarios
@@ -30,7 +33,7 @@ export class RequisitionService {
   }
   async get(auth: AuthContext, id: string, client: QueryExecutor = this.database, lock = false): Promise<RequisitionRow> {
     this.authorize(auth);
-    const result = await client.query<RequisitionRow>(`SELECT r.*,
+    const result = await client.query<RequisitionRow>(`SELECT r.*,${parcelCenterLabel},
       (SELECT c.status FROM admtaxi.corridas c WHERE c.empresa_id=r.empresa_id AND c.id=r.corrida_id) AS "corridaStatus",
       (SELECT json_agg(json_build_object('id',f.id,'nome',f.nome)) FROM admtaxi.funcionarios f WHERE f.empresa_id=r.empresa_id
         AND f.id::text IN (SELECT p->>'funcionarioId' FROM jsonb_array_elements(r.dados->'participantes') p)) AS funcionarios
@@ -52,11 +55,12 @@ export class RequisitionService {
         if (previous.rows[0].conteudo_hash!==commandHash(input)) throw conflict('Esta requisicao ja foi enviada com outros dados.');
         return previous.rows[0];
       }
-      await this.validate(client,auth,input);
+      const { requiresManagerApproval } = await this.validate(client,auth,input);
+      const status = auth.perfil === 'GESTOR' || !requiresManagerApproval ? 'AUTORIZADA' : 'PENDENTE';
       const result = await client.query<RequisitionRow>(`INSERT INTO admtaxi.requisicoes_viagem
         (empresa_id,solicitante_id,chave,conteudo_hash,dados,status,decisor_id,decidida_em)
         VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $7::uuid IS NOT NULL THEN CURRENT_TIMESTAMP ELSE NULL END) RETURNING *`,
-      [auth.empresaId,auth.usuarioId,input.chave,commandHash(input),JSON.stringify(input),auth.perfil==='GESTOR' ? 'AUTORIZADA' : 'PENDENTE',auth.perfil==='GESTOR' ? auth.usuarioId : null]);
+      [auth.empresaId,auth.usuarioId,input.chave,commandHash(input),JSON.stringify(input),status,auth.perfil==='GESTOR' ? auth.usuarioId : null]);
       const row = result.rows[0]!;
       await this.record(client,auth,row,'CRIAR',metadata);
       await this.emails.enqueue(client,row,row.status); return row;
@@ -78,7 +82,7 @@ export class RequisitionService {
     });
     this.publish(result); await this.emails.kick(); return result;
   }
-  async dispatch(auth: AuthContext,id: string,participants: RequisitionInput['participantes'],metadata: AuditMetadata) {
+  async dispatch(auth: AuthContext,id: string,participants: RequisitionInput['participantes'],metadata: AuditMetadata,valorEncomenda?: string) {
     if (auth.perfil!=='PORTARIA') throw forbidden('Somente a portaria pode solicitar a corrida apos conferencia.');
     let request: RequisitionRow | undefined;
     // The hook runs inside the ride transaction and locks the request through creation and linking.
@@ -87,13 +91,21 @@ export class RequisitionService {
       request = row;
       if (row.corrida_id) return { existingId: row.corrida_id };
       if (row.status!=='AUTORIZADA') throw conflict('A viagem precisa estar autorizada pelo gestor.');
-      const data = conferenceData(requisicaoSchema.parse(row.dados),participants);
+      const approved = requisicaoSchema.parse(row.dados);
+      if (approved.encomenda && (participants.length || (valorEncomenda !== undefined
+        && approved.encomenda.valor !== undefined && valorEncomenda !== approved.encomenda.valor))) {
+        throw conflict('Mantenha os dados da encomenda autorizada.');
+      }
+      if (!approved.encomenda && valorEncomenda !== undefined) throw invalidReference('Esta requisicao nao e de encomenda.');
+      const data = approved.encomenda
+        ? { ...approved, encomenda: { ...approved.encomenda, valor: approved.encomenda.valor ?? valorEncomenda } }
+        : conferenceData(approved,participants);
       const { centers, monthly } = await this.validate(client,auth,data,true);
       const resolved = await resolveGuests(client,auth.empresaId,row.id,data.participantes,async (id,before,after) => {
         await this.audit.record(client,{...metadata,empresaId:auth.empresaId,usuarioId:auth.usuarioId,
           entidade:'funcionario',entidadeId:id,acao:'COMPLETAR_PRE_CADASTRO',dadosAnteriores:before,dadosNovos:after});
       });
-      return { input: toRideInput(data,centers,monthly,resolved), complete: async (corridaId: string) => {
+      return { input: data.encomenda ? parcelRideInput(data) : toRideInput(data,centers,monthly,resolved), complete: async (corridaId: string) => {
         const updated = await client.query<RequisitionRow>(`UPDATE admtaxi.requisicoes_viagem SET status='SOLICITADA',dados=$3,
           corrida_id=$4,conferente_id=$5,atualizada_em=CURRENT_TIMESTAMP WHERE empresa_id=$1 AND id=$2 RETURNING *`,
         [auth.empresaId,id,JSON.stringify(data),corridaId,auth.usuarioId]);
@@ -115,8 +127,10 @@ export class RequisitionService {
     if (!ids.length) return;
     const result = await db.query<RequisitionRideSummary & { id: string }>(
       `SELECT c.id,c.status,p.nome AS "motoristaNome",
-         (SELECT count(*)::int FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id) AS "paradasTotal",
-         (SELECT count(*)::int FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id AND s.estado='CONCLUIDA') AS "paradasConcluidas",
+         CASE WHEN c.encomenda IS NOT NULL THEN 2 ELSE
+           (SELECT count(*)::int FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id) END AS "paradasTotal",
+         CASE WHEN c.encomenda IS NOT NULL THEN (c.embarque_em IS NOT NULL)::int + (c.desembarque_em IS NOT NULL)::int ELSE
+           (SELECT count(*)::int FROM admtaxi.corrida_paradas s WHERE s.empresa_id=c.empresa_id AND s.corrida_id=c.id AND s.estado='CONCLUIDA') END AS "paradasConcluidas",
          (SELECT count(*)::int FROM admtaxi.corrida_participacoes cp WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND cp.estado='AUSENTE') AS "passageirosAusentes"
        FROM admtaxi.corridas c LEFT JOIN admtaxi.prestadores p ON p.empresa_id=c.empresa_id AND p.id=c.prestador_id
        WHERE c.empresa_id=$1 AND c.id=ANY($2::uuid[])`, [auth.empresaId, ids]);
@@ -126,9 +140,22 @@ export class RequisitionService {
   private async validate(client: QueryExecutor,auth: AuthContext,input: RequisitionInput,complete = false) {
     if (input.tipo==='AGENDADA' && new Date(input.agendadaPara!).getTime()<=Date.now()) throw invalidReference('Informe um horario futuro para a viagem agendada.');
     const scope = await new OperationalScopeService(this.database).resolve(auth,client);
-    const company = await client.query<{ modo_cobranca: string }>('SELECT modo_cobranca FROM admtaxi.empresas WHERE id=$1 AND ativo FOR SHARE',[auth.empresaId]);
+    const company = await client.query<{ modo_cobranca: string; exige_aprovacao_gestor: boolean }>(
+      'SELECT modo_cobranca,exige_aprovacao_gestor FROM admtaxi.empresas WHERE id=$1 AND ativo FOR SHARE',[auth.empresaId]);
     if (!company.rows[0]) throw forbidden('Empresa inativa.');
     const monthly = company.rows[0].modo_cobranca==='MENSAL_FIXO';
+    const requiresManagerApproval = company.rows[0].exige_aprovacao_gestor;
+    if (input.encomenda) {
+      const { centroCustoId, valor } = input.encomenda;
+      if (!centerAllowed(scope, centroCustoId)) throw forbidden('Centro de custo fora do seu escopo.');
+      const center = await client.query(`SELECT c.id FROM admtaxi.centros_custo c JOIN admtaxi.setores s
+        ON s.empresa_id=c.empresa_id AND s.id=c.setor_id
+        WHERE c.empresa_id=$1 AND c.id=$2 AND c.ativo AND s.ativo FOR SHARE OF c,s`, [auth.empresaId,centroCustoId]);
+      if (!center.rowCount) throw invalidReference('Selecione um centro de custo com setor ativo.');
+      if (monthly && valor !== undefined) throw invalidReference('Encomendas no mensal fixo nao possuem valor individual.');
+      if (complete && !monthly && valor === undefined) throw invalidReference('Informe o valor da encomenda antes de liberar.');
+      return { monthly, requiresManagerApproval, centers: new Map<string,string>() };
+    }
     const employees = await client.query<{ id: string; centro_custo_id: string }>(`SELECT f.id,f.centro_custo_id FROM admtaxi.funcionarios f
       JOIN admtaxi.centros_custo c ON c.empresa_id=f.empresa_id AND c.id=f.centro_custo_id AND c.ativo
       JOIN admtaxi.setores s ON s.empresa_id=c.empresa_id AND s.id=c.setor_id AND s.ativo
@@ -149,7 +176,7 @@ export class RequisitionService {
     }
     if (monthly && input.participantes.some(p => p.valor!==undefined)) throw invalidReference('Empresa com mensalidade fixa: nao informe valores individuais.');
     if (complete && !monthly && input.participantes.some(p => p.valor===undefined)) throw invalidReference('Informe o valor de cada funcionario antes de solicitar.');
-    return { monthly,centers };
+    return { monthly,requiresManagerApproval,centers };
   }
   private authorize(auth: AuthContext): void { if (!['GESTOR','GERENTE','PORTARIA'].includes(auth.perfil)) throw forbidden(); }
   private record(client: QueryExecutor,auth: AuthContext,row: RequisitionRow,action: string,metadata: AuditMetadata) {

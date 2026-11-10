@@ -66,7 +66,7 @@ export class FaturamentoService {
         fn.id AS funcionario_id,fn.nome AS funcionario_nome
       FROM admtaxi.corridas c
       JOIN admtaxi.corrida_custos a ON a.empresa_id=c.empresa_id AND a.corrida_id=c.id
-      JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=a.funcionario_id
+      LEFT JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=a.funcionario_id
       JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=a.centro_custo_id
       JOIN admtaxi.setores s ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id
       LEFT JOIN admtaxi.prestadores p ON p.empresa_id=c.empresa_id AND p.id=c.prestador_id
@@ -94,7 +94,7 @@ export class FaturamentoService {
         UNION ALL SELECT 'CENTRO_CUSTO',centro_id,centro_codigo,centro_nome,COUNT(DISTINCT corrida_id)::text,SUM(valor_final)::text FROM base
           WHERE status='FINALIZADA' AND valor_final IS NOT NULL GROUP BY centro_id,centro_codigo,centro_nome
         UNION ALL SELECT 'FUNCIONARIO',funcionario_id,NULL::text,funcionario_nome,COUNT(DISTINCT corrida_id)::text,SUM(valor_final)::text FROM base
-          WHERE status='FINALIZADA' AND valor_final IS NOT NULL GROUP BY funcionario_id,funcionario_nome
+          WHERE status='FINALIZADA' AND valor_final IS NOT NULL AND funcionario_id IS NOT NULL GROUP BY funcionario_id,funcionario_nome
         ORDER BY dimensao,nome`, values),
       this.database.query<{ status: string; total: string }>(
         `SELECT status::text,COUNT(*)::text AS total FROM admtaxi.faturamentos
@@ -225,15 +225,15 @@ export class FaturamentoService {
       `${this.billingSelect()} WHERE f.empresa_id=$1 AND f.id=$2${provider}`, values);
     if (!billing) throw notFound('Faturamento');
     const items = await this.database.query(
-      `SELECT fi.id::text || ':' || a.funcionario_id::text AS id,fi.corrida_id AS "corridaId",
+      `SELECT fi.id::text || ':' || COALESCE(a.funcionario_id::text,'encomenda') AS id,fi.corrida_id AS "corridaId",
         a.valor::text AS "valorFaturado",fi.ativo,
         c.finalizada_em AS "finalizadaEm",c.origem_descricao AS "origemDescricao",c.destino_descricao AS "destinoDescricao",
-        fn.nome AS "funcionarioNome",cc.codigo AS "centroCustoCodigo",cc.nome AS "centroCustoNome",
+        COALESCE(fn.nome,'Encomenda: ' || (c.encomenda->>'descricao')) AS "funcionarioNome",cc.codigo AS "centroCustoCodigo",cc.nome AS "centroCustoNome",
         p.nome AS "prestadorNome"
        FROM admtaxi.faturamento_itens fi
        JOIN admtaxi.corridas c ON c.empresa_id=fi.empresa_id AND c.id=fi.corrida_id
        JOIN admtaxi.faturamento_custos a ON a.empresa_id=fi.empresa_id AND a.item_id=fi.id
-       JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=a.funcionario_id
+       LEFT JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=a.funcionario_id
        JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=a.centro_custo_id
        JOIN admtaxi.prestadores p ON p.empresa_id=fi.empresa_id AND p.id=fi.prestador_id
        WHERE fi.empresa_id=$1 AND fi.faturamento_id=$2 ORDER BY c.finalizada_em,c.id`,
@@ -355,7 +355,7 @@ export class FaturamentoService {
       WHERE a.empresa_id=c.empresa_id AND a.corrida_id=c.id AND ${allocationFilters.join(' AND ')})`);
     if (filter.solicitanteUsuarioId) add('c.solicitante_usuario_id=?', filter.solicitanteUsuarioId);
     const result = await executor.query<EligibleRow>(
-      `SELECT c.id,c.finalizada_em AS "finalizadaEm",c.funcionario_id AS "funcionarioId",fn.nome AS "funcionarioNome",
+      `SELECT c.id,c.finalizada_em AS "finalizadaEm",c.funcionario_id AS "funcionarioId",COALESCE(fn.nome,'Encomenda: ' || (c.encomenda->>'descricao')) AS "funcionarioNome",
         c.prestador_id AS "prestadorId",p.nome AS "prestadorNome",s.id AS "setorId",s.nome AS "setorNome",
         cc.id AS "centroCustoId",cc.codigo AS "centroCustoCodigo",cc.nome AS "centroCustoNome",
         c.solicitante_usuario_id AS "solicitanteUsuarioId",u.nome AS "solicitanteNome",
@@ -365,7 +365,7 @@ export class FaturamentoService {
           JOIN admtaxi.centros_custo ac ON ac.empresa_id=a.empresa_id AND ac.id=a.centro_custo_id
           WHERE a.empresa_id=c.empresa_id AND a.corrida_id=c.id) AS custos
        FROM admtaxi.corridas c
-       JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=c.funcionario_id
+       LEFT JOIN admtaxi.funcionarios fn ON fn.empresa_id=c.empresa_id AND fn.id=c.funcionario_id
        JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=c.centro_custo_id
        JOIN admtaxi.setores s ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id
        JOIN admtaxi.prestadores p ON p.empresa_id=c.empresa_id AND p.id=c.prestador_id

@@ -7,7 +7,7 @@ export type RelatorioCorrida = {
   finalizadaEm: Date | null;
   status: StatusCorrida;
   tipo: TipoCorrida;
-  funcionarioId: string;
+  funcionarioId: string | null;
   funcionarioNome: string;
   centroCustoId: string;
   centroCustoCodigo: string;

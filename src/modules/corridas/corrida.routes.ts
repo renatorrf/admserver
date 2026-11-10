@@ -124,7 +124,7 @@ export function createCorridaRouter(service: CorridaService, routes?: RideRouteS
       requireAuthContext(request), id, auditMetadataFromRequest(request),
     ) });
   }));
-  router.post('/:id/cancelar', authorize('GERENTE', 'GESTOR'), validateParams(uuidParamsSchema), validateBody(corridaCancelSchema), asyncHandler(async (request, response) => {
+  router.post('/:id/cancelar', authorize('GERENTE', 'GESTOR', 'PRESTADOR'), validateParams(uuidParamsSchema), validateBody(corridaCancelSchema), asyncHandler(async (request, response) => {
     const { id } = getValidatedParams<UuidParams>(request);
     response.status(200).json({ data: await service.cancel(
       requireAuthContext(request), id, request.body as CorridaCancelInput, auditMetadataFromRequest(request),

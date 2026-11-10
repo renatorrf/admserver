@@ -4,6 +4,7 @@ import { paginationSchema } from '../../shared/pagination/pagination';
 import { optionalText } from '../../shared/validation/common.schemas';
 import { statusCorrida, tiposCorrida } from './corrida.types';
 import { coordinate, itinerarySchema } from './itinerary';
+import type { Parcel } from './parcel';
 
 const decimalMoney = z.union([z.string(), z.number()]).transform((value) => String(value).replace(',', '.'))
   .pipe(z.string().regex(/^\d{1,10}(\.\d{1,2})?$/, 'Informe um valor monetario valido.'));
@@ -126,7 +127,11 @@ export const corridaListSchema = paginationSchema.extend({
 
 export const eventoListSchema = paginationSchema.omit({ busca: true, ativo: true }).strict();
 
-export type CorridaCreateInput = z.infer<typeof corridaCreateSchema>;
+type PassengerRideInput = z.infer<typeof corridaCreateSchema>;
+export type CorridaCreateInput = (PassengerRideInput & { encomenda?: never }) |
+  (Omit<PassengerRideInput, 'funcionarioId' | 'paradas' | 'itinerario'> & {
+    funcionarioId: null; encomenda: Parcel; paradas?: never; itinerario?: never;
+  });
 export type CorridaAssignInput = z.infer<typeof corridaAssignSchema>;
 export type CorridaAcceptInput = z.infer<typeof corridaAcceptSchema>;
 export type CorridaCancelInput = z.infer<typeof corridaCancelSchema>;

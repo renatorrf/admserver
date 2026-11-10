@@ -5,7 +5,7 @@ import { notFound } from '../../shared/errors/app-error';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditRepository } from '../auditoria/audit.repository';
 import type { AuditMetadata } from '../auditoria/audit.types';
-import type { EmpresaUpdateInput } from './empresa.schemas';
+import type { EmpresaUpdateInput, MasterEmpresaUpdateInput } from './empresa.schemas';
 
 type EmpresaRecord = Record<string, unknown> & {
   id: string;
@@ -26,8 +26,9 @@ type EmpresaRecord = Record<string, unknown> & {
   enderecoLongitude: number | null;
 };
 
-export const empresaFieldColumns: Record<keyof EmpresaUpdateInput, string> = {
+export const empresaFieldColumns: Record<keyof MasterEmpresaUpdateInput, string> = {
   modoCobranca: 'modo_cobranca',
+  exigeAprovacaoGestor: 'exige_aprovacao_gestor',
   endereco: 'endereco', enderecoLatitude: 'endereco_latitude', enderecoLongitude: 'endereco_longitude',
   codigoAcesso: 'codigo_acesso',
   razaoSocial: 'razao_social',
@@ -46,6 +47,7 @@ export function mapEmpresa(row: QueryResultRow): EmpresaRecord {
   return {
     id: row.id as string,
     modoCobranca: row.modo_cobranca ?? 'MANUAL',
+    exigeAprovacaoGestor: row.exige_aprovacao_gestor !== false,
     endereco: row.endereco as string | null,
     enderecoLatitude: row.endereco_latitude == null ? null : Number(row.endereco_latitude),
     enderecoLongitude: row.endereco_longitude == null ? null : Number(row.endereco_longitude),

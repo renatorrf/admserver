@@ -27,7 +27,8 @@ export function requisitionRouter(service: RequisitionService, access?: Requisit
     res.json({ data: await service.decide(requireAuthContext(req),getValidatedParams<UuidParams>(req).id,decisionSchema.parse(req.body),auditMetadataFromRequest(req)) });
   }));
   router.post('/:id/solicitar',authorize('PORTARIA'),validateParams(uuidParamsSchema),validateBody(conferenceSchema),asyncHandler(async (req,res) => {
-    const ride = await service.dispatch(requireAuthContext(req),getValidatedParams<UuidParams>(req).id,conferenceSchema.parse(req.body).participantes,auditMetadataFromRequest(req));
+    const { participantes, valorEncomenda } = conferenceSchema.parse(req.body);
+    const ride = await service.dispatch(requireAuthContext(req),getValidatedParams<UuidParams>(req).id,participantes,auditMetadataFromRequest(req),valorEncomenda);
     res.json({ data: { id: ride.id } });
   }));
   router.get('/:id/acessos',authorize('PORTARIA'),validateParams(uuidParamsSchema),asyncHandler(async (req,res) => {

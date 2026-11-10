@@ -12,12 +12,12 @@ export const monthlyQuery = z.object({ prestadorId: z.string().uuid(), competenc
 export const monthlyValue = z.object({ valor: passengerMoney }).strict();
 export const monthlyClose = monthlyQuery.extend({ previsaoHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 type MonthlyQuery = z.infer<typeof monthlyQuery>;
-type Passenger = { corridaId: string; funcionarioId: string; centroCustoId: string; codigo: string; nome: string };
+type Allocation = { corridaId: string; funcionarioId: string | null; centroCustoId: string; codigo: string; nome: string };
 const money = (cents: bigint): string => `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`;
 
-// Each ride has the same weight; each transported passenger shares that ride.
+// Each completed service has the same weight, split only for passenger rides.
 // Largest remainders distribute cents once, globally, without losing the monthly total.
-export function monthlyAllocation(total: string, passengers: Passenger[]) {
+export function monthlyAllocation(total: string, passengers: Allocation[]) {
   const counts = new Map<string, number>();
   for (const p of passengers) counts.set(p.corridaId, (counts.get(p.corridaId) ?? 0) + 1);
   if (!counts.size) return [];
@@ -67,12 +67,17 @@ export class MonthlyBillingService {
       WHERE c.empresa_id=$1 AND c.prestador_id=$2 AND c.modo_cobranca='MENSAL_FIXO' AND c.status='FINALIZADA'
       AND (c.finalizada_em AT TIME ZONE 'America/Sao_Paulo')::date >= $3::date
       AND (c.finalizada_em AT TIME ZONE 'America/Sao_Paulo')::date < ($3::date + interval '1 month')
-      AND EXISTS(SELECT 1 FROM admtaxi.corrida_participacoes cp WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND cp.estado='DESEMBARCADO')
+      AND (c.encomenda IS NOT NULL OR EXISTS(SELECT 1 FROM admtaxi.corrida_participacoes cp WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND cp.estado='DESEMBARCADO'))
       ORDER BY c.id ${lock ? 'FOR UPDATE OF c' : ''}`, [auth.empresaId, input.prestadorId, start]);
-    const participants = await db.query<Passenger>(`SELECT cp.corrida_id AS "corridaId",cp.funcionario_id AS "funcionarioId",
+    const participants = await db.query<Allocation>(`SELECT cp.corrida_id AS "corridaId",cp.funcionario_id AS "funcionarioId",
       cp.centro_custo_id AS "centroCustoId",cc.codigo,cc.nome FROM admtaxi.corrida_participacoes cp
       JOIN admtaxi.centros_custo cc ON cc.empresa_id=cp.empresa_id AND cc.id=cp.centro_custo_id
-      WHERE cp.empresa_id=$1 AND cp.corrida_id=ANY($2::uuid[]) AND cp.estado='DESEMBARCADO' ORDER BY cp.corrida_id,cp.funcionario_id`,
+      WHERE cp.empresa_id=$1 AND cp.corrida_id=ANY($2::uuid[]) AND cp.estado='DESEMBARCADO'
+      UNION ALL
+      SELECT c.id,NULL::uuid,c.centro_custo_id,cc.codigo,cc.nome FROM admtaxi.corridas c
+      JOIN admtaxi.centros_custo cc ON cc.empresa_id=c.empresa_id AND cc.id=c.centro_custo_id
+      WHERE c.empresa_id=$1 AND c.id=ANY($2::uuid[]) AND c.encomenda IS NOT NULL
+      ORDER BY "corridaId","funcionarioId"`,
     [auth.empresaId, rides.rows.map(r => r.id)]);
     const allocations = monthlyAllocation(value, participants.rows);
     const counts = new Map<string, number>();
@@ -100,7 +105,7 @@ export class MonthlyBillingService {
       if (existing.rows.length) throw conflict('Esta mensalidade ja foi fechada. Consulte o historico.');
       const result = await this.preview(auth, input, db, true);
       if (input.previsaoHash !== result.previsaoHash) throw conflict('O rateio foi atualizado. Revise novamente antes de fechar.');
-      if (result.semMovimento) throw conflict('Sem corridas com passageiros transportados neste mes. Nao e possivel ratear a mensalidade.');
+      if (result.semMovimento) throw conflict('Sem viagens com passageiros transportados ou encomendas concluidas neste mes.');
       const created = await db.query<{ id: string }>(`INSERT INTO admtaxi.faturamentos
         (empresa_id,numero,periodo_inicio,periodo_fim,prestador_id,status,quantidade_corridas,valor_total,criado_por_usuario_id,fechado_em,modo_cobranca)
         SELECT $1,COALESCE(MAX(numero),0)+1,$2,$3,$4,'FECHADO',$5,$6,$7,CURRENT_TIMESTAMP,'MENSAL_FIXO'
@@ -111,7 +116,7 @@ export class MonthlyBillingService {
         const rows = result.participacoes.filter(p => p.corridaId === rideId);
         const item = await db.query<{ id: string }>(`INSERT INTO admtaxi.faturamento_itens(empresa_id,faturamento_id,corrida_id,prestador_id,valor_faturado)
           VALUES($1,$2,$3,$4,$5) RETURNING id`, [auth.empresaId, id, rideId, input.prestadorId, money(rows.reduce((sum, p) => sum + moneyCents(p.valor), 0n))]);
-        for (const p of rows) await db.query(`INSERT INTO admtaxi.faturamento_participacoes(empresa_id,item_id,funcionario_id,centro_custo_id,valor)
+        for (const p of rows) if (p.funcionarioId) await db.query(`INSERT INTO admtaxi.faturamento_participacoes(empresa_id,item_id,funcionario_id,centro_custo_id,valor)
           VALUES($1,$2,$3,$4,$5)`, [auth.empresaId, item.rows[0]!.id, p.funcionarioId, p.centroCustoId, p.valor]);
       }
       await this.audit.record(db, { ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId, entidade: 'faturamento', entidadeId: id,

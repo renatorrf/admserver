@@ -14,7 +14,7 @@ type CorridaRow = QueryResultRow & {
   id: string;
   empresa_id: string;
   solicitante_usuario_id: string;
-  funcionario_id: string;
+  funcionario_id: string | null;
   centro_custo_id: string;
   prestador_id: string | null;
   veiculo_id: string | null;
@@ -105,7 +105,7 @@ const corridaSelect = `SELECT c.*,
       WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id)
   ) ELSE NULL END AS itinerario
  FROM admtaxi.corridas c
- JOIN admtaxi.funcionarios f ON f.empresa_id = c.empresa_id AND f.id = c.funcionario_id
+ LEFT JOIN admtaxi.funcionarios f ON f.empresa_id = c.empresa_id AND f.id = c.funcionario_id
  JOIN admtaxi.centros_custo cc ON cc.empresa_id = c.empresa_id AND cc.id = c.centro_custo_id
  JOIN admtaxi.usuarios su ON su.empresa_id = c.empresa_id AND su.id = c.solicitante_usuario_id
  LEFT JOIN admtaxi.prestadores p ON p.empresa_id = c.empresa_id AND p.id = c.prestador_id
@@ -119,6 +119,7 @@ export function mapCorrida(row: CorridaRow): CorridaRecord {
     empresaNome: row.empresa_nome as string | undefined,
     solicitanteUsuarioId: row.solicitante_usuario_id,
     funcionarioId: row.funcionario_id,
+    ...(row.encomenda ? { encomenda: row.encomenda as NonNullable<CorridaRecord['encomenda']> } : {}),
     centroCustoId: row.centro_custo_id,
     prestadorId: row.prestador_id,
     veiculoId: row.veiculo_id,
@@ -220,11 +221,12 @@ export class CorridaRepository {
             ON s.empresa_id=p.empresa_id AND s.corrida_id=p.corrida_id AND s.id IN (p.embarque_id,p.desembarque_id)
             WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id=$${values.length} AND s.descricao ILIKE $${searchParam}))`);
       } else if (scope.kind === 'PRESTADOR' || scope.kind === 'MOTORISTA') {
-        conditions.push(`(c.origem_descricao ILIKE $${searchParam} OR c.destino_descricao ILIKE $${searchParam} OR EXISTS (
+        conditions.push(`(c.origem_descricao ILIKE $${searchParam} OR c.destino_descricao ILIKE $${searchParam}
+          OR c.encomenda->>'descricao' ILIKE $${searchParam} OR EXISTS (
           SELECT 1 FROM admtaxi.funcionarios f WHERE f.empresa_id=c.empresa_id AND f.nome ILIKE $${searchParam}
           AND (f.id=c.funcionario_id OR EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes p
             WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id=f.id))))`);
-      } else conditions.push(`(c.origem_descricao ILIKE $${searchParam} OR c.destino_descricao ILIKE $${searchParam})`);
+      } else conditions.push(`(c.origem_descricao ILIKE $${searchParam} OR c.destino_descricao ILIKE $${searchParam} OR c.encomenda->>'descricao' ILIKE $${searchParam})`);
     }
     const where = conditions.join(' AND ');
     const count = await this.database.query<{ total: string }>(
@@ -278,8 +280,8 @@ export class CorridaRepository {
          empresa_id, solicitante_usuario_id, funcionario_id, centro_custo_id, tipo, agendada_para,
          quantidade_passageiros, origem_descricao, origem_latitude, origem_longitude,
          destino_descricao, destino_latitude, destino_longitude, observacao_solicitante, valor_estimado,
-         solicitacao_chave, solicitacao_hash
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         solicitacao_chave, solicitacao_hash${input.encomenda ? ', encomenda' : ''}
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17${input.encomenda ? ', $18' : ''})
        RETURNING *`,
       [
         empresaId, usuarioId, input.funcionarioId, input.centroCustoId, input.tipo,
@@ -288,6 +290,7 @@ export class CorridaRepository {
         input.destinoLatitude ?? null, input.destinoLongitude ?? null,
         input.observacaoSolicitante ?? null, input.valorEstimado ?? null,
         input.chaveSolicitacao ?? null, input.chaveSolicitacao ? commandHash(input) : null,
+        ...(input.encomenda ? [JSON.stringify(input.encomenda)] : []),
       ],
     );
     const row = result.rows[0];

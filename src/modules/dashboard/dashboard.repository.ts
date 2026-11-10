@@ -77,11 +77,11 @@ export class DashboardRepository {
          GROUP BY months.mes ORDER BY months.mes`, values,
       ),
       this.database.query<ActiveRideRow>(
-        `SELECT c.id,c.status::text,f.nome AS "funcionarioNome",p.nome AS "prestadorNome",
+        `SELECT c.id,c.status::text,COALESCE(f.nome,'Encomenda: ' || (c.encomenda->>'descricao')) AS "funcionarioNome",p.nome AS "prestadorNome",
           c.origem_descricao AS "origemDescricao",c.destino_descricao AS "destinoDescricao",
           COALESCE(last.latitude,c.origem_latitude)::text AS latitude,
           COALESCE(last.longitude,c.origem_longitude)::text AS longitude
-         FROM admtaxi.corridas c JOIN admtaxi.funcionarios f ON f.empresa_id=c.empresa_id AND f.id=c.funcionario_id
+         FROM admtaxi.corridas c LEFT JOIN admtaxi.funcionarios f ON f.empresa_id=c.empresa_id AND f.id=c.funcionario_id
          LEFT JOIN admtaxi.prestadores p ON p.empresa_id=c.empresa_id AND p.id=c.prestador_id
          LEFT JOIN LATERAL (SELECT l.latitude,l.longitude FROM admtaxi.corrida_localizacoes l
            WHERE l.empresa_id=c.empresa_id AND l.corrida_id=c.id ORDER BY l.registrado_em DESC,l.id DESC LIMIT 1) last ON TRUE
@@ -89,9 +89,9 @@ export class DashboardRepository {
          ORDER BY c.atualizado_em DESC LIMIT 50`, values,
       ),
       this.database.query<UpcomingRow>(
-        `SELECT c.id,c.agendada_para AS "agendadaPara",f.nome AS "funcionarioNome",
+        `SELECT c.id,c.agendada_para AS "agendadaPara",COALESCE(f.nome,'Encomenda: ' || (c.encomenda->>'descricao')) AS "funcionarioNome",
           c.origem_descricao AS "origemDescricao",c.destino_descricao AS "destinoDescricao"
-         FROM admtaxi.corridas c JOIN admtaxi.funcionarios f ON f.empresa_id=c.empresa_id AND f.id=c.funcionario_id
+         FROM admtaxi.corridas c LEFT JOIN admtaxi.funcionarios f ON f.empresa_id=c.empresa_id AND f.id=c.funcionario_id
          WHERE ${where} AND c.tipo='AGENDADA' AND c.agendada_para>=CURRENT_TIMESTAMP
           AND c.status IN ('SOLICITADA','OFERTADA','ACEITA') ORDER BY c.agendada_para LIMIT 5`, values,
       ),

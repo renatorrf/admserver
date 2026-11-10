@@ -59,8 +59,22 @@ export async function testFcm(pool: Pool, ok: (label:string)=>void) {
   assert.equal((await service.status(auth,newer.vinculoId)).ativo,true);
   await service.revoke(auth,newer.vinculoId);
   assert.equal((await service.status(auth,newer.vinculoId)).ativo,false);
-  await assert.rejects(service.register({...auth,perfil:'FUNCIONARIO'},newer),{statusCode:403});
-  ok('FCM revoked company, TTL expiry, ownership checks and role restrictions');
+  ok('FCM revoked company, TTL expiry and ownership checks');
+
+  const staff: AuthContext = {empresaId:companies[0]!,usuarioId:randomUUID(),perfil:'GESTOR',senhaVersao:0};
+  await pool.query(`INSERT INTO admtaxi.usuarios(id,empresa_id,nome,email,senha_hash,perfil,deve_alterar_senha)
+    VALUES($1,$2,'Gestor sintetico','fcm-gestor@example.test','synthetic','GESTOR',FALSE)`, [staff.usuarioId,staff.empresaId]);
+  const staffDevice = { token:'synthetic_fcm_staff_token_123456789',instalacaoId:randomUUID(),vinculoId:randomUUID() };
+  await service.register(staff,staffDevice);
+  assert.equal((await service.status(staff,staffDevice.vinculoId)).ativo,true);
+  const notifyStaff = async (event: string) => (await pool.query(`INSERT INTO admtaxi.notificacoes_push
+    (empresa_id,usuario_id,evento,titulo,corpo,chave_deduplicacao)
+    VALUES($1,$2,$3,'Encomenda autorizada','Abra o app',$4) RETURNING id`,
+  [staff.empresaId,staff.usuarioId,event,randomUUID()])).rows[0].id;
+  const staffApproval = await notifyStaff('VIAGEM_AUTORIZADA');
+  await service.process();
+  assert(messages.some(message=>message.data?.notificationId===staffApproval));
+  ok('FCM operational staff registration and request update delivery');
 
   const selectedB = { ...auth, empresaId: companies[1]!, usuarioId: users[1]! };
   const bindingB = { ...newer, vinculoId: randomUUID() };

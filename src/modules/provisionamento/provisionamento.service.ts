@@ -41,8 +41,8 @@ export class ProvisionamentoService {
       const companyResult = await client.query<QueryResultRow>(`
         INSERT INTO admtaxi.empresas
           (codigo_acesso, razao_social, nome_fantasia, cnpj, telefone, email,
-           cidade_padrao, estado_padrao, latitude_padrao, longitude_padrao, endereco, endereco_latitude, endereco_longitude, modo_cobranca)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           cidade_padrao, estado_padrao, latitude_padrao, longitude_padrao, endereco, endereco_latitude, endereco_longitude, modo_cobranca, exige_aprovacao_gestor)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING id, codigo_acesso::text, razao_social, nome_fantasia
       `, [
         input.empresa.codigoAcesso,
@@ -57,6 +57,7 @@ export class ProvisionamentoService {
         input.empresa.longitudePadrao,
         input.empresa.endereco ?? null, input.empresa.enderecoLatitude ?? null, input.empresa.enderecoLongitude ?? null,
         input.empresa.modoCobranca ?? 'MANUAL',
+        input.empresa.exigeAprovacaoGestor ?? true,
       ]);
       const company = companyResult.rows[0];
       if (!company) throw new Error('Falha ao criar empresa.');

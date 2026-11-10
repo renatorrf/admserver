@@ -274,8 +274,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     );
     await Promise.all(recipients.rows.map((recipient) => this.sendRecipient({
       empresaId: ride.empresaId, usuarioId: recipient.usuario_id, corridaId: ride.id,
-      event: 'CORRIDA_OFERTADA', title: 'Nova corrida disponível',
-      body: 'Abra o aplicativo para consultar a corrida.', destination: this.rideUrl(ride.id),
+      event: 'CORRIDA_OFERTADA', title: ride.encomenda ? 'Nova encomenda disponível' : 'Nova corrida disponível',
+      body: ride.encomenda ? 'Abra o aplicativo para consultar a encomenda.' : 'Abra o aplicativo para consultar a corrida.', destination: this.rideUrl(ride.id),
       dedupeKey: `${ride.empresaId}:${ride.id}:CORRIDA_OFERTADA:${recipient.usuario_id}`,
     })));
   }
@@ -308,10 +308,11 @@ export class NotificacaoService implements CorridaNotificationPublisher {
 
   private async sendEmployeeRide(ride: CorridaRecord, event: RideNotificationEvent | 'SOLICITADA', affectedIds?: string[]): Promise<void> {
     const employeeIds = affectedIds ?? [
-      ride.funcionarioId,
+      ...(ride.funcionarioId ? [ride.funcionarioId] : []),
       ...(ride.itinerario?.participantes ?? []).map(p => p.funcionarioId),
       ...(ride.paradas ?? []).flatMap((stop) => stop.tipo === 'FUNCIONARIO' && stop.funcionarioId ? [stop.funcionarioId] : []),
     ];
+    if (!employeeIds.length) return;
     const recipients = this.employeeUsers
       ? await Promise.all([...new Set(employeeIds)].map(async id => ({ funcionario_id: id,
         usuario_id: await this.employeeUsers!.resolveEmployeeUser(ride.empresaId, id) })))

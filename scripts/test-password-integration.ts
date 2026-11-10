@@ -70,7 +70,7 @@ async function main(): Promise<void> {
     await pool.query('BEGIN');
     await pool.query(await readFile('src/db/migrations/021_contas_funcionario.up.sql','utf8'));
     await pool.query('COMMIT');
-    for (const file of migrations.filter(f => [17, 23, 24, 29].includes(Number(f.slice(0, 3))))) {
+    for (const file of migrations.filter(f => [17, 23, 24, 29, 34].includes(Number(f.slice(0, 3))))) {
       await pool.query('BEGIN');
       await pool.query(await readFile(path.join('src/db/migrations', file), 'utf8'));
       await pool.query('COMMIT');

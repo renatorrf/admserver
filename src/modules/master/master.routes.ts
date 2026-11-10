@@ -25,7 +25,7 @@ import {
 } from './master.schemas';
 import type { MasterService } from './master.service';
 import type { MasterTokenService } from './master-token.service';
-import { empresaUpdateSchema } from '../empresas/empresa.schemas';
+import { masterEmpresaUpdateSchema } from '../empresas/empresa.schemas';
 
 function metadata(request: Request) {
   return { ip: request.ip || null, userAgent: request.get('user-agent') ?? null };
@@ -91,7 +91,7 @@ export function createMasterRouter(service: MasterService, tokens: MasterTokenSe
   router.get('/empresas/:id', authenticate, passwordChanged, validateParams(masterIdSchema), asyncHandler(async (request, response) => {
     response.json({ data: await service.getCompany(request.master!, getValidatedParams<{ id: string }>(request).id) });
   }));
-  router.patch('/empresas/:id', authenticate, passwordChanged, validateParams(masterIdSchema), validateBody(empresaUpdateSchema), asyncHandler(async (request, response) => {
+  router.patch('/empresas/:id', authenticate, passwordChanged, validateParams(masterIdSchema), validateBody(masterEmpresaUpdateSchema), asyncHandler(async (request, response) => {
     response.json({ data: await service.updateCompany(request.master!, getValidatedParams<{ id: string }>(request).id, request.body, metadata(request)) });
   }));
   router.patch('/empresas/:id/ativo', authenticate, passwordChanged, validateParams(masterIdSchema), validateBody(masterActiveSchema), asyncHandler(async (request, response) => {

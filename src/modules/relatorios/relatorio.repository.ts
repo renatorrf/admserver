@@ -17,7 +17,7 @@ type GroupRow = QueryResultRow & { id: string | null; codigo?: string; nome: str
 
 const select = `SELECT c.id, c.solicitada_em AS "solicitadaEm", c.agendada_para AS "agendadaPara",
   c.finalizada_em AS "finalizadaEm", c.status::text, c.tipo::text,
-  a.funcionario_id AS "funcionarioId", f.nome AS "funcionarioNome",
+  a.funcionario_id AS "funcionarioId", COALESCE(f.nome,'Encomenda: ' || (c.encomenda->>'descricao')) AS "funcionarioNome",
   a.centro_custo_id AS "centroCustoId", cc.codigo AS "centroCustoCodigo", cc.nome AS "centroCustoNome",
   c.prestador_id AS "prestadorId", p.nome AS "prestadorNome",
   c.solicitante_usuario_id AS "solicitanteUsuarioId", u.nome AS "solicitanteNome",
@@ -25,7 +25,7 @@ const select = `SELECT c.id, c.solicitada_em AS "solicitadaEm", c.agendada_para 
   a.valor_estimado::text AS "valorEstimado", a.valor_final::text AS "valorFinal"
  FROM admtaxi.corridas c
  JOIN admtaxi.corrida_custos a ON a.empresa_id=c.empresa_id AND a.corrida_id=c.id
- JOIN admtaxi.funcionarios f ON f.empresa_id = c.empresa_id AND f.id = a.funcionario_id
+ LEFT JOIN admtaxi.funcionarios f ON f.empresa_id = c.empresa_id AND f.id = a.funcionario_id
  JOIN admtaxi.centros_custo cc ON cc.empresa_id = c.empresa_id AND cc.id = a.centro_custo_id
  JOIN admtaxi.usuarios u ON u.empresa_id = c.empresa_id AND u.id = c.solicitante_usuario_id
  LEFT JOIN admtaxi.prestadores p ON p.empresa_id = c.empresa_id AND p.id = c.prestador_id`;

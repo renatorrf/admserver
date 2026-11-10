@@ -18,6 +18,7 @@ import { TokenService } from '../src/modules/auth/token-service';
 import { RealtimeBus } from '../src/realtime/realtime-bus';
 import { RequisitionAccessService } from '../src/modules/requisicoes/requisition-access';
 import { NotificacaoService } from '../src/modules/notificacoes/notificacao.service';
+import { MonthlyBillingService, monthlyAllocation } from '../src/modules/faturamentos/monthly-billing.service';
 
 export async function testRequisitions(pool: Pool,manager: AuthContext,gate: AuthContext,employeeIds: string[],center: string,sector: string,otherCompany: string,driver: AuthContext,vehicle: string,ok: (s: string)=>void) {
   const logger=pino({level:'silent'}); const audit=new AuditRepository(pool);
@@ -163,6 +164,106 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   await request(app).post('/requisicoes').set('Authorization',bearer(supervisor)).send({...input,chave:randomUUID(),empresaId:otherCompany}).expect(422);
   await request(app).post(`/requisicoes/${created.id}/decisao`).set('Authorization',bearer(manager)).send({autorizar:false}).expect(422);
   ok('REQUISITIONS HTTP boundaries prevent bypass, tenant injection, driver access and unauthorized decision/release');
+
+  const parcelInput = {
+    chave: randomUUID(), tipo: 'IMEDIATA', participantes: [],
+    encomenda: { tipo: 'RETIRADA', descricao: 'Envelope lacrado', centroCustoId: center,
+      origem: participants[0]!.origem, destino: participants[0]!.destino },
+  };
+  const postParcel = (auth: AuthContext, data: object) => request(app).post('/requisicoes')
+    .set('Authorization',bearer(auth)).send(data);
+  await postParcel(supervisor,{...parcelInput,participantes:[participants[0]]}).expect(422);
+  await postParcel(supervisor,{...parcelInput,encomenda:{...parcelInput.encomenda,centroCustoId:randomUUID()}}).expect(403);
+  await postParcel(gate,parcelInput).expect(403);
+  await pool.query("UPDATE admtaxi.empresas SET modo_cobranca='MENSAL_FIXO' WHERE id=$1", [manager.empresaId]);
+  const parcelRequest = (await postParcel(supervisor,parcelInput).expect(201)).body.data;
+  assert.equal(parcelRequest.status,'PENDENTE');
+  await assert.rejects(service.dispatch(gate,parcelRequest.id,[],{}),{statusCode:409});
+  await service.decide(manager,parcelRequest.id,{autorizar:true},{});
+  await assert.rejects(service.dispatch(gate,parcelRequest.id,[],{},'20.00'),{statusCode:422});
+  const parcelRide = await service.dispatch(gate,parcelRequest.id,[],{});
+  assert.equal((await service.dispatch(gate,parcelRequest.id,[],{})).id,parcelRide.id);
+  assert.equal(parcelRide.funcionarioId,null); assert.equal(parcelRide.quantidadePassageiros,0);
+  assert.equal(parcelRide.centroCustoId,center); assert.equal(parcelRide.encomenda?.tipo,'RETIRADA');
+  assert.equal((await rides.list(driver,{pagina:1,limite:20,grupo:'FILA',busca:'Envelope'})).data[0]?.id,parcelRide.id);
+  const passengerUser = (await pool.query('SELECT usuario_id FROM admtaxi.funcionarios WHERE empresa_id=$1 AND id=$2',
+    [manager.empresaId,employeeIds[0]])).rows[0]?.usuario_id;
+  await assert.rejects(rides.get({...manager,perfil:'FUNCIONARIO',usuarioId:passengerUser},parcelRide.id),{statusCode:404});
+  await rides.accept(driver,parcelRide.id,{veiculoId:vehicle},{});
+  await rides.startDisplacement(driver,parcelRide.id,{});
+  await rides.arrive(driver,parcelRide.id,{});
+  await rides.board(driver,parcelRide.id,{});
+  assert.equal((await service.get(gate,parcelRequest.id)).corridaResumo?.paradasConcluidas,1);
+  await assert.rejects(rides.finish(driver,parcelRide.id,{},{}),{statusCode:409});
+  await rides.disembark(driver,parcelRide.id,{});
+  await assert.rejects(rides.cancel(driver,parcelRide.id,{motivo:'Entrega concluida'},{}),{statusCode:409});
+  await rides.finish(driver,parcelRide.id,{},{});
+  assert.equal((await service.get(gate,parcelRequest.id)).corridaResumo?.paradasConcluidas,2);
+  assert.equal((await pool.query('SELECT count(*) FROM admtaxi.corrida_participacoes WHERE corrida_id=$1',[parcelRide.id])).rows[0].count,'0');
+  assert((await pool.query("SELECT assunto,corpo FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='FINALIZADA'",
+    [parcelRequest.id])).rows.some(row=>row.assunto==='Encomenda concluída' && row.corpo.includes('Envelope lacrado')));
+  ok('PARCEL approval, scoped cost center, idempotent gate dispatch, driver queue/search, collection, delivery, completion and internal notifications');
+
+  const interrupted = await service.create(manager,requisicaoSchema.parse({...parcelInput,chave:randomUUID(),
+    encomenda:{...parcelInput.encomenda,tipo:'ENVIO'}}),{});
+  assert.equal(interrupted.status,'AUTORIZADA');
+  const undelivered = await service.dispatch(gate,interrupted.id,[],{});
+  await rides.accept(driver,undelivered.id,{veiculoId:vehicle},{});
+  await rides.startDisplacement(driver,undelivered.id,{});
+  await rides.arrive(driver,undelivered.id,{});
+  assert.equal((await rides.cancel(driver,undelivered.id,{motivo:'Objeto indisponivel na origem'},{})).status,'CANCELADA');
+  await assert.rejects(rides.cancel(driver,ride.id,{motivo:'Nao pode cancelar viagem comum'},{}),{statusCode:403});
+  await pool.query("UPDATE admtaxi.corridas SET finalizada_em='2024-03-12 12:00-03' WHERE id=$1", [parcelRide.id]);
+  await pool.query('UPDATE admtaxi.prestadores SET valor_mensal_fixo=1200 WHERE empresa_id=$1 AND id=$2',
+    [manager.empresaId,ride.prestadorId]);
+  const billing = new MonthlyBillingService(pool,audit);
+  const period = {prestadorId:ride.prestadorId!,competencia:'2024-03'};
+  const preview = await billing.preview(manager,period);
+  assert.equal(preview.quantidadeCorridas,1);
+  assert.equal(preview.porCentroCusto[0]?.corridasEquivalentes,1);
+  assert.equal(preview.porCentroCusto[0]?.id,center);
+  const invoice = await billing.close(manager,{...period,previsaoHash:preview.previsaoHash},{});
+  const detail = await pool.query(`SELECT a.funcionario_id,a.centro_custo_id,a.valor::text
+    FROM admtaxi.faturamento_custos a JOIN admtaxi.faturamento_itens i ON i.empresa_id=a.empresa_id AND i.id=a.item_id
+    WHERE i.faturamento_id=$1`,[invoice]);
+  assert.deepEqual(detail.rows,[{funcionario_id:null,centro_custo_id:center,valor:'1200.00'}]);
+  const allocation = monthlyAllocation('120.00',[
+    {corridaId:'parcel',funcionarioId:null,centroCustoId:center,codigo:'C',nome:'Centro'},
+    {corridaId:'travel',funcionarioId:'p1',centroCustoId:'other',codigo:'O',nome:'Outro'},
+    {corridaId:'travel',funcionarioId:'p2',centroCustoId:'other',codigo:'O',nome:'Outro'},
+  ]);
+  assert.equal(allocation.find(row=>row.corridaId==='parcel')?.valor,'60.00');
+  assert(allocation.filter(row=>row.corridaId==='travel').every(row=>row.valor==='30.00'));
+  await pool.query("UPDATE admtaxi.empresas SET modo_cobranca='MANUAL' WHERE id=$1", [manager.empresaId]);
+  const manual = await service.create(manager,requisicaoSchema.parse({...parcelInput,chave:randomUUID()}),{});
+  await assert.rejects(service.dispatch(gate,manual.id,[],{}),{statusCode:422});
+  const manualRide = await service.dispatch(gate,manual.id,[],{},'25.00');
+  assert.equal(manualRide.valorEstimado,'25.00');
+  await rides.cancel(manager,manualRide.id,{motivo:'Encerramento do teste manual'},{});
+  ok('PARCEL unsuccessful delivery exclusion, monthly closing without fake passenger and manual dispatch value');
+
+  const held = await service.create(supervisor,{...input,chave:randomUUID()},{});
+  assert.equal(held.status,'PENDENTE');
+  await pool.query('UPDATE admtaxi.empresas SET exige_aprovacao_gestor=FALSE WHERE id=$1',[manager.empresaId]);
+  const noApprovalTravel = await service.create(supervisor,{...input,chave:randomUUID()},{});
+  const noApprovalParcel = await service.create(supervisor,requisicaoSchema.parse({...parcelInput,chave:randomUUID()}),{});
+  for (const automatic of [noApprovalTravel,noApprovalParcel]) {
+    assert.equal(automatic.status,'AUTORIZADA');
+    assert.equal(automatic.decisor_id,null);
+    assert.equal(automatic.corrida_id,null);
+    const records = (await pool.query('SELECT evento,assunto,destinatario FROM admtaxi.emails_viagem WHERE requisicao_id=$1',
+      [automatic.id])).rows;
+    assert(records.some(record=>record.destinatario===gateEmail && /aguardando conferência/.test(record.assunto)));
+    assert(!records.some(record=>record.evento==='PENDENTE'));
+  }
+  assert.equal((await service.get(supervisor,held.id)).status,'PENDENTE');
+  await assert.rejects(service.dispatch(supervisor,noApprovalParcel.id,[],{},'25.00'),{statusCode:403});
+  const released = await service.dispatch(gate,noApprovalParcel.id,[],{},'25.00');
+  await rides.cancel(manager,released.id,{motivo:'Encerramento do teste de conferencia'},{});
+  await pool.query('UPDATE admtaxi.empresas SET exige_aprovacao_gestor=TRUE WHERE id=$1',[manager.empresaId]);
+  assert.equal((await service.create(supervisor,{...input,chave:randomUUID()},{})).status,'PENDENTE');
+  ok('APPROVAL-POLICY new supervisor travel/parcel requests skip manager when disabled; gate remains mandatory and old requests stay pending');
+
   assert.equal(await emails.process(),0);
   const failingWorker=new TravelEmails(pool,logger,{send:async()=>{throw Error('SMTP unavailable');}});
   await failingWorker.process();

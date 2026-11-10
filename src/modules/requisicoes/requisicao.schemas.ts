@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { coordinate, passengerMoney } from '../corridas/itinerary';
-import { corridaCreateSchema } from '../corridas/corrida.schemas';
+import { corridaCreateSchema, type CorridaCreateInput } from '../corridas/corrida.schemas';
+import { parcelSchema } from '../corridas/parcel';
 import type { StatusCorrida } from '../corridas/corrida.types';
 import { conflict, invalidReference } from '../../shared/errors/app-error';
 
@@ -29,8 +30,14 @@ export const requisicaoSchema = z.object({
   chave: z.string().uuid(), tipo: z.enum(['IMEDIATA','AGENDADA']),
   agendadaPara: z.string().datetime({ offset: true }).nullable().optional(),
   observacao: z.string().trim().max(2000).optional(),
-  participantes: z.array(passengerSchema).min(1).max(16),
+  participantes: z.array(passengerSchema).max(16),
+  encomenda: parcelSchema.extend({
+    centroCustoId: z.string().uuid('Selecione um centro de custo.'),
+    origem: addressSchema, destino: addressSchema, valor: passengerMoney.optional(),
+  }).optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.encomenda ? value.participantes.length !== 0 : value.participantes.length === 0)
+    ctx.addIssue({ code: 'custom', path: ['participantes'], message: 'Informe a encomenda ou os passageiros, sem misturar os dois.' });
   if (new Set(value.participantes.map(passengerKey)).size !== value.participantes.length
     || new Set(value.participantes.filter(p=>p.avulso?.telefone).map(p=>p.avulso!.telefone)).size !== value.participantes.filter(p=>p.avulso?.telefone).length)
     ctx.addIssue({ code: 'custom', path: ['participantes'], message: 'Nao repita funcionarios.' });
@@ -44,10 +51,14 @@ export type RequisitionRideSummary = { status: StatusCorrida; motoristaNome: str
   paradasTotal: number; paradasConcluidas: number; passageirosAusentes: number };
 export type RequisitionRow = { id: string; empresa_id: string; solicitante_id: string; dados: RequisitionInput;
   status: 'PENDENTE' | 'AUTORIZADA' | 'REJEITADA' | 'SOLICITADA'; corrida_id: string | null;
-  motivo: string | null; criada_em: string; conteudo_hash: string; solicitante?: string; corridaStatus?: StatusCorrida | null; corridaResumo?: RequisitionRideSummary | null };
+  decisor_id?: string | null;
+  motivo: string | null; criada_em: string; conteudo_hash: string; solicitante?: string; corridaStatus?: StatusCorrida | null;
+  encomendaCentroCusto?: string | null; corridaResumo?: RequisitionRideSummary | null };
 export const decisionSchema = z.object({ autorizar: z.boolean(), motivo: z.string().trim().max(1000).optional() }).strict()
   .refine(v => v.autorizar || (v.motivo?.length ?? 0) >= 5, { path: ['motivo'], message: 'Informe o motivo da recusa (minimo 5 caracteres).' });
-export const conferenceSchema = z.object({ participantes: requisicaoSchema.shape.participantes }).strict();
+export const conferenceSchema = z.object({
+  participantes: requisicaoSchema.shape.participantes, valorEncomenda: passengerMoney.optional(),
+}).strict();
 
 // Conference may complete missing information, but never replace the approved employees or known addresses.
 export function conferenceData(approved: RequisitionInput, participants: RequisitionInput['participantes']): RequisitionInput {
@@ -86,4 +97,15 @@ export function toRideInput(data: RequisitionInput, centers: Map<string,string>,
     itinerario: { paradas, participantes: points.map(p => ({ funcionarioId: resolved.get(passengerKey(p.person)) ?? p.person.funcionarioId,
       centroCustoId: centers.get(passengerKey(p.person)), ...(!monthly ? { valor: p.person.valor } : {}),
       embarqueId: p.pickup, desembarqueId: p.dropoff })) } });
+}
+
+export function parcelRideInput(data: RequisitionInput): CorridaCreateInput {
+  const { centroCustoId, origem, destino, valor, ...encomenda } = data.encomenda!;
+  return {
+    encomenda, centroCustoId, funcionarioId: null, quantidadePassageiros: 0,
+    tipo: data.tipo, agendadaPara: data.agendadaPara ? new Date(data.agendadaPara) : null,
+    origemDescricao: origem.descricao, origemLatitude: origem.latitude, origemLongitude: origem.longitude,
+    destinoDescricao: destino.descricao, destinoLatitude: destino.latitude, destinoLongitude: destino.longitude,
+    valorEstimado: valor, observacaoSolicitante: data.observacao,
+  };
 }

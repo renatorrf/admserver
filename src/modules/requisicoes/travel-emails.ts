@@ -7,6 +7,7 @@ import type { RequisitionRow } from './requisicao.schemas';
 import type { MailConfig } from '../../config/env';
 import { prepareAccessEmail } from './access-email';
 import { enqueuePush, type NotificacaoService } from '../notificacoes/notificacao.service';
+import { parcelOrigin } from '../corridas/parcel';
 
 export const travelSubjects = {
   PENDENTE: 'Viagem aguardando aprovação',
@@ -33,6 +34,12 @@ export class TravelEmails {
     private readonly push?: Pick<NotificacaoService, 'processTravelPush' | 'processAndroidPush'>) {}
 
   async enqueue(client: QueryExecutor, request: RequisitionRow, event: TravelEvent): Promise<void> {
+    const parcel = request.dados.encomenda;
+    const directToGate = event === 'AUTORIZADA' && request.decisor_id === null;
+    const subject = directToGate ? `${parcel ? 'Encomenda' : 'Viagem'} aguardando conferência`
+      : parcel ? travelSubjects[event].replace('Viagem', 'Encomenda') : travelSubjects[event];
+    const message = directToGate ? 'A requisição foi encaminhada diretamente para a conferência da portaria.'
+      : parcel ? summariesByEvent[event].replace(/viagem|corrida/g, 'encomenda') : summariesByEvent[event];
     const contact = `SELECT f.id,f.nome,COALESCE(u.email::text,NULLIF(trim(f.email::text),'')) AS email,u.id AS usuario_id`;
     const access = `LEFT JOIN admtaxi.usuarios_autenticacao u
       ON u.empresa_id=f.empresa_id AND u.id=f.usuario_id AND u.perfil='FUNCIONARIO' AND u.ativo`;
@@ -58,6 +65,7 @@ export class TravelEmails {
       const data = request.dados.participantes.find(p => p.funcionarioId === person.id);
       return [person.id, `${person.nome}\nOrigem: ${person.origem ?? data?.origem?.descricao ?? 'A confirmar pela portaria'}\nDestino: ${person.destino ?? data?.destino?.descricao ?? 'A confirmar pela portaria'}`];
     }));
+    if (parcel) summaries.set('encomenda', `${parcel.tipo === 'ENVIO' ? 'Envio' : 'Retirada'}: ${parcel.descricao}\n${parcelOrigin(parcel)}: ${parcel.origem.descricao}\nEntrega: ${parcel.destino.descricao}`);
     const recipients = new Map<string,string>();
     for (const data of request.dados.participantes) if (!request.corrida_id && data.avulso) summaries.set(data.avulso.id,
       `${data.avulso.nome} (pre-cadastro)\nTelefone: ${data.avulso.telefone ?? 'A confirmar pela portaria'}\nOrigem: ${data.origem?.descricao ?? 'A confirmar pela portaria'}\nDestino: ${data.destino?.descricao ?? 'A confirmar pela portaria'}`);
@@ -74,16 +82,16 @@ export class TravelEmails {
     }
     for (const [usuarioId, destination] of appRecipients) {
       await enqueuePush(client, { empresaId: request.empresa_id, usuarioId, corridaId: request.corrida_id,
-        event: `VIAGEM_${event}`, title: travelSubjects[event], body: summariesByEvent[event],
+        event: `VIAGEM_${event}`, title: subject, body: message,
         destination, dedupeKey: `${request.empresa_id}:${request.id}:VIAGEM_${event}:${usuarioId}` });
     }
     const when = request.dados.tipo === 'AGENDADA' && request.dados.agendadaPara
       ? new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }).format(new Date(request.dados.agendadaPara)) + ' (Brasilia)' : 'Imediata';
     for (const [email, summary] of recipients) {
-      const text = `${travelSubjects[event]}\nEmpresa: ${company.rows[0]?.nome ?? ''}\nRequisicao: ${request.id}\nHorario: ${when}\n\n${summary}${request.motivo ? `\n\nMotivo: ${request.motivo}` : ''}\n\nConsulte o aplicativo para acompanhar a viagem.`;
+      const text = `${subject}\nEmpresa: ${company.rows[0]?.nome ?? ''}\nRequisicao: ${request.id}\nHorario: ${when}\n\n${summary}${request.motivo ? `\n\nMotivo: ${request.motivo}` : ''}\n\nConsulte o aplicativo para acompanhar o atendimento.`;
       await client.query(`INSERT INTO admtaxi.emails_viagem(empresa_id,requisicao_id,evento,destinatario,assunto,corpo)
         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(requisicao_id,evento,destinatario) DO NOTHING`,
-      [request.empresa_id,request.id,event,email,travelSubjects[event],text]);
+      [request.empresa_id,request.id,event,email,subject,text]);
     }
   }
   async closed(client: QueryExecutor, empresaId: string, corridaId: string, event: 'FINALIZADA' | 'CANCELADA', reason?: string): Promise<boolean> {

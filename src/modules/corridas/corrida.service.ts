@@ -19,6 +19,7 @@ import type {
   EventoListQuery,
 } from './corrida.schemas';
 import { assertTransition, isActiveRide } from './state-machine';
+import { parcelOrigin } from './parcel';
 import { employeeRide } from './corrida-visibility';
 import { employeeEvent, type EmployeeHistoryScope } from './employee-history';
 import { advanceItinerary, itineraryResolved, itinerarySchema, moneyCents, passengerTotal, type ItineraryAction, type ItineraryInput } from './itinerary';
@@ -116,7 +117,7 @@ export class CorridaService {
     auth = await driverRideContext(this.database, auth, id);
     const ride = await this.get(auth, id);
     const own = ride.itinerario?.participantes.find(person => person.funcionarioId === ride.funcionarioId);
-    const audience = auth.perfil === 'FUNCIONARIO' ? { funcionarioId: ride.funcionarioId,
+    const audience = auth.perfil === 'FUNCIONARIO' && ride.funcionarioId ? { funcionarioId: ride.funcionarioId,
       embarqueId: own?.embarqueId, desembarqueId: own?.desembarqueId, legacy: !ride.itinerarioVersao } : undefined;
     const result = await this.repository.listEvents(auth.empresaId, id, query, audience);
     return audience ? { ...result, data: result.data.map(event => employeeEvent(event, audience)) } : result;
@@ -146,6 +147,7 @@ export class CorridaService {
         return existing;
       }
       const input = checked?.input ?? supplied!;
+      if (input.encomenda && !checked) throw forbidden('A encomenda precisa passar pela conferencia da portaria.');
       const scope = await this.scopeResolver.resolve(auth, client);
       if (!centerAllowed(scope, input.centroCustoId)) {
         throw forbidden('Voce nao possui permissao para solicitar corridas para este funcionario ou centro de custo.');
@@ -176,18 +178,18 @@ export class CorridaService {
       if (monthly && (input.valorEstimado != null || input.itinerario?.participantes.some(p => p.valor !== undefined))) {
         throw invalidReference('Esta empresa utiliza mensalidade fixa. Reabra a solicitacao sem valores individuais.');
       }
-      if (monthly && !input.itinerario) throw invalidReference('Informe os participantes e seus centros de custo para o rateio mensal.');
-      if (input.itinerario) await this.validateItinerary(client, auth, input.itinerario, input.funcionarioId, input.centroCustoId, monthly);
-      if (!input.itinerario && !await this.repository.validateEmployeeAndCenter(client, auth.empresaId, input.funcionarioId, input.centroCustoId)) {
+      if (monthly && !input.itinerario && !input.encomenda) throw invalidReference('Informe os participantes e seus centros de custo para o rateio mensal.');
+      if (!input.encomenda && input.itinerario) await this.validateItinerary(client, auth, input.itinerario, input.funcionarioId, input.centroCustoId, monthly);
+      if (!input.encomenda && !input.itinerario && !await this.repository.validateEmployeeAndCenter(client, auth.empresaId, input.funcionarioId, input.centroCustoId)) {
         throw invalidReference('Funcionario e centro de custo devem estar ativos, vinculados e pertencer a mesma empresa.');
       }
       const employeeStopIds = (input.paradas ?? [])
         .filter((stop) => stop.tipo === 'FUNCIONARIO')
         .map((stop) => stop.funcionarioId);
-      if (employeeStopIds.includes(input.funcionarioId) || new Set(employeeStopIds).size !== employeeStopIds.length) {
+      if ((input.funcionarioId && employeeStopIds.includes(input.funcionarioId)) || new Set(employeeStopIds).size !== employeeStopIds.length) {
         throw invalidReference('Nao repita funcionarios no itinerario.');
       }
-      if (input.quantidadePassageiros < employeeStopIds.length + 1) {
+      if (!input.encomenda && input.quantidadePassageiros < employeeStopIds.length + 1) {
         throw invalidReference('A quantidade de passageiros deve incluir os funcionarios adicionais.');
       }
       if (employeeStopIds.length && (!this.repository.validateEmployeeStops
@@ -197,7 +199,7 @@ export class CorridaService {
       const created = await this.repository.create(client, auth.empresaId, auth.usuarioId, input);
       await this.repository.createEvent(
         client, auth.empresaId, created.id, auth.usuarioId, 'CORRIDA_SOLICITADA', null, 'SOLICITADA',
-        'Corrida solicitada.',
+        input.encomenda ? 'Encomenda liberada para o motorista.' : 'Corrida solicitada.',
       );
       await this.recordAudit(client, auth, metadata, created, 'CRIAR', null, created);
       if (checked?.complete) await checked.complete(created.id);
@@ -378,7 +380,7 @@ export class CorridaService {
       const updated = await this.repository.markDisembark(client, auth.empresaId, id);
       await this.repository.createEvent(
         client, auth.empresaId, id, auth.usuarioId, 'DESEMBARQUE_CONFIRMADO', 'EM_CORRIDA', 'EM_CORRIDA',
-        'Desembarque do passageiro confirmado.', { prestadorId: provider.id },
+        current.encomenda ? 'Entrega da encomenda confirmada.' : 'Desembarque do passageiro confirmado.', { prestadorId: provider.id },
       );
       await this.recordAudit(client, auth, metadata, updated, 'CONFIRMAR_DESEMBARQUE', current, updated);
       return updated;
@@ -412,7 +414,7 @@ export class CorridaService {
           throw conflict(`O valor final deve corresponder a soma dos valores individuais: R$ ${total.replace('.', ',')}.`);
         }
       }
-      if (!current.desembarqueEm) throw conflict('Confirme o desembarque antes de finalizar a corrida.');
+      if (!current.desembarqueEm) throw conflict(current.encomenda ? 'Confirme a entrega antes de finalizar.' : 'Confirme o desembarque antes de finalizar a corrida.');
       assertTransition(current.status, 'FINALIZADA');
       const finished = await this.repository.changeStatus(client, auth.empresaId, id, 'FINALIZADA', {
         valorFinal: finalValue,
@@ -421,7 +423,7 @@ export class CorridaService {
       await this.repository.setProviderAvailability(client, auth.empresaId, provider.id, true);
       await this.repository.createEvent(
         client, auth.empresaId, id, auth.usuarioId, 'CORRIDA_FINALIZADA', current.status, 'FINALIZADA',
-        'Corrida finalizada.', { valorFinal: input.valorFinal },
+        current.encomenda ? 'Atendimento de encomenda concluido.' : 'Corrida finalizada.', { valorFinal: input.valorFinal },
       );
       await this.recordAudit(client, auth, metadata, finished, 'FINALIZAR', current, finished);
       requisitionNotified = await this.travelEmails?.closed(client, auth.empresaId, id, 'FINALIZADA') ?? false;
@@ -435,24 +437,30 @@ export class CorridaService {
 
   async cancel(auth: AuthContext, id: string, input: CorridaCancelInput, metadata: AuditMetadata): Promise<CorridaRecord> {
     auth = await driverRideContext(this.database, auth, id);
-    if (!['GESTOR', 'GERENTE'].includes(auth.perfil)) throw forbidden();
+    if (!['GESTOR', 'GERENTE', 'PRESTADOR'].includes(auth.perfil)) throw forbidden();
     let changed = true;
     let requisitionNotified = false;
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
+      if (auth.perfil === 'PRESTADOR') {
+        const provider = await this.requireProviderContext(client, auth, true);
+        if (!current.encomenda || current.prestadorId !== provider.id) throw forbidden();
+      }
       if (current.status === 'CANCELADA') {
         if (current.motivoCancelamento !== input.motivo) throw conflict('Corrida ja cancelada com outro motivo.');
         changed = false;
         return current;
       }
-      if (auth.perfil === 'GERENTE') {
+      if (auth.perfil === 'PRESTADOR') {
+        if (!isActiveRide(current.status) || current.desembarqueEm) throw conflict('A encomenda nao pode mais ser interrompida.');
+      } else if (auth.perfil === 'GERENTE') {
         if (current.status !== 'SOLICITADA' && current.status !== 'OFERTADA') {
           throw conflict('O gerente so pode cancelar corridas solicitadas ou ofertadas.');
         }
       } else if (!['SOLICITADA', 'OFERTADA', 'ACEITA'].includes(current.status)) {
         throw conflict('A corrida nao pode mais ser cancelada.');
       }
-      assertTransition(current.status, 'CANCELADA');
+      if (auth.perfil !== 'PRESTADOR') assertTransition(current.status, 'CANCELADA');
       if (current.itinerarioVersao) {
         await client.query(`UPDATE admtaxi.corrida_participacoes SET estado='CANCELADO',motivo=$3
           WHERE empresa_id=$1 AND corrida_id=$2 AND estado='AGUARDANDO'`, [auth.empresaId, id, input.motivo]);
@@ -465,7 +473,7 @@ export class CorridaService {
       }
       await this.repository.createEvent(
         client, auth.empresaId, id, auth.usuarioId, 'CORRIDA_CANCELADA', current.status, 'CANCELADA',
-        'Corrida cancelada.', { motivo: input.motivo },
+        current.encomenda ? 'Atendimento de encomenda interrompido.' : 'Corrida cancelada.', { motivo: input.motivo },
       );
       await this.recordAudit(client, auth, metadata, cancelled, 'CANCELAR', current, cancelled);
       requisitionNotified = await this.travelEmails?.closed(client, auth.empresaId, id, 'CANCELADA', input.motivo) ?? false;
@@ -537,8 +545,11 @@ export class CorridaService {
       if (current.status === target) { changed = false; return current; }
       assertTransition(current.status, target);
       const updated = await this.repository.changeStatus(client, auth.empresaId, id, target);
+      const parcelDescription = current.encomenda && (target === 'AGUARDANDO_PASSAGEIRO'
+        ? `Chegada ao local de ${parcelOrigin(current.encomenda).toLowerCase()} registrada.`
+        : target === 'EM_CORRIDA' ? `${parcelOrigin(current.encomenda)} da encomenda confirmada.` : null);
       await this.repository.createEvent(
-        client, auth.empresaId, id, auth.usuarioId, eventType, current.status, target, description,
+        client, auth.empresaId, id, auth.usuarioId, eventType, current.status, target, parcelDescription || description,
         { prestadorId: provider.id },
       );
       await this.recordAudit(client, auth, metadata, updated, eventType, current, updated);
@@ -566,6 +577,7 @@ export class CorridaService {
         const old = previous.participantes.find(item => item.funcionarioId === p.funcionarioId);
         return { ...p, centroCustoId: p.centroCustoId ?? old?.centroCustoId, valor: p.valor ?? old?.valor };
       }) };
+      if (!ride.funcionarioId) throw conflict('Encomendas nao utilizam itinerario de passageiros.');
       await this.validateItinerary(client, auth, input, ride.funcionarioId, ride.centroCustoId, ride.modoCobranca === 'MENSAL_FIXO');
       if (previous.participantes.some(p => !input.participantes.some(next => next.funcionarioId === p.funcionarioId))) {
         throw conflict('Reassocie os passageiros; nao remova participacoes silenciosamente. Para cancelar a viagem, use cancelamento com motivo.');

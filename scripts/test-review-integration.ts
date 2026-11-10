@@ -25,6 +25,7 @@ import { PainelParticipanteRepository } from '../src/modules/paineis/painel.repo
 import { RelatorioRepository } from '../src/modules/relatorios/relatorio.repository';
 import { DashboardRepository } from '../src/modules/dashboard/dashboard.repository';
 import { EmpresaService } from '../src/modules/empresas/empresa.service';
+import { empresaUpdateSchema, masterEmpresaUpdateSchema } from '../src/modules/empresas/empresa.schemas';
 import { OperacaoRepository } from '../src/modules/operacao/operacao.repository';
 import { MasterService } from '../src/modules/master/master.service';
 import { MasterTokenService } from '../src/modules/master/master-token.service';
@@ -165,6 +166,14 @@ async function main(): Promise<void> {
     const originalCompany = await masterService.getCompany(masterContext, company);
     await masterService.updateCompany(masterContext, company, { nomeFantasia: 'Empresa editada', ...companyAddress }, { ip: null, userAgent: null });
     assert.equal((await masterService.getCompany(masterContext, company)).nomeFantasia, 'Empresa editada');
+    assert.equal(originalCompany.exigeAprovacaoGestor,true);
+    assert.equal(empresaUpdateSchema.safeParse({exigeAprovacaoGestor:false}).success,false);
+    const approvalPolicy = masterEmpresaUpdateSchema.parse({exigeAprovacaoGestor:false});
+    await masterService.updateCompany(masterContext,company,approvalPolicy,{ip:null,userAgent:null});
+    assert.equal((await operations.getConfiguration(manager)).exigeAprovacaoGestor,false);
+    assert.equal((await masterService.getCompany(masterContext,otherCompany)).exigeAprovacaoGestor,true);
+    await masterService.updateCompany(masterContext,company,{exigeAprovacaoGestor:true},{ip:null,userAgent:null});
+    ok('APPROVAL-POLICY master-only company setting, default on, scoped read and isolation');
     assert.equal((await masterService.getCompany(masterContext, otherCompany)).nomeFantasia, 'Empresa sintetica 1');
     assert(await authRepository.accessAllowed(liveAuth));
     await masterService.setCompanyActive(masterContext, company, false, { ip: null, userAgent: null });
@@ -173,7 +182,7 @@ async function main(): Promise<void> {
     assert.equal((await masterService.listCompanies(masterContext)).find(e => e.id === company)?.ativo, false);
     await masterService.setCompanyActive(masterContext, company, true, { ip: null, userAgent: null });
     assert(await authRepository.accessAllowed(liveAuth));
-    assert.equal((await pool.query('SELECT COUNT(*) FROM admtaxi.auditoria_plataforma WHERE entidade_id=$1', [company])).rows[0].count, '3');
+    assert.equal((await pool.query('SELECT COUNT(*) FROM admtaxi.auditoria_plataforma WHERE entidade_id=$1', [company])).rows[0].count, '5');
     await assert.rejects(masterService.updateCompany(masterContext, company, { codigoAcesso: 'test_1', nomeFantasia: 'Nao persistir' }, { ip: null, userAgent: null }), { code: '23505' });
     assert.equal((await masterService.getCompany(masterContext, company)).nomeFantasia, 'Empresa editada');
     await assert.rejects(masterService.getCompany(masterContext, randomUUID()));
