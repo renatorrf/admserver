@@ -18,9 +18,6 @@ if (-not $secretText -and (Test-Path -LiteralPath $envPath)) {
 if (-not $secretText -or $secretText.Length -lt 32) {
   throw 'PROVISIONING_SECRET ausente. Execute npm run env:configure e reinicie a API.'
 }
-$managerPassword = Read-Host 'Senha do primeiro gestor (minimo 12 caracteres)' -AsSecureString
-$passwordText = [System.Net.NetworkCredential]::new('', $managerPassword).Password
-
 try {
   $body = @{
     empresa = @{
@@ -34,7 +31,6 @@ try {
       nome = $GestorNome
       email = $GestorEmail
       telefone = $Telefone
-      senha = $passwordText
     }
   } | ConvertTo-Json -Depth 4
 
@@ -48,5 +44,4 @@ try {
   $response.data | Format-List
 } finally {
   $secretText = $null
-  $passwordText = $null
 }

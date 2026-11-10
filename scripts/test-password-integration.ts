@@ -70,6 +70,11 @@ async function main(): Promise<void> {
     await pool.query('BEGIN');
     await pool.query(await readFile('src/db/migrations/021_contas_funcionario.up.sql','utf8'));
     await pool.query('COMMIT');
+    for (const file of migrations.filter(f => [17, 23, 24, 29].includes(Number(f.slice(0, 3))))) {
+      await pool.query('BEGIN');
+      await pool.query(await readFile(path.join('src/db/migrations', file), 'utf8'));
+      await pool.query('COMMIT');
+    }
 
     const repository = new PgAuthRepository(pool);
     const tokens = new TokenService({ jwtAccessSecret:randomUUID()+randomUUID(),jwtRefreshSecret:randomUUID()+randomUUID(),
@@ -246,7 +251,7 @@ async function main(): Promise<void> {
     await assert.rejects(new ProvisionamentoService(pool).create({empresa:newCompany,gestor:{contaId:legacy}},{ip:null,userAgent:null}),{statusCode:403});
     ok('master-only linking reuses one account, keeps origin intact, rolls back invalid links');
 
-    const created = await masters.createCompany(contextOf(changedEmail),{empresa:{...newCompany,codigoAcesso:'NEWACCOUNT'},gestor:{nome:'Novo Gestor',email:'new.manager@example.test',senha:'123456'}},{ip:null,userAgent:null});
+    const created = await masters.createCompany(contextOf(changedEmail),{empresa:{...newCompany,codigoAcesso:'NEWACCOUNT'},gestor:{nome:'Novo Gestor',email:'new.manager@example.test'}},{ip:null,userAgent:null});
     const createdSession = await authService.login({empresa:'NEWACCOUNT',email:'new.manager@example.test',senha:'123456'});
     assert.equal(createdSession.usuario.usuarioId,created.gestor.id);
     assert.equal(createdSession.usuario.deveAlterarSenha,true);

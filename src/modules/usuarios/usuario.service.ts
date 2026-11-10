@@ -2,6 +2,7 @@ import argon2 from 'argon2';
 import type { Database, QueryExecutor } from '../../db/pool';
 import { withTransaction } from '../../db/pool';
 import { conflict, forbidden, invalidReference, notFound } from '../../shared/errors/app-error';
+import { INITIAL_ACCOUNT_PASSWORD } from '../../shared/validation/password';
 import type { PaginatedResult } from '../../shared/pagination/pagination';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditEntry, AuditMetadata } from '../auditoria/audit.types';
@@ -105,7 +106,7 @@ export class UsuarioService {
 
   async create(auth: AuthContext, input: UsuarioCreateInput, metadata: AuditMetadata): Promise<UsuarioRecord> {
     if (input.recebeAvisosViagem !== undefined && input.perfil !== 'GESTOR') throw invalidReference('Esta preferência é exclusiva do gestor.');
-    const senhaHash = await this.passwordHasher.hash(input.senha);
+    const senhaHash = await this.passwordHasher.hash(INITIAL_ACCOUNT_PASSWORD);
     return withTransaction(this.pool, async (client) => {
       const created = await this.repository.create(client, auth.empresaId, input, senhaHash);
       await this.audit.record(client, {

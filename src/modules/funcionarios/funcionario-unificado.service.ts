@@ -3,6 +3,7 @@ import type { QueryResultRow } from 'pg';
 
 import { queryOne, type Database, type QueryExecutor, withTransaction } from '../../db/pool';
 import { conflict, forbidden, invalidReference, notFound } from '../../shared/errors/app-error';
+import { INITIAL_ACCOUNT_PASSWORD } from '../../shared/validation/password';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditMetadata } from '../auditoria/audit.types';
 import type { AuditRepository } from '../auditoria/audit.repository';
@@ -26,7 +27,7 @@ export class FuncionarioUnificadoService {
   ) {}
 
   async create(auth: AuthContext, input: FuncionarioUnificadoCreateInput, metadata: AuditMetadata) {
-    const passwordHash = 'senha' in input.acesso ? await this.hashPassword(input.acesso.senha) : null;
+    const passwordHash = 'contaId' in input.acesso ? null : await this.hashPassword(INITIAL_ACCOUNT_PASSWORD);
     return withTransaction(this.database, async (client) => {
       await funcionarioDefinition.validateReferences?.(client, auth.empresaId, input.funcionario);
       let accountId: string | null = null;
@@ -76,21 +77,22 @@ export class FuncionarioUnificadoService {
   }
 
   async update(auth: AuthContext, id: string, input: FuncionarioUnificadoUpdateInput, metadata: AuditMetadata) {
-    const passwordHash = input.acesso?.senha ? await this.hashPassword(input.acesso.senha) : undefined;
     return withTransaction(this.database, async (client) => {
       const current = await this.getFrom(client, auth.empresaId, id, true);
+      const passwordHash = current.usuarioId && input.acesso?.senha ? await this.hashPassword(input.acesso.senha) : undefined;
       if (input.funcionario) await funcionarioDefinition.validateReferences?.(client, auth.empresaId, input.funcionario);
       let userId = current.usuarioId;
       if (!userId) {
         const email = input.funcionario?.email ?? current.email;
-        if (!email || !passwordHash) {
-          throw invalidReference('Funcionario sem acesso: informe e-mail e uma senha temporaria para criar o usuario.');
+        if (!email) {
+          throw invalidReference('Funcionario sem acesso: informe o e-mail para criar o usuario.');
         }
+        const initialHash = await this.hashPassword(INITIAL_ACCOUNT_PASSWORD);
         const user = await client.query<{ id: string }>(
           `INSERT INTO admtaxi.usuarios (empresa_id, nome, email, telefone, senha_hash, perfil, ativo)
            VALUES ($1, $2, $3, $4, $5, 'FUNCIONARIO', $6) RETURNING id`,
           [auth.empresaId, input.funcionario?.nome ?? current.nome, email,
-            input.funcionario?.telefone ?? current.telefone, passwordHash,
+            input.funcionario?.telefone ?? current.telefone, initialHash,
             input.acesso?.ativo ?? input.funcionario?.ativo ?? current.ativo],
         );
         userId = user.rows[0]?.id ?? null;

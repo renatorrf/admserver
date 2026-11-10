@@ -14,7 +14,7 @@ const fields = {
   recebeAvisosViagem: z.boolean().optional(),
 };
 
-export const usuarioCreateSchema = z.object(fields).strict();
+export const usuarioCreateSchema = z.object({ ...fields, senha: fields.senha.optional() }).strict();
 export const usuarioUpdateSchema = z.object({
   nome: fields.nome.optional(),
   email: fields.email.optional(),

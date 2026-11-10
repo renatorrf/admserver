@@ -242,7 +242,7 @@ async function run(): Promise<void> {
 
     const employeeEmail = `funcionario.${suffix}@teste.local`;
     const employeeResponse = await authorized('POST', '/api/v1/cadastros-unificados/funcionarios', {
-      acesso: { senha: password, ativo: true },
+      acesso: { ativo: true },
       funcionario: {
         centroCustoId: centerId, nome: 'Funcionario Teste', matricula: `MAT-${suffix}`,
         telefone: '34999990003', email: employeeEmail, cpf: null,
@@ -255,10 +255,11 @@ async function run(): Promise<void> {
     assert.equal(typeof employee.usuarioId, 'string');
 
     const employeeLogin = await send(target.baseUrl, 'POST', '/api/v1/auth/login', {
-      empresa: companyCode, email: employeeEmail, senha: password,
+      empresa: companyCode, email: employeeEmail, senha: '123456',
     });
     expectStatus('login do funcionario criado', employeeLogin, 200);
     assert.equal((data(employeeLogin).usuario as JsonRecord).perfil, 'FUNCIONARIO');
+    assert.equal((data(employeeLogin).usuario as JsonRecord).deveAlterarSenha, true);
     checks.push('funcionario com acesso e login');
 
     const duplicateEmployee = await authorized('POST', '/api/v1/cadastros-unificados/funcionarios', {

@@ -2,7 +2,7 @@ import { Router, type Request, type RequestHandler } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { setTimeout as delay } from 'node:timers/promises';
 import { masterRecoveryMessage, type MasterRecoveryService } from './master-recovery.service';
-import { resetPasswordSchema } from '../auth/password.schemas';
+import { masterResetPasswordSchema } from '../auth/password.schemas';
 import type { EnderecoService } from '../enderecos/endereco.service';
 import { enderecoAutocompleteSchema, type EnderecoAutocompleteQuery } from '../enderecos/endereco.schemas';
 
@@ -68,7 +68,7 @@ export function createMasterRouter(service: MasterService, tokens: MasterTokenSe
       await delay(Math.max(0,10_000-(Date.now()-started)));
       res.json({data:{mensagem:masterRecoveryMessage}});
     }));
-    router.post('/auth/senha/redefinir',loginLimiter,validateBody(resetPasswordSchema),asyncHandler(async(req,res)=>{
+    router.post('/auth/senha/redefinir',loginLimiter,validateBody(masterResetPasswordSchema),asyncHandler(async(req,res)=>{
       await recovery.reset(req.body); res.status(204).send();
     }));
   }

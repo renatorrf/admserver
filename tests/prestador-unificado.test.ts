@@ -1,3 +1,4 @@
+import argon2 from 'argon2';
 import type { PoolClient } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -63,7 +64,7 @@ const audit = { record: (executor: QueryExecutor, entry: AuditEntry) => executor
 
 describe('cadastro unificado de prestador', () => {
   it('valida acesso, prestador e veiculo em um unico payload', () => {
-    expect(prestadorUnificadoCreateSchema.safeParse(input).success).toBe(true);
+    expect(prestadorUnificadoCreateSchema.safeParse({ ...input, acesso: { ...input.acesso, senha: undefined } }).success).toBe(true);
     expect(prestadorUnificadoCreateSchema.safeParse({
       ...input, acesso: { ...input.acesso, telefone: null },
     }).success).toBe(false);
@@ -77,7 +78,9 @@ describe('cadastro unificado de prestador', () => {
 
     expect(result).toMatchObject({ id: PRESTADOR, usuarioId: USUARIO });
     expect(query).toHaveBeenCalledWith('COMMIT');
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO admtaxi.usuarios'), expect.arrayContaining([EMPRESA]));
+    const userInsert = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO admtaxi.usuarios'));
+    expect(userInsert?.[1]?.[0]).toBe(EMPRESA);
+    await expect(argon2.verify(userInsert?.[1]?.[4], '123456')).resolves.toBe(true);
     expect(query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO admtaxi.prestadores'), expect.arrayContaining([EMPRESA, USUARIO]));
     expect(query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO admtaxi.veiculos'), expect.arrayContaining([EMPRESA, PRESTADOR]));
   });

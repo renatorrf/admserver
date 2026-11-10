@@ -31,6 +31,6 @@ describe('conta unica de funcionario', () => {
     expect(funcionarioUnificadoCreateSchema.safeParse({ funcionario, acesso: { senha: '123456' } }).success).toBe(true);
     expect(funcionarioUnificadoCreateSchema.safeParse({ funcionario, acesso: { contaId: id, senha: '123456' } }).success).toBe(false);
     expect(funcionarioUnificadoCreateSchema.safeParse({ funcionario, acesso: { senha: '12345' } }).success).toBe(false);
-    expect(funcionarioUnificadoCreateSchema.safeParse({ funcionario, acesso: {} }).success).toBe(false);
+    expect(funcionarioUnificadoCreateSchema.safeParse({ funcionario, acesso: {} }).success).toBe(true);
   });
 });

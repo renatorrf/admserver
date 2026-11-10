@@ -51,7 +51,7 @@ const audit = { record: (executor: QueryExecutor, entry: AuditEntry) => executor
 
 describe('cadastro unificado de funcionario', () => {
   it('exige e-mail para criar o usuario de acesso', () => {
-    expect(funcionarioUnificadoCreateSchema.safeParse(input).success).toBe(true);
+    expect(funcionarioUnificadoCreateSchema.safeParse({ ...input, acesso: { ativo: true } }).success).toBe(true);
     expect(funcionarioUnificadoCreateSchema.safeParse({
       ...input, funcionario: { ...input.funcionario, email: null },
     }).success).toBe(false);
@@ -59,12 +59,14 @@ describe('cadastro unificado de funcionario', () => {
 
   it('cria usuario e funcionario no mesmo tenant e confirma uma transacao', async () => {
     const query = successfulQuery();
-    const service = new FuncionarioUnificadoService(database(query), audit as never, async () => 'hash');
+    const hasher = vi.fn().mockResolvedValue('hash');
+    const service = new FuncionarioUnificadoService(database(query), audit as never, hasher);
 
     const result = await service.create(auth, funcionarioUnificadoCreateSchema.parse(input), {});
 
     expect(result).toMatchObject({ id: FUNCIONARIO, usuarioId: USUARIO });
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO admtaxi.usuarios'), expect.arrayContaining([EMPRESA]));
+    expect(hasher).toHaveBeenCalledWith('123456');
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO admtaxi.usuarios'), expect.arrayContaining([EMPRESA, 'hash']));
     expect(query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO admtaxi.funcionarios'), expect.arrayContaining([EMPRESA, USUARIO, CENTRO]));
     expect(query).toHaveBeenCalledWith('COMMIT');
   });

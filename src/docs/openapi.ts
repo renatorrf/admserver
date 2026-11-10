@@ -1001,12 +1001,12 @@ export const openApiDocument = {
         properties: {
           acesso: {
             type: 'object', additionalProperties: false,
-            required: ['nome', 'email', 'ativo', 'formaAtivacao', 'senha'],
+            required: ['nome', 'email', 'ativo', 'formaAtivacao'],
             properties: {
               nome: { type: 'string', minLength: 2, maxLength: 150 }, email: { type: 'string', format: 'email' },
               telefone: { type: ['string', 'null'], maxLength: 20 }, ativo: { type: 'boolean' },
               formaAtivacao: { type: 'string', enum: ['SENHA_TEMPORARIA'] },
-              senha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 },
+              senha: { type: 'string', format: 'password', deprecated: true, description: 'Aceita por compatibilidade. A senha inicial e definida no servidor.' },
             },
           },
           prestador: {
@@ -1048,8 +1048,12 @@ export const openApiDocument = {
         type: 'object', additionalProperties: false, required: ['acesso', 'funcionario'],
         properties: {
           acesso: {
-            type: 'object', additionalProperties: false, required: ['senha'],
-            properties: { senha: { type: 'string', format: 'password', minLength: 6, maxLength: 128 }, ativo: { type: 'boolean', default: true } },
+            type: 'object', additionalProperties: false,
+            properties: {
+              contaId: { type: 'string', format: 'uuid', description: 'Vincula uma conta existente sem alterar sua senha.' },
+              senha: { type: 'string', format: 'password', deprecated: true, description: 'Aceita por compatibilidade. A senha inicial e definida no servidor.' },
+              ativo: { type: 'boolean', default: true },
+            },
           },
           funcionario: { $ref: '#/components/schemas/FuncionarioUnificadoInput' },
         },

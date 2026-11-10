@@ -99,7 +99,7 @@ describe('UsuarioService', () => {
       nome: 'Novo usuario', email: 'novo@exemplo.com', senha: 'senha-com-12-caracteres', perfil: 'GERENTE',
     }, {});
 
-    expect(store.receivedHash).toBe('argon:senha-com-12-caracteres');
+    expect(store.receivedHash).toBe('argon:123456');
     expect(created).not.toHaveProperty('senha');
     expect(JSON.stringify(audit.entries)).not.toContain('senha-com-12-caracteres');
   });

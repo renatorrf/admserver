@@ -59,7 +59,7 @@ describe('provisionamento de empresa', () => {
     const response = await request(testApp(service))
       .post('/api/v1/provisionamento/empresas')
       .set('X-Provisioning-Secret', secret)
-      .send(input);
+      .send({ ...input, gestor: { ...input.gestor, senha: undefined } });
 
     expect(response.status).toBe(201);
     expect(response.body.data).toEqual(result);
@@ -83,7 +83,7 @@ describe('provisionamento de empresa', () => {
 
     const result = await service.create(input, { ip: '127.0.0.1', userAgent: 'test' });
 
-    expect(hasher).toHaveBeenCalledWith(input.gestor.senha);
+    expect(hasher).toHaveBeenCalledWith('123456');
     const companyInsert = query.mock.calls.find(([sql]) => sql.includes('INSERT INTO admtaxi.empresas'));
     expect(companyInsert?.[1]?.slice(-4)).toEqual([input.empresa.endereco, input.empresa.enderecoLatitude, input.empresa.enderecoLongitude, 'MANUAL']);
     expect(query.mock.calls.map(([sql]) => sql.trim().split(/\s+/)[0])).toEqual([

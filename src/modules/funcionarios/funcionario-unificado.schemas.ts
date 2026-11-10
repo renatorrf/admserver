@@ -7,7 +7,7 @@ const senha = passwordSchema;
 
 export const funcionarioUnificadoCreateSchema = z.object({
   acesso: z.union([
-    z.object({ senha, ativo: z.boolean().default(true) }).strict(),
+    z.object({ senha: senha.optional(), ativo: z.boolean().default(true) }).strict(),
     z.object({ contaId: z.string().uuid(), ativo: z.boolean().default(true) }).strict(),
   ]),
   funcionario: funcionarioCreateSchema,

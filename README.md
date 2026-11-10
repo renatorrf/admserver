@@ -110,7 +110,7 @@ A inicializacao verifica os registros da 014, 015 e 016 e recusa iniciar sem ele
 que falharia nas consultas de autenticacao.
 
 - Senhas novas: 6 a 128 caracteres, sem obrigar combinacoes de letras/numeros/simbolos.
-- Novos usuarios de empresas (gestor, gerente, funcionario e prestador) devem trocar a senha inicial.
+- Novos usuarios de empresas (gestor, supervisor, portaria, funcionario e prestador) recebem a senha temporaria `123456` e devem troca-la no primeiro acesso. Vinculos de contas existentes preservam a senha atual.
 - Senha redefinida por cadastro administrativo volta a ser temporaria; senha escolhida pelo titular nao.
 - Contas anteriores a 014 nao sao forcadas a trocar a senha automaticamente.
 - A restricao do primeiro acesso e validada no backend HTTP e Socket.IO, alem dos guards do frontend.
@@ -318,8 +318,8 @@ e-mail pode existir em empresas diferentes.
 ## Provisionamento da primeira empresa
 
 O endpoint fica desabilitado quando `PROVISIONING_SECRET` nao existe. Em desenvolvimento local,
-execute `npm run env:configure`, reinicie a API e use o script PowerShell. A senha e solicitada de
-forma oculta e nao deve ser passada como argumento:
+execute `npm run env:configure`, reinicie a API e use o script PowerShell. A API define a senha
+temporaria do primeiro gestor; nao e necessario informa-la no script:
 
 ```powershell
 .\scripts\criar-empresa-gestor.ps1 `

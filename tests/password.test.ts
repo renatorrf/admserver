@@ -21,7 +21,13 @@ describe('password policy and email configuration', () => {
     expect(passwordSchema.parse('123456')).toBe('123456');
     expect(passwordSchema.parse(' 1234 ')).toBe(' 1234 ');
     expect(passwordSchema.safeParse('a'.repeat(129)).success).toBe(false);
-    expect(changePasswordSchema.safeParse({senhaAtual:'old',novaSenha:'123456'}).success).toBe(true);
+  });
+  it('requires a personal password different from the fixed initial password', () => {
+    const token = 'a'.repeat(64);
+    expect(changePasswordSchema.safeParse({senhaAtual:'old',novaSenha:'123456'}).success).toBe(false);
+    expect(changePasswordSchema.safeParse({senhaAtual:'123456',novaSenha:'654321'}).success).toBe(true);
+    expect(resetPasswordSchema.safeParse({token,novaSenha:' 123456 '}).success).toBe(false);
+    expect(resetPasswordSchema.safeParse({token,novaSenha:'654321'}).success).toBe(true);
   });
   it('scopes recovery by company and rejects extra user/tenant IDs', () => {
     expect(forgotPasswordSchema.parse({empresa:'acme',email:'USER@example.test'})).toEqual({empresa:'ACME',email:'user@example.test'});

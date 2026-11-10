@@ -4,6 +4,7 @@ import type { QueryResultRow } from 'pg';
 
 import { queryOne, type Database, type QueryExecutor, withTransaction } from '../../db/pool';
 import { conflict, invalidReference, notFound } from '../../shared/errors/app-error';
+import { INITIAL_ACCOUNT_PASSWORD } from '../../shared/validation/password';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditMetadata } from '../auditoria/audit.types';
@@ -29,7 +30,7 @@ export class PrestadorUnificadoService {
   constructor(private readonly database: Database, private readonly audit: AuditRepository) {}
 
   async create(auth: AuthContext, input: PrestadorUnificadoCreateInput, metadata: AuditMetadata) {
-    const passwordHash = await argon2.hash(input.acesso.senha);
+    const passwordHash = await argon2.hash(INITIAL_ACCOUNT_PASSWORD);
     return withTransaction(this.database, async (client) => {
       const user = await this.createUser(client, auth, input, passwordHash);
       const providerData = this.providerData(input);

@@ -27,7 +27,7 @@ export const provisionamentoSchema = z.object({
     email: z.string().trim().email('Informe um e-mail valido.').max(254)
       .transform((value) => value.toLowerCase()),
     telefone: optionalText(20),
-    senha: passwordSchema,
+    senha: passwordSchema.optional(),
   }).strict(),
 }).strict();
 

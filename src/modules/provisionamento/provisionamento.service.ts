@@ -4,6 +4,7 @@ import type { Pool, QueryResultRow } from 'pg';
 import { withTransaction } from '../../db/pool';
 import type { MasterCompanyInput } from './provisionamento.schemas';
 import { forbidden, notFound } from '../../shared/errors/app-error';
+import { INITIAL_ACCOUNT_PASSWORD } from '../../shared/validation/password';
 
 export type ProvisionamentoMetadata = { ip: string | null; userAgent: string | null };
 export type ProvisionamentoResult = {
@@ -25,7 +26,7 @@ export class ProvisionamentoService {
     platformAdministratorId?: string,
   ): Promise<ProvisionamentoResult> {
     if ('contaId' in input.gestor && !platformAdministratorId) throw forbidden();
-    const passwordHash = 'senha' in input.gestor ? await this.hashPassword(input.gestor.senha) : null;
+    const passwordHash = 'contaId' in input.gestor ? null : await this.hashPassword(INITIAL_ACCOUNT_PASSWORD);
     return withTransaction(this.pool, async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('admtaxi_company_provisioning'))");
       let existing: { id: string; nome: string; email: string; telefone: string | null; senha_hash: string } | undefined;

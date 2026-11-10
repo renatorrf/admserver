@@ -1,7 +1,7 @@
-import { randomBytes } from 'node:crypto';
 import argon2 from 'argon2';
 import type { QueryExecutor } from '../../db/pool';
 import { conflict } from '../../shared/errors/app-error';
+import { INITIAL_ACCOUNT_PASSWORD } from '../../shared/validation/password';
 
 // Called only inside the authorized conference transaction. Never reset an existing account.
 export async function completeGuestAccess(client: QueryExecutor, empresaId: string, requestId: string,
@@ -30,7 +30,7 @@ export async function completeGuestAccess(client: QueryExecutor, empresaId: stri
     throw conflict('Ja existe uma conta com este e-mail em outra empresa. O gestor deve vincular o funcionario existente.');
   let userId=found?.id;
   if (!userId) {
-    const hash=await argon2.hash(randomBytes(32).toString('hex'));
+    const hash=await argon2.hash(INITIAL_ACCOUNT_PASSWORD);
     userId=(await client.query<{id:string}>(`INSERT INTO admtaxi.usuarios
       (empresa_id,nome,email,telefone,senha_hash,perfil,ativo,deve_alterar_senha)
       VALUES($1,$2,$3,$4,$5,'FUNCIONARIO',TRUE,TRUE) RETURNING id`,
