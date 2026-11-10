@@ -837,6 +837,7 @@ export const openApiDocument = {
           { name: 'limite', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
           { name: 'status', in: 'query', schema: { type: 'string' } },
           { name: 'tipo', in: 'query', schema: { type: 'string', enum: ['IMEDIATA', 'AGENDADA'] } },
+          { name: 'grupo', in: 'query', schema: { type: 'string', enum: ['FILA', 'ATIVAS', 'HISTORICO'] } },
           { name: 'centroCustoId', in: 'query', schema: { type: 'string', format: 'uuid' } },
           { name: 'funcionarioId', in: 'query', schema: { type: 'string', format: 'uuid' } },
           { name: 'prestadorId', in: 'query', schema: { type: 'string', format: 'uuid' } },
@@ -948,7 +949,16 @@ export const openApiDocument = {
     '/corridas/{id}/atribuir': rideAction('Atribui ou altera o prestador', 'GESTOR'),
     '/corridas/{id}/reabrir': rideAction('Reabre corrida recusada', 'GESTOR'),
     '/corridas/{id}/aceitar': rideAction('Aceita ou reivindica corrida disponivel', 'PRESTADOR'),
-    '/corridas/{id}/recusar': rideAction('Recusa corrida ofertada', 'PRESTADOR'),
+    '/corridas/{id}/recusar': {
+      parameters: [idParameter],
+      post: {
+        ...rideAction('Recusa corrida com justificativa', 'PRESTADOR').post,
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['motivo'], additionalProperties: false,
+          properties: { motivo: { type: 'string', minLength: 5, maxLength: 1000 } },
+        } } } },
+      },
+    },
     '/corridas/{id}/iniciar-deslocamento': rideAction('Inicia deslocamento ao embarque', 'PRESTADOR'),
     '/corridas/{id}/cheguei-embarque': rideAction('Confirma chegada ao embarque', 'PRESTADOR'),
     '/corridas/{id}/confirmar-embarque': rideAction('Confirma embarque e inicia corrida', 'PRESTADOR'),

@@ -11,12 +11,14 @@ import {
   corridaCancelSchema,
   corridaFinishSchema,
   corridaListSchema,
+  corridaRefuseSchema,
   eventoListSchema,
   type CorridaAcceptInput,
   type CorridaAssignInput,
   type CorridaCancelInput,
   type CorridaFinishInput,
   type CorridaListQuery,
+  type CorridaRefuseInput,
   type EventoListQuery,
 } from './corrida.schemas';
 import type { CorridaService } from './corrida.service';
@@ -86,10 +88,10 @@ export function createCorridaRouter(service: CorridaService, routes?: RideRouteS
       requireAuthContext(request), id, request.body as CorridaAcceptInput, auditMetadataFromRequest(request),
     ) });
   }));
-  router.post('/:id/recusar', authorize('PRESTADOR'), validateParams(uuidParamsSchema), asyncHandler(async (request, response) => {
+  router.post('/:id/recusar', authorize('PRESTADOR'), validateParams(uuidParamsSchema), validateBody(corridaRefuseSchema), asyncHandler(async (request, response) => {
     const { id } = getValidatedParams<UuidParams>(request);
     response.status(200).json({ data: await service.refuse(
-      requireAuthContext(request), id, auditMetadataFromRequest(request),
+      requireAuthContext(request), id, request.body as CorridaRefuseInput, auditMetadataFromRequest(request),
     ) });
   }));
   router.post('/:id/iniciar-deslocamento', authorize('PRESTADOR'), validateParams(uuidParamsSchema), asyncHandler(async (request, response) => {

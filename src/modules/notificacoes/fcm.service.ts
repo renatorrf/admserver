@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Logger } from 'pino';
 import { withTransaction, type Database } from '../../db/pool';
 import type { AuthContext } from '../auth/auth.types';
-import { forbidden, unavailable } from '../../shared/errors/app-error';
+import { unavailable } from '../../shared/errors/app-error';
 
 export const nativeDeviceSchema = z.object({
   token: z.string().min(20).max(4096).regex(/^[A-Za-z0-9_:.-]+$/),
@@ -26,7 +26,6 @@ export class FcmService {
     private readonly sender?: FcmSender) {}
 
   async register(auth: AuthContext, input: z.infer<typeof nativeDeviceSchema>) {
-    if (auth.perfil !== 'PRESTADOR') throw forbidden();
     if (!this.sender) throw unavailable('Notificacoes Android ainda nao configuradas no servidor.');
     await withTransaction(this.db, async client => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('fcm-dispositivos'),0)");
@@ -70,8 +69,8 @@ export class FcmService {
     for (let i = 0; i < 30; i++) {
       const found = await withTransaction(this.db, async client => {
         const selected = await client.query<{ id: string; notificacao_id: string; dispositivo_id: string; vinculo_id: string;
-          tentativas: number; expira_em: Date; empresa_id: string; usuario_id: string; corrida_id: string | null; titulo: string; corpo: string }>(
-          `SELECT j.*,n.empresa_id,n.usuario_id,n.corrida_id,n.titulo,n.corpo FROM admtaxi.fcm_entregas j
+          tentativas: number; expira_em: Date; empresa_id: string; usuario_id: string; corrida_id: string | null; titulo: string; corpo: string; url_abertura: string | null }>(
+          `SELECT j.*,n.empresa_id,n.usuario_id,n.corrida_id,n.titulo,n.corpo,n.url_abertura FROM admtaxi.fcm_entregas j
            JOIN admtaxi.notificacoes_push n ON n.id=j.notificacao_id WHERE j.status='PENDENTE'
            AND j.proxima_tentativa_em<=CURRENT_TIMESTAMP ORDER BY j.proxima_tentativa_em,j.id
            LIMIT 1 FOR UPDATE OF j SKIP LOCKED`);
@@ -80,14 +79,19 @@ export class FcmService {
           WHERE id=$1 AND vinculo_id=$2 AND destino_empresa_id=$3 AND destino_usuario_id=$4`,
         [job.dispositivo_id,job.vinculo_id,job.empresa_id,job.usuario_id]);
         const device = devices.rows[0];
-        if (!device || new Date(job.expira_em).getTime() <= Date.now()) {
+        const expiresAt = new Date(job.expira_em).getTime();
+        const ttl = Math.min(300_000, expiresAt - Date.now());
+        if (!device || ttl <= 0) {
           await client.query("UPDATE admtaxi.fcm_entregas SET status='EXPIRADA',codigo_erro='VINCULO_OU_PRAZO_ENCERRADO' WHERE id=$1", [job.id]);
           return true;
         }
         try {
-          await this.sender!.send({ token: device.token, android: { priority: 'high', ttl: 300_000, restrictedPackageName: 'com.admbrasil.taxi' },
+          const target = job.url_abertura === '/app/requisicoes' ? 'requisicoes'
+            : job.url_abertura === '/app/corridas' ? 'corridas'
+            : job.url_abertura === '/app/notificacoes' ? 'notificacoes' : job.corrida_id ? 'corrida' : 'notificacoes';
+          await this.sender!.send({ token: device.token, android: { priority: 'high', ttl, restrictedPackageName: 'com.admbrasil.taxi' },
             data: { notificationId: job.notificacao_id, vinculoId: job.vinculo_id, corridaId: job.corrida_id ?? '',
-              title: job.titulo, body: job.corpo, expiresAt: String(new Date(job.expira_em).getTime()) } });
+              target, title: job.titulo, body: job.corpo, expiresAt: String(expiresAt) } });
           await client.query("UPDATE admtaxi.fcm_entregas SET status='ENVIADA',enviada_em=CURRENT_TIMESTAMP,tentativas=tentativas+1 WHERE id=$1", [job.id]);
           await client.query('UPDATE admtaxi.dispositivos_push SET ultimo_sucesso_em=CURRENT_TIMESTAMP,codigo_ultima_falha=NULL WHERE id=$1 AND vinculo_id=$2', [job.dispositivo_id,job.vinculo_id]);
         } catch (error) {

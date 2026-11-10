@@ -97,6 +97,10 @@ export const corridaCancelSchema = z.object({
   motivo: z.string().trim().min(5, 'Informe o motivo do cancelamento.').max(1000),
 }).strict();
 
+export const corridaRefuseSchema = z.object({
+  motivo: z.string().trim().min(5, 'Informe uma justificativa com pelo menos 5 caracteres.').max(1000),
+}).strict();
+
 export const corridaFinishSchema = z.object({
   valorFinal: decimalMoney.optional(),
   observacaoPrestador: optionalText(2000),
@@ -106,6 +110,7 @@ export const disponibilidadeSchema = z.object({ disponivel: z.boolean() }).stric
 
 export const corridaListSchema = paginationSchema.extend({
   ordenacao: z.literal('SOLICITACAO').optional(),
+  grupo: z.enum(['FILA', 'ATIVAS', 'HISTORICO']).optional(),
   status: z.enum(statusCorrida).optional(),
   tipo: z.enum(tiposCorrida).optional(),
   centroCustoId: z.string().uuid('Centro de custo invalido.').optional(),
@@ -125,6 +130,7 @@ export type CorridaCreateInput = z.infer<typeof corridaCreateSchema>;
 export type CorridaAssignInput = z.infer<typeof corridaAssignSchema>;
 export type CorridaAcceptInput = z.infer<typeof corridaAcceptSchema>;
 export type CorridaCancelInput = z.infer<typeof corridaCancelSchema>;
+export type CorridaRefuseInput = z.infer<typeof corridaRefuseSchema>;
 export type CorridaFinishInput = z.infer<typeof corridaFinishSchema>;
 export type DisponibilidadeInput = z.infer<typeof disponibilidadeSchema>;
 export type CorridaListQuery = z.infer<typeof corridaListSchema>;

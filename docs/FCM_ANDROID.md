@@ -1,9 +1,9 @@
-# Push Android do motorista
+# Push Android de viagens e corridas
 
 ## Configuracao
 
 - Aplicativo: `com.admbrasil.taxi`, Firebase `admbrasil-taxi`.
-- Aplicar `027_fcm_android` antes de iniciar o backend atualizado.
+- Aplicar `027_fcm_android` e `032_push_android_equipe` antes de iniciar o backend atualizado.
 - Definir `FCM_PROJECT_ID=admbrasil-taxi` no backend.
 - Usar Application Default Credentials da identidade do Cloud Run. Nao incluir
   chave de servico no APK, no repositorio nem em variavel do frontend.
@@ -13,14 +13,16 @@
 
 ## Entrega e seguranca
 
-O plugin NativePush registra o token depois do login PRESTADOR e da troca da
-senha temporaria. Usa canal `adm_corridas_v1` com importancia alta e solicita
-POST_NOTIFICATIONS no Android 13+. Minha conta permite ativar/desativar.
+O plugin NativePush registra o token depois do login e da troca da senha
+temporaria, para todos os perfis operacionais. Usa canal `adm_corridas_v1`
+(Viagens e corridas) com importancia alta e solicita POST_NOTIFICATIONS no
+Android 13+. Minha conta permite ativar/desativar; na Portaria, a ativacao
+fica no menu. O APK recebe apenas os avisos da unidade selecionada.
 
 WorkManager renova o registro apos rotacao do token e falhas de rede. A sessao
 e lida do armazenamento criptografado existente. O token do dispositivo nao
-concede acesso a nenhuma corrida. O backend resolve os vinculos ativos do
-motorista nas empresas e confere a versao de sua credencial antes do envio.
+concede acesso a nenhuma corrida. O backend confere o vinculo ativo e a
+versao da credencial antes do envio.
 
 A mensagem e data-only, de alta prioridade, com identificadores, titulo e resumo
 genericos, sem nomes, telefones, enderecos ou coordenadas. FirebaseMessagingService
@@ -71,7 +73,7 @@ serializa exibicoes e banners entre abas, guardando recibos limitados por
 quantidade e idade; o APK compartilha os identificadores exibidos entre o
 FirebaseMessagingService e o banner da WebView, sob o mesmo bloqueio de sessao.
 
-VAPID continua exclusivo do navegador/PWA; FCM, do APK do motorista. Sao
+VAPID continua exclusivo do navegador/PWA; FCM, do APK Android. Sao
 instalacoes independentes: habilitar ambos no mesmo telefone pode produzir um
 alerta em cada aplicativo. Nao desativar automaticamente outros dispositivos
 do usuario nem tentar identifica-los por user-agent. Os recibos nao garantem

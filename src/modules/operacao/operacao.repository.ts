@@ -23,7 +23,7 @@ export type FuncionarioLookup = {
   latitudePadrao: number | null;
   longitudePadrao: number | null;
 };
-export type MeuPrestador = { id: string; nome: string; disponivel: boolean; ativo: boolean };
+export type MeuPrestador = { id: string; nome: string; disponivel: boolean; ativo: boolean; emAtendimento: boolean };
 export type VeiculoLookup = {
   id: string;
   placa: string;
@@ -213,15 +213,18 @@ export class OperacaoRepository {
       if (!first) return null;
       const busy = await new CorridaRepository(this.database).hasActiveRide(this.database, first.empresa_id, first.prestador_id);
       const row = (await this.database.query<{ nome: string }>('SELECT nome FROM admtaxi.contas_motorista WHERE id=$1', [auth.contaMotoristaId])).rows[0];
-      return { id: first.prestador_id, nome: row?.nome ?? '', disponivel: !busy && members.some(m => m.disponivel), ativo: true };
+      return { id: first.prestador_id, nome: row?.nome ?? '', disponivel: !busy && members.some(m => m.disponivel), ativo: true, emAtendimento: busy };
     }
-    const result = await this.database.query<MeuPrestador>(
+    const result = await this.database.query<Omit<MeuPrestador, 'emAtendimento'>>(
       `SELECT id, nome, disponivel, ativo
          FROM admtaxi.prestadores
         WHERE empresa_id = $1 AND usuario_id = $2`,
       [auth.empresaId, auth.usuarioId],
     );
-    return result.rows[0] ?? null;
+    const provider = result.rows[0];
+    if (!provider) return null;
+    const emAtendimento = await new CorridaRepository(this.database).hasActiveRide(this.database, auth.empresaId, provider.id);
+    return { ...provider, disponivel: provider.disponivel && !emAtendimento, emAtendimento };
   }
 
   async searchEmployees(auth: AuthContext, query: FuncionarioSearchQuery): Promise<PaginatedResult<FuncionarioLookup & { cpf: string | null; ativo: boolean }>> {

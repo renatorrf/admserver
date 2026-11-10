@@ -81,6 +81,10 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     return this.travelPushRunning ??= this.deliverTravelBatch().finally(() => { this.travelPushRunning = undefined; });
   }
 
+  processAndroidPush(): Promise<number> {
+    return this.fcm?.process() ?? Promise.resolve(0);
+  }
+
   private async deliverTravelBatch(): Promise<void> {
     for (let i = 0; i < 20; i++) {
       // Claim one committed inbox item across instances without holding a lock during network I/O.

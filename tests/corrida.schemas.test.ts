@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { corridaCreateSchema, corridaFinishSchema } from '../src/modules/corridas/corrida.schemas';
+import { corridaCreateSchema, corridaFinishSchema, corridaRefuseSchema } from '../src/modules/corridas/corrida.schemas';
 
 const baseRide = {
   funcionarioId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -11,6 +11,11 @@ const baseRide = {
 };
 
 describe('schemas de corridas', () => {
+  it('exige justificativa de recusa e normaliza espacos', () => {
+    expect(corridaRefuseSchema.safeParse({}).success).toBe(false);
+    expect(corridaRefuseSchema.safeParse({ motivo: '  nao   ' }).success).toBe(false);
+    expect(corridaRefuseSchema.parse({ motivo: ' Veiculo em manutencao. ' })).toEqual({ motivo: 'Veiculo em manutencao.' });
+  });
   it('rejeita empresa_id e coordenadas incompletas', () => {
     expect(corridaCreateSchema.safeParse({
       ...baseRide, empresaId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',

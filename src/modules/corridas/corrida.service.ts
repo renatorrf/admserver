@@ -14,6 +14,7 @@ import type {
   CorridaCreateInput,
   CorridaFinishInput,
   CorridaListQuery,
+  CorridaRefuseInput,
   DisponibilidadeInput,
   EventoListQuery,
 } from './corrida.schemas';
@@ -64,6 +65,7 @@ export interface CorridaStore {
   managerCanAccessCenter(executor: QueryExecutor, empresaId: string, usuarioId: string, centroCustoId: string): Promise<boolean>;
   setProviderAvailability(executor: QueryExecutor, empresaId: string, prestadorId: string, available: boolean): Promise<PrestadorContext | null>;
   hasActiveRide(executor: QueryExecutor, empresaId: string, prestadorId: string): Promise<boolean>;
+  hasOtherActiveProvider(executor: QueryExecutor, empresaId: string, prestadorId: string): Promise<boolean>;
 }
 
 export type DisponibilidadeResult = {
@@ -283,9 +285,10 @@ export class CorridaService {
       if (current.status !== 'SOLICITADA' && current.status !== 'OFERTADA') {
         throw conflict('Esta corrida já foi aceita por outro prestador.');
       }
-      if (!provider.disponivel || await this.repository.hasActiveRide(client, auth.empresaId, provider.id)) {
-        throw conflict('O prestador nao esta disponivel para aceitar outra corrida.');
+      if (await this.repository.hasActiveRide(client, auth.empresaId, provider.id)) {
+        throw conflict('Finalize a corrida em andamento antes de aceitar outra.');
       }
+      if (!provider.disponivel) throw conflict('Ative sua disponibilidade antes de aceitar uma corrida.');
       if (current.status === 'OFERTADA' && current.prestadorId !== provider.id) throw forbidden();
       if (current.status === 'SOLICITADA' && current.prestadorId !== null) throw conflict('A corrida ja possui prestador.');
       if (current.tipo === 'AGENDADA' && (!current.agendadaPara
@@ -328,18 +331,22 @@ export class CorridaService {
     }), ride => { if (changed) this.notifications?.publishRideUpdate(ride, 'ACEITA'); });
   }
 
-  async refuse(auth: AuthContext, id: string, metadata: AuditMetadata): Promise<CorridaRecord> {
+  async refuse(auth: AuthContext, id: string, input: CorridaRefuseInput, metadata: AuditMetadata): Promise<CorridaRecord> {
     auth = await driverRideContext(this.database, auth, id);
     this.requireProvider(auth);
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
       const provider = await this.requireProviderContext(client, auth, false);
-      if (current.prestadorId !== provider.id) throw forbidden();
       assertTransition(current.status, 'RECUSADA');
-      const refused = await this.repository.changeStatus(client, auth.empresaId, id, 'RECUSADA');
+      if (current.status === 'SOLICITADA' && current.prestadorId === null) {
+        if (await this.repository.hasOtherActiveProvider(client, auth.empresaId, provider.id)) {
+          throw conflict('Esta corrida está disponível para outros motoristas. Só é possível recusar uma oferta atribuída a você.');
+        }
+      } else if (current.prestadorId !== provider.id) throw forbidden();
+      const refused = await this.repository.changeStatus(client, auth.empresaId, id, 'RECUSADA', { prestadorId: provider.id });
       await this.repository.createEvent(
         client, auth.empresaId, id, auth.usuarioId, 'CORRIDA_RECUSADA', current.status, 'RECUSADA',
-        'Corrida recusada pelo prestador.', { prestadorId: provider.id },
+        'Corrida recusada pelo prestador.', { prestadorId: provider.id, motivo: input.motivo },
       );
       await this.recordAudit(client, auth, metadata, refused, 'RECUSAR', current, refused);
       return refused;
@@ -419,10 +426,10 @@ export class CorridaService {
       await this.recordAudit(client, auth, metadata, finished, 'FINALIZAR', current, finished);
       requisitionNotified = await this.travelEmails?.closed(client, auth.empresaId, id, 'FINALIZADA') ?? false;
       return finished;
-    }), ride => {
+    }), async ride => {
       if (!changed) return;
       if (!requisitionNotified) this.notifications?.publishRideUpdate(ride, 'FINALIZADA');
-      this.travelEmails?.kick();
+      await this.travelEmails?.kick();
     });
   }
 
@@ -463,11 +470,11 @@ export class CorridaService {
       await this.recordAudit(client, auth, metadata, cancelled, 'CANCELAR', current, cancelled);
       requisitionNotified = await this.travelEmails?.closed(client, auth.empresaId, id, 'CANCELADA', input.motivo) ?? false;
       return cancelled;
-    }), ride => {
+    }), async ride => {
       if (!changed) return;
       this.notifications?.publishProviderRide(ride, 'CANCELADA');
       if (!requisitionNotified) this.notifications?.publishRideUpdate(ride, 'CANCELADA');
-      this.travelEmails?.kick();
+      await this.travelEmails?.kick();
     });
   }
 
@@ -738,7 +745,7 @@ export class CorridaService {
     }
     if (auth.perfil === 'PRESTADOR') {
       const provider = await this.requireProviderContext(executor, auth, false);
-      return { kind: 'PRESTADOR', prestadorId: provider.id, disponivel: provider.disponivel };
+      return { kind: 'PRESTADOR', prestadorId: provider.id };
     }
     const employee = await this.repository.getEmployeeByUser(executor, auth.empresaId, auth.usuarioId);
     if (!employee || !employee.ativo) throw forbidden();

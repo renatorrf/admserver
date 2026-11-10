@@ -2,7 +2,7 @@ import { conflict } from '../../shared/errors/app-error';
 import type { StatusCorrida } from './corrida.types';
 
 const transitions: Record<StatusCorrida, readonly StatusCorrida[]> = {
-  SOLICITADA: ['OFERTADA', 'CANCELADA'],
+  SOLICITADA: ['OFERTADA', 'CANCELADA', 'RECUSADA'],
   OFERTADA: ['ACEITA', 'RECUSADA', 'CANCELADA'],
   ACEITA: ['EM_DESLOCAMENTO', 'CANCELADA'],
   EM_DESLOCAMENTO: ['AGUARDANDO_PASSAGEIRO'],
@@ -23,6 +23,5 @@ export function assertTransition(from: StatusCorrida, to: StatusCorrida): void {
   }
 }
 
-export function isActiveRide(status: StatusCorrida): boolean {
-  return ['ACEITA', 'EM_DESLOCAMENTO', 'AGUARDANDO_PASSAGEIRO', 'EM_CORRIDA'].includes(status);
-}
+export const activeRideStatuses: readonly StatusCorrida[] = ['ACEITA', 'EM_DESLOCAMENTO', 'AGUARDANDO_PASSAGEIRO', 'EM_CORRIDA'];
+export function isActiveRide(status: StatusCorrida): boolean { return activeRideStatuses.includes(status); }

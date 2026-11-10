@@ -49,6 +49,7 @@ class RideStore implements CorridaStore {
   managerAccess = true;
   providerVehicleValid = true;
   activeRide = false;
+  otherActiveProvider = false;
 
   list(_empresaId: string, scope: CorridaScope, query: CorridaListQuery): Promise<PaginatedResult<CorridaRecord>> {
     this.scopes.push(scope);
@@ -94,6 +95,7 @@ class RideStore implements CorridaStore {
     return Promise.resolve(this.provider);
   }
   hasActiveRide(): Promise<boolean> { return Promise.resolve(this.activeRide); }
+  hasOtherActiveProvider(): Promise<boolean> { return Promise.resolve(this.otherActiveProvider); }
 }
 
 class RideAudit implements CorridaAuditWriter {
@@ -168,7 +170,7 @@ describe('CorridaService', () => {
         kind: 'GERENTE', usuarioId: GERENTE,
         setorIds: ['56565656-5656-4656-8656-565656565656'], centroCustoIds: [CENTRO],
       },
-      { kind: 'PRESTADOR', prestadorId: PRESTADOR, disponivel: true },
+      { kind: 'PRESTADOR', prestadorId: PRESTADOR },
       { kind: 'FUNCIONARIO', funcionarioId: FUNCIONARIO },
     ]);
   });
@@ -195,6 +197,44 @@ describe('CorridaService', () => {
     expect(store.events.map((event) => event.type)).toEqual(['CORRIDA_REIVINDICADA', 'CORRIDA_ACEITA']);
     expect(store.provider.disponivel).toBe(false);
     expect(audit.entries[0]?.acao).toBe('ACEITAR');
+  });
+
+  it('bloqueia um segundo aceite mesmo quando a disponibilidade esta marcada', async () => {
+    const store = new RideStore();
+    store.activeRide = true;
+    const service = new CorridaService(fakeDatabase(), new RideAudit(), store);
+    await expect(service.accept(prestador, CORRIDA, { veiculoId: VEICULO }, {}))
+      .rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('corrida em andamento') });
+    expect(store.current.status).toBe('SOLICITADA');
+    expect(store.events).toEqual([]);
+  });
+
+  it.each(['SOLICITADA', 'OFERTADA'] as const)('registra recusa de %s sem alterar disponibilidade ou a corrida ativa', async status => {
+    const store = new RideStore();
+    store.activeRide = true;
+    store.provider.disponivel = false;
+    store.current = { ...ride(status), prestadorId: status === 'OFERTADA' ? PRESTADOR : null };
+    const event = vi.spyOn(store, 'createEvent');
+    const audit = new RideAudit();
+    const service = new CorridaService(fakeDatabase(), audit, store);
+    const result = await service.refuse(prestador, CORRIDA, { motivo: 'Veiculo indisponivel.' }, {});
+    expect(result).toMatchObject({ status: 'RECUSADA', prestadorId: PRESTADOR });
+    expect(store.provider.disponivel).toBe(false);
+    expect(event).toHaveBeenCalledWith(expect.anything(), EMPRESA, CORRIDA, USUARIO_PRESTADOR,
+      'CORRIDA_RECUSADA', status, 'RECUSADA', expect.any(String), { prestadorId: PRESTADOR, motivo: 'Veiculo indisponivel.' });
+    expect(audit.entries[0]?.acao).toBe('RECUSAR');
+  });
+
+  it('preserva solicitacao compartilhada e impede recusar corrida ja aceita', async () => {
+    const store = new RideStore();
+    store.otherActiveProvider = true;
+    const service = new CorridaService(fakeDatabase(), new RideAudit(), store);
+    await expect(service.refuse(prestador, CORRIDA, { motivo: 'Veiculo indisponivel.' }, {})).rejects.toMatchObject({ statusCode: 409 });
+    expect(store.current.status).toBe('SOLICITADA');
+    store.current = { ...ride('ACEITA'), prestadorId: PRESTADOR };
+    await expect(service.refuse(prestador, CORRIDA, { motivo: 'Veiculo indisponivel.' }, {})).rejects.toMatchObject({ statusCode: 409 });
+    expect(store.current.status).toBe('ACEITA');
+    expect(store.events).toEqual([]);
   });
 
   it('valida e cria o itinerario com funcionario adicional e parada manual', async () => {

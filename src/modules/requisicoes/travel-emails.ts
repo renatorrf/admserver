@@ -30,7 +30,7 @@ export class TravelEmails {
   constructor(private readonly database: Database, private readonly logger: Pick<Logger,'warn'|'error'>,
     private readonly mailer?: ScheduledMailer,
     private readonly accessMail?: Pick<MailConfig,'resetUrl'|'resetTtlMinutes'>,
-    private readonly push?: Pick<NotificacaoService, 'processTravelPush'>) {}
+    private readonly push?: Pick<NotificacaoService, 'processTravelPush' | 'processAndroidPush'>) {}
 
   async enqueue(client: QueryExecutor, request: RequisitionRow, event: TravelEvent): Promise<void> {
     const contact = `SELECT f.id,f.nome,COALESCE(u.email::text,NULLIF(trim(f.email::text),'')) AS email,u.id AS usuario_id`;
@@ -92,12 +92,20 @@ export class TravelEmails {
     await this.enqueue(client,{ ...result.rows[0], motivo: reason ?? null },event);
     return true;
   }
-  start(): void { this.stopping = false; if (!this.timer) { this.kick(); this.timer = setInterval(() => this.kick(),30_000); this.timer.unref(); } }
+  start(): void { this.stopping = false; if (!this.timer) { void this.kick(); this.timer = setInterval(() => void this.kick(),30_000); this.timer.unref(); } }
   async stop(): Promise<void> { this.stopping = true; clearInterval(this.timer); this.timer = undefined; await this.running; }
-  kick(): void {
+  async kick(): Promise<void> {
     if (this.stopping) return;
     void this.process().catch(() => this.logger.error('Falha ao processar emails de viagem.'));
     void this.push?.processTravelPush().catch(() => this.logger.error('Falha ao processar notificacoes de viagem.'));
+    if (!this.push) return;
+    // Give FCM time to dispatch with Cloud Run request CPU, without blocking the saved request on delivery.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([this.push.processAndroidPush(),
+        new Promise<void>(resolve => { timer = setTimeout(resolve, 2500); })]);
+    } catch { this.logger.warn('Falha ao processar notificacoes Android de viagem.'); }
+    finally { clearTimeout(timer); }
   }
   process(): Promise<number> {
     if (!this.mailer || this.stopping) return Promise.resolve(0);

@@ -17,13 +17,14 @@ export function createNotificacaoRouter(service: NotificacaoService, tokens: Tok
   }));
   router.use(createAuthenticate(tokens));
   if (fcm) {
-    router.post('/android/devices', authorize('PRESTADOR'), validateBody(nativeDeviceSchema), asyncHandler(async (req,res) => {
+    const androidUser = authorize('PRESTADOR', 'FUNCIONARIO', 'GERENTE', 'GESTOR', 'PORTARIA');
+    router.post('/android/devices', androidUser, validateBody(nativeDeviceSchema), asyncHandler(async (req,res) => {
       res.status(201).json({ data: await fcm.register(requireAuthContext(req),req.body) });
     }));
-    router.post('/android/status', authorize('PRESTADOR'), validateBody(nativeBindingSchema), asyncHandler(async (req,res) => {
+    router.post('/android/status', androidUser, validateBody(nativeBindingSchema), asyncHandler(async (req,res) => {
       res.json({ data: await fcm.status(requireAuthContext(req),req.body.vinculoId) });
     }));
-    router.post('/android/revoke', authorize('PRESTADOR'), validateBody(nativeBindingSchema), asyncHandler(async (req,res) => {
+    router.post('/android/revoke', androidUser, validateBody(nativeBindingSchema), asyncHandler(async (req,res) => {
       await fcm.revoke(requireAuthContext(req),req.body.vinculoId); res.sendStatus(204);
     }));
   }

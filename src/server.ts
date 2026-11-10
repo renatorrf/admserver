@@ -82,6 +82,7 @@ async function start(): Promise<void> {
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=29')).rowCount) throw new Error('Migration 029_contas_equipe pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=30')).rowCount) throw new Error('Migration 030_motorista_empresa_selecionada pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=31')).rowCount) throw new Error('Migration 031_gestor_avisos_viagem pendente. Aplique antes de publicar este backend.');
+  if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=32')).rowCount) throw new Error('Migration 032_push_android_equipe pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=27')).rowCount) throw new Error('Migration 027_fcm_android pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=26')).rowCount) throw new Error('Migration 026_passageiros_plano pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=25')).rowCount) throw new Error('Migration 025_requisicoes_viagem pendente. Aplique antes de publicar este backend.');

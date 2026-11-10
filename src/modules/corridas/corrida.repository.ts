@@ -5,6 +5,7 @@ import { employeeGlobalEvents, employeeLegacyEvents, employeePersonalEvents, emp
 import { queryOne, type Database, type QueryExecutor } from '../../db/pool';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
 import type { CorridaCreateInput, CorridaListQuery, EventoListQuery } from './corrida.schemas';
+import { activeRideStatuses } from './state-machine';
 import type {
   CorridaEventoRecord, CorridaParadaRecord, CorridaRecord, FuncionarioContext, PrestadorContext, StatusCorrida,
 } from './corrida.types';
@@ -50,7 +51,7 @@ export type CorridaScope =
   | { kind: 'MOTORISTA'; contaId: string; apenasAtribuidas?: boolean; periodo?: { inicio: string; fimExclusive: string } }
   | { kind: 'GESTOR' }
   | { kind: 'GERENTE'; usuarioId: string; setorIds: string[]; centroCustoIds: string[] }
-  | { kind: 'PRESTADOR'; prestadorId: string; disponivel: boolean }
+  | { kind: 'PRESTADOR'; prestadorId: string; apenasAtribuidas?: boolean }
   | { kind: 'FUNCIONARIO'; funcionarioId: string };
 
 export type CorridaPatch = {
@@ -193,6 +194,10 @@ export class CorridaRepository {
       conditions.push(sql.replace('?', `$${values.length}`));
     };
     if (query.status) add('c.status = ?', query.status);
+    if (query.grupo) {
+      const statuses = { FILA: ['SOLICITADA', 'OFERTADA'], ATIVAS: activeRideStatuses, HISTORICO: ['FINALIZADA', 'CANCELADA', 'RECUSADA'] };
+      add('c.status = ANY(?::admtaxi.status_corrida[])', statuses[query.grupo]);
+    }
     if (query.tipo) add('c.tipo = ?', query.tipo);
     if (query.centroCustoId) add(`(c.centro_custo_id = ? OR EXISTS (
       SELECT 1 FROM admtaxi.corrida_participacoes cp WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id AND cp.centro_custo_id = ?))`.replace(/\?/g, `$${values.length + 1}`), query.centroCustoId);
@@ -214,6 +219,11 @@ export class CorridaRepository {
           OR EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes p JOIN admtaxi.corrida_paradas s
             ON s.empresa_id=p.empresa_id AND s.corrida_id=p.corrida_id AND s.id IN (p.embarque_id,p.desembarque_id)
             WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id=$${values.length} AND s.descricao ILIKE $${searchParam}))`);
+      } else if (scope.kind === 'PRESTADOR' || scope.kind === 'MOTORISTA') {
+        conditions.push(`(c.origem_descricao ILIKE $${searchParam} OR c.destino_descricao ILIKE $${searchParam} OR EXISTS (
+          SELECT 1 FROM admtaxi.funcionarios f WHERE f.empresa_id=c.empresa_id AND f.nome ILIKE $${searchParam}
+          AND (f.id=c.funcionario_id OR EXISTS (SELECT 1 FROM admtaxi.corrida_participacoes p
+            WHERE p.empresa_id=c.empresa_id AND p.corrida_id=c.id AND p.funcionario_id=f.id))))`);
       } else conditions.push(`(c.origem_descricao ILIKE $${searchParam} OR c.destino_descricao ILIKE $${searchParam})`);
     }
     const where = conditions.join(' AND ');
@@ -223,9 +233,11 @@ export class CorridaRepository {
     );
     const total = Number(count.rows[0]?.total ?? 0);
     values.push(query.limite, (query.pagina - 1) * query.limite);
+    const order = query.grupo === 'FILA' ? 'COALESCE(c.agendada_para, c.solicitada_em) ASC, c.solicitada_em ASC, c.id ASC'
+      : `${query.ordenacao === 'SOLICITACAO' ? 'c.solicitada_em' : 'COALESCE(c.agendada_para, c.solicitada_em)'} DESC, c.id DESC`;
     const result = await this.database.query<CorridaRow>(
       `${corridaSelect} WHERE ${where}
-       ORDER BY ${query.ordenacao === 'SOLICITACAO' ? 'c.solicitada_em' : 'COALESCE(c.agendada_para, c.solicitada_em)'} DESC, c.id DESC
+       ORDER BY ${order}
        LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values,
     );
@@ -550,15 +562,21 @@ export class CorridaRepository {
     return result.rowCount === 1;
   }
 
+  async hasOtherActiveProvider(executor: QueryExecutor, empresaId: string, prestadorId: string): Promise<boolean> {
+    const result = await executor.query(
+      `SELECT 1 FROM admtaxi.prestadores p JOIN admtaxi.usuarios u ON u.empresa_id=p.empresa_id AND u.id=p.usuario_id
+       WHERE p.empresa_id=$1 AND p.id<>$2 AND p.ativo AND u.ativo AND u.perfil='PRESTADOR' LIMIT 1`,
+      [empresaId, prestadorId],
+    );
+    return result.rowCount === 1;
+  }
+
   private addScope(conditions: string[], values: unknown[], scope: CorridaScope): void {
     if (scope.kind === 'MOTORISTA') {
       values.push(scope.contaId);
       conditions.push(`EXISTS(SELECT 1 FROM admtaxi.motorista_vinculos_ativos m WHERE m.conta_id=$${values.length}
         AND m.empresa_id=c.empresa_id AND (c.prestador_id=m.prestador_id OR
-          (c.prestador_id IS NULL AND ${scope.apenasAtribuidas ? 'FALSE' : 'TRUE'} AND c.status='SOLICITADA' AND m.disponivel AND NOT EXISTS (
-            SELECT 1 FROM admtaxi.corridas busy JOIN admtaxi.prestadores bp ON bp.id=busy.prestador_id AND bp.empresa_id=busy.empresa_id
-            JOIN admtaxi.usuarios bu ON bu.id=bp.usuario_id AND bu.empresa_id=bp.empresa_id
-            WHERE bu.conta_motorista_id=m.conta_id AND busy.status IN ('ACEITA','EM_DESLOCAMENTO','AGUARDANDO_PASSAGEIRO','EM_CORRIDA')))))`);
+          (c.prestador_id IS NULL AND ${scope.apenasAtribuidas ? 'FALSE' : 'TRUE'} AND c.status='SOLICITADA')))`);
       if (scope.periodo) {
         values.push(scope.periodo.inicio, scope.periodo.fimExclusive);
         conditions.push(`EXISTS(SELECT 1 FROM admtaxi.empresas e WHERE e.id=c.empresa_id
@@ -573,10 +591,10 @@ export class CorridaRepository {
         WHERE cp.empresa_id=c.empresa_id AND cp.corrida_id=c.id
         AND (NOT (cp.centro_custo_id=ANY($${values.length}::uuid[])) OR NOT (cf.centro_custo_id=ANY($${values.length}::uuid[]))))`);
     } else if (scope.kind === 'PRESTADOR') {
-      values.push(scope.prestadorId, scope.disponivel);
+      values.push(scope.prestadorId);
       conditions.push(`(
-        c.prestador_id = $${values.length - 1}
-        OR (c.prestador_id IS NULL AND c.status = 'SOLICITADA' AND $${values.length}::boolean = TRUE)
+        c.prestador_id = $${values.length}
+        OR (c.prestador_id IS NULL AND ${scope.apenasAtribuidas ? 'FALSE' : 'TRUE'} AND c.status = 'SOLICITADA')
       )`);
     } else if (scope.kind === 'FUNCIONARIO') {
       values.push(scope.funcionarioId);

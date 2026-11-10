@@ -61,7 +61,7 @@ export class RequisitionService {
       await this.record(client,auth,row,'CRIAR',metadata);
       await this.emails.enqueue(client,row,row.status); return row;
     });
-    this.publish(result); this.emails.kick(); return result;
+    this.publish(result); await this.emails.kick(); return result;
   }
   async decide(auth: AuthContext,id: string,decision: { autorizar: boolean; motivo?: string },metadata: AuditMetadata): Promise<RequisitionRow> {
     if (auth.perfil!=='GESTOR') throw forbidden('Somente o gestor autoriza viagens.');
@@ -76,7 +76,7 @@ export class RequisitionService {
       await this.record(client,auth,updated.rows[0]!,status,metadata);
       await this.emails.enqueue(client,updated.rows[0]!,status); return updated.rows[0]!;
     });
-    this.publish(result); this.emails.kick(); return result;
+    this.publish(result); await this.emails.kick(); return result;
   }
   async dispatch(auth: AuthContext,id: string,participants: RequisitionInput['participantes'],metadata: AuditMetadata) {
     if (auth.perfil!=='PORTARIA') throw forbidden('Somente a portaria pode solicitar a corrida apos conferencia.');
@@ -102,7 +102,7 @@ export class RequisitionService {
       } };
     });
     if (request) this.publish(request);
-    this.emails.kick();
+    await this.emails.kick();
     return ride;
   }
   private publish(row: RequisitionRow): void {

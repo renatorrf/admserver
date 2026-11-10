@@ -145,7 +145,7 @@ export class PainelParticipanteRepository {
       const provider = result.rows[0];
       if (!provider) throw forbidden();
       return {
-        scope: { kind: 'PRESTADOR', prestadorId: provider.id, disponivel: provider.disponivel },
+        scope: { kind: 'PRESTADOR', prestadorId: provider.id, apenasAtribuidas: !provider.disponivel },
         disponivel: provider.disponivel,
       };
     }

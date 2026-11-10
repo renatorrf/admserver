@@ -17,7 +17,7 @@ export async function driverRideContext(db: QueryExecutor, auth: AuthContext, ri
   const member = (await db.query<DriverMembership>(
     `SELECT m.* FROM admtaxi.motorista_vinculos_ativos m JOIN admtaxi.corridas c ON c.empresa_id=m.empresa_id
      WHERE m.conta_id=$1 AND c.id=$2 AND m.empresa_id=$3 AND m.usuario_id=$4 AND (c.prestador_id=m.prestador_id
-       OR (c.prestador_id IS NULL AND c.status='SOLICITADA' AND m.disponivel))`, [auth.contaMotoristaId, rideId, auth.empresaId, auth.usuarioId])).rows[0];
+       OR (c.prestador_id IS NULL AND c.status='SOLICITADA'))`, [auth.contaMotoristaId, rideId, auth.empresaId, auth.usuarioId])).rows[0];
   if (!member) throw notFound('Corrida');
   return { ...auth, usuarioId: member.usuario_id, empresaId: member.empresa_id };
 }
