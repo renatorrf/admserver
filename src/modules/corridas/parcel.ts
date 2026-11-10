@@ -9,6 +9,7 @@ const contact = z.object({
 export const parcelSchema = z.object({
   tipo: z.enum(['ENVIO', 'RETIRADA']),
   descricao: z.string().trim().min(3, 'Descreva a encomenda.').max(500),
+  empresaOrigem: z.string().trim().min(1).max(150).optional(),
   contatoOrigem: contact.optional(),
   contatoDestino: contact.optional(),
 }).strict();

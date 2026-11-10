@@ -167,12 +167,13 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
 
   const parcelInput = {
     chave: randomUUID(), tipo: 'IMEDIATA', participantes: [],
-    encomenda: { tipo: 'RETIRADA', descricao: 'Envelope lacrado', centroCustoId: center,
+    encomenda: { tipo: 'RETIRADA', descricao: 'Envelope lacrado', centroCustoId: center, empresaOrigem: '  Empresa de teste  ',
       origem: participants[0]!.origem, destino: participants[0]!.destino },
   };
   const postParcel = (auth: AuthContext, data: object) => request(app).post('/requisicoes')
     .set('Authorization',bearer(auth)).send(data);
   await postParcel(supervisor,{...parcelInput,participantes:[participants[0]]}).expect(422);
+  await postParcel(supervisor,{...parcelInput,encomenda:{...parcelInput.encomenda,empresaOrigem:'A'.repeat(151)}}).expect(422);
   await postParcel(supervisor,{...parcelInput,encomenda:{...parcelInput.encomenda,centroCustoId:randomUUID()}}).expect(403);
   await postParcel(gate,parcelInput).expect(403);
   await pool.query("UPDATE admtaxi.empresas SET modo_cobranca='MENSAL_FIXO' WHERE id=$1", [manager.empresaId]);
@@ -185,6 +186,7 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   assert.equal((await service.dispatch(gate,parcelRequest.id,[],{})).id,parcelRide.id);
   assert.equal(parcelRide.funcionarioId,null); assert.equal(parcelRide.quantidadePassageiros,0);
   assert.equal(parcelRide.centroCustoId,center); assert.equal(parcelRide.encomenda?.tipo,'RETIRADA');
+  assert.equal(parcelRide.encomenda?.empresaOrigem,'Empresa de teste');
   assert.equal((await rides.list(driver,{pagina:1,limite:20,grupo:'FILA',busca:'Envelope'})).data[0]?.id,parcelRide.id);
   const passengerUser = (await pool.query('SELECT usuario_id FROM admtaxi.funcionarios WHERE empresa_id=$1 AND id=$2',
     [manager.empresaId,employeeIds[0]])).rows[0]?.usuario_id;
@@ -201,7 +203,8 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   assert.equal((await service.get(gate,parcelRequest.id)).corridaResumo?.paradasConcluidas,2);
   assert.equal((await pool.query('SELECT count(*) FROM admtaxi.corrida_participacoes WHERE corrida_id=$1',[parcelRide.id])).rows[0].count,'0');
   assert((await pool.query("SELECT assunto,corpo FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='FINALIZADA'",
-    [parcelRequest.id])).rows.some(row=>row.assunto==='Encomenda concluída' && row.corpo.includes('Envelope lacrado')));
+    [parcelRequest.id])).rows.some(row=>row.assunto==='Encomenda concluída' && row.corpo.includes('Envelope lacrado')
+      && row.corpo.includes('Empresa de retirada: Empresa de teste')));
   ok('PARCEL approval, scoped cost center, idempotent gate dispatch, driver queue/search, collection, delivery, completion and internal notifications');
 
   const interrupted = await service.create(manager,requisicaoSchema.parse({...parcelInput,chave:randomUUID(),

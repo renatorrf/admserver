@@ -65,7 +65,15 @@ export class TravelEmails {
       const data = request.dados.participantes.find(p => p.funcionarioId === person.id);
       return [person.id, `${person.nome}\nOrigem: ${person.origem ?? data?.origem?.descricao ?? 'A confirmar pela portaria'}\nDestino: ${person.destino ?? data?.destino?.descricao ?? 'A confirmar pela portaria'}`];
     }));
-    if (parcel) summaries.set('encomenda', `${parcel.tipo === 'ENVIO' ? 'Envio' : 'Retirada'}: ${parcel.descricao}\n${parcelOrigin(parcel)}: ${parcel.origem.descricao}\nEntrega: ${parcel.destino.descricao}`);
+    if (parcel) {
+      const origin = parcelOrigin(parcel);
+      summaries.set('encomenda', [
+        `${parcel.tipo === 'ENVIO' ? 'Envio' : 'Retirada'}: ${parcel.descricao}`,
+        ...(parcel.empresaOrigem ? [`Empresa de ${origin.toLowerCase()}: ${parcel.empresaOrigem}`] : []),
+        `${origin}: ${parcel.origem.descricao}`,
+        `Entrega: ${parcel.destino.descricao}`,
+      ].join('\n'));
+    }
     const recipients = new Map<string,string>();
     for (const data of request.dados.participantes) if (!request.corrida_id && data.avulso) summaries.set(data.avulso.id,
       `${data.avulso.nome} (pre-cadastro)\nTelefone: ${data.avulso.telefone ?? 'A confirmar pela portaria'}\nOrigem: ${data.origem?.descricao ?? 'A confirmar pela portaria'}\nDestino: ${data.destino?.descricao ?? 'A confirmar pela portaria'}`);
