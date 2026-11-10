@@ -4,6 +4,7 @@ import { createPool } from './db/pool';
 import { ScheduledRideEmails } from './modules/corridas/scheduled-emails';
 import { SmtpScheduledMailer } from './modules/corridas/scheduled-mailer';
 import { TravelEmails } from './modules/requisicoes/travel-emails';
+import { NotificacaoService } from './modules/notificacoes/notificacao.service';
 
 async function main(): Promise<void> {
   const config = getConfig();
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
       if (count < 20) break;
     }
     for (let batch = 0; batch < 10 && !stopping; batch++) { const count = await travel.process(); processed += count; if (count < 20) break; }
+    if (!stopping) await new NotificacaoService(pool, config.push).processTravelPush();
     logger.info({ processed }, 'Processamento de emails de agendamento concluido.');
   } finally { await worker.stop(); await travel.stop(); await pool.end(); }
 }

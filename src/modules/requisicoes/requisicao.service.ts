@@ -102,6 +102,7 @@ export class RequisitionService {
       } };
     });
     if (request) this.publish(request);
+    this.emails.kick();
     return ride;
   }
   private publish(row: RequisitionRow): void {

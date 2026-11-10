@@ -45,6 +45,27 @@ function ride(): CorridaRecord {
 }
 
 describe('NotificacaoService', () => {
+  it('entrega o aviso de viagem persistido usando o mesmo transporte VAPID', async () => {
+    const queued = { id: 'notification-id', empresaId: auth.empresaId, usuarioId: auth.usuarioId, corridaId: null,
+      event: 'VIAGEM_AUTORIZADA', title: 'Viagem autorizada', body: 'A viagem foi aprovada.', destination: '/app/requisicoes' };
+    let claimed = false;
+    const query = vi.fn().mockImplementation((sql: string) => {
+      if (sql.includes('WITH next AS')) {
+        const rows = claimed ? [] : [queued]; claimed = true; return Promise.resolve({ rows });
+      }
+      if (sql.includes('FROM admtaxi.push_subscriptions')) return Promise.resolve({ rows: [subscriptionRow()] });
+      if (sql.includes('INSERT INTO admtaxi.push_tentativas')) return Promise.resolve({ rows: [{ id: 'attempt-id' }] });
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+    const send = vi.mocked(webpush.sendNotification).mockReset().mockResolvedValue({ statusCode: 201, body: '', headers: {} });
+    const service = new NotificacaoService({ query } as unknown as Database, config);
+    await Promise.all([service.processTravelPush(), service.processTravelPush()]);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(send.mock.calls[0]![1] as string)).toMatchObject({
+      title: queued.title, data: { notificationId: queued.id, openUrl: '/app/requisicoes', type: queued.event },
+    });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('UPDATE admtaxi.notificacoes_push'), [queued.id, 'ENVIADA', { enviados: 1, falhas: 0 }, null]);
+  });
   it('mantem identificacao, tag e topic em reenvios sem repetir o alerta', async () => {
     const query = vi.fn().mockImplementation((sql: string) => {
       if (sql.includes('INSERT INTO admtaxi.notificacoes_push')) return Promise.resolve({ rows: [{ id: subscriptionId }] });
@@ -58,6 +79,7 @@ describe('NotificacaoService', () => {
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
     expect(JSON.parse(send.mock.calls[0]![1] as string)).toMatchObject({
+      title: 'Notificação de teste', body: 'As notificações deste dispositivo estão funcionando.',
       tag: `adm-${subscriptionId}`, renotify: false, data: { notificationId: subscriptionId },
     });
     expect(send.mock.calls[0]![2]).toMatchObject({ TTL: 300, urgency: 'high', topic: expect.stringMatching(/^[A-Za-z0-9_-]{32}$/) });

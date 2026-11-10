@@ -13,6 +13,7 @@ type UsuarioRow = QueryResultRow & {
   telefone: string | null;
   perfil: PerfilUsuario;
   ativo: boolean;
+  recebe_avisos_viagem: boolean;
   ultimo_acesso_em: Date | null;
   criado_em: Date;
   atualizado_em: Date;
@@ -55,6 +56,7 @@ function mapUsuario(row: UsuarioRow): UsuarioRecord {
     telefone: row.telefone,
     perfil: row.perfil,
     ativo: row.ativo,
+    recebeAvisosViagem: row.recebe_avisos_viagem,
     ultimoAcessoEm: row.ultimo_acesso_em,
     criadoEm: row.criado_em,
     atualizadoEm: row.atualizado_em,
@@ -86,7 +88,7 @@ export class UsuarioRepository {
     values.push(query.limite, (query.pagina - 1) * query.limite);
     const result = await this.pool.query<UsuarioRow>(
       `SELECT id, empresa_id, nome, email::text, telefone, perfil::text, ativo,
-              ultimo_acesso_em, criado_em, atualizado_em
+              recebe_avisos_viagem, ultimo_acesso_em, criado_em, atualizado_em
          FROM admtaxi.usuarios WHERE ${where}
         ORDER BY nome ASC, id ASC
         LIMIT $${values.length - 1} OFFSET $${values.length}`,
@@ -99,7 +101,7 @@ export class UsuarioRepository {
     const row = await queryOne<UsuarioRow>(
       executor,
       `SELECT id, empresa_id, nome, email::text, telefone, perfil::text, ativo,
-              ultimo_acesso_em, criado_em, atualizado_em
+              recebe_avisos_viagem, ultimo_acesso_em, criado_em, atualizado_em
          FROM admtaxi.usuarios WHERE empresa_id = $1 AND id = $2`,
       [empresaId, id],
     );
@@ -113,11 +115,11 @@ export class UsuarioRepository {
     senhaHash: string,
   ): Promise<UsuarioRecord> {
     const result = await executor.query<UsuarioRow>(
-      `INSERT INTO admtaxi.usuarios (empresa_id, nome, email, telefone, senha_hash, perfil)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO admtaxi.usuarios (empresa_id, nome, email, telefone, senha_hash, perfil, recebe_avisos_viagem)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, empresa_id, nome, email::text, telefone, perfil::text, ativo,
-                 ultimo_acesso_em, criado_em, atualizado_em`,
-      [empresaId, input.nome, input.email, input.telefone ?? null, senhaHash, input.perfil],
+                 recebe_avisos_viagem, ultimo_acesso_em, criado_em, atualizado_em`,
+      [empresaId, input.nome, input.email, input.telefone ?? null, senhaHash, input.perfil, input.recebeAvisosViagem ?? true],
     );
     const row = result.rows[0];
     if (!row) throw new Error('Falha ao criar usuario.');
@@ -132,7 +134,7 @@ export class UsuarioRepository {
     senhaHash?: string,
   ): Promise<UsuarioRecord | null> {
     const fieldColumns: Record<string, string> = {
-      nome: 'nome', email: 'email', telefone: 'telefone', perfil: 'perfil',
+      nome: 'nome', email: 'email', telefone: 'telefone', perfil: 'perfil', recebeAvisosViagem: 'recebe_avisos_viagem',
     };
     const values: unknown[] = [empresaId, id];
     const assignments = Object.entries(input)
@@ -150,7 +152,7 @@ export class UsuarioRepository {
       `UPDATE admtaxi.usuarios SET ${assignments.join(', ')}
         WHERE empresa_id = $1 AND id = $2
       RETURNING id, empresa_id, nome, email::text, telefone, perfil::text, ativo,
-                ultimo_acesso_em, criado_em, atualizado_em`,
+                recebe_avisos_viagem, ultimo_acesso_em, criado_em, atualizado_em`,
       values,
     );
     return result.rows[0] ? mapUsuario(result.rows[0]) : null;
@@ -160,7 +162,7 @@ export class UsuarioRepository {
     const result = await executor.query<UsuarioRow>(
       `UPDATE admtaxi.usuarios SET ativo = $3 WHERE empresa_id = $1 AND id = $2
        RETURNING id, empresa_id, nome, email::text, telefone, perfil::text, ativo,
-                 ultimo_acesso_em, criado_em, atualizado_em`,
+                 recebe_avisos_viagem, ultimo_acesso_em, criado_em, atualizado_em`,
       [empresaId, id, ativo],
     );
     return result.rows[0] ? mapUsuario(result.rows[0]) : null;

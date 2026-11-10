@@ -30,8 +30,8 @@ export function createUsuarioRouter(service: UsuarioService): Router {
       response.json({ data: await service.findStaffAccounts(requireAuthContext(request), getValidatedQuery<{ email: string }>(request).email, 'manager') });
     }));
   router.post('/vincular-gestor', authorize('GESTOR'), accountLimiter,
-    validateBody(z.object({ contaId: z.string().uuid() }).strict()), asyncHandler(async (request, response) => {
-      response.status(201).json({ data: await service.linkStaffAccount(requireAuthContext(request), { contaId: request.body.contaId, perfil: 'GESTOR' }, auditMetadataFromRequest(request)) });
+    validateBody(z.object({ contaId: z.string().uuid(), recebeAvisosViagem: z.boolean().optional() }).strict()), asyncHandler(async (request, response) => {
+      response.status(201).json({ data: await service.linkStaffAccount(requireAuthContext(request), { ...request.body, perfil: 'GESTOR' }, auditMetadataFromRequest(request)) });
     }));
   router.get('/contas-equipe', authorize('GESTOR'), accountLimiter,
     validateQuery(z.object({ email: z.string().trim().email().max(254).toLowerCase() }).strict()), asyncHandler(async (request, response) => {

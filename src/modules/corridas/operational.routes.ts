@@ -50,11 +50,11 @@ export function createOperationalRouter(
   travelEmails?: TravelEmails,
   fcm?: FcmService,
   accessMail?: Pick<MailConfig,'resetUrl'|'resetTtlMinutes'>,
+  notifications = new NotificacaoService(pool, pushConfig, undefined, fcm),
 ): Router {
   const router = Router();
   router.use('/passageiros/controle',createAuthenticate(tokens),passengerControlRouter(pool));
-  const notifications = new NotificacaoService(pool, pushConfig, undefined, fcm);
-  const emails = travelEmails ?? new TravelEmails(pool, { warn: () => undefined, error: () => undefined });
+  const emails = travelEmails ?? new TravelEmails(pool, { warn: () => undefined, error: () => undefined }, undefined, accessMail, notifications);
   const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications, undefined, scheduledEmails, emails);
   router.use('/requisicoes', createAuthenticate(tokens), requisitionRouter(new RequisitionService(pool,new AuditRepository(pool),service,emails,realtime),
     new RequisitionAccessService(pool,new AuditRepository(pool),accessMail)));

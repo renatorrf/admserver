@@ -169,7 +169,12 @@ export async function testTenantLogin(pool: Pool, ok: (label: string) => void): 
   const body = { contaId: matches[0].id };
   await request(app).post('/users/vincular-gestor').auth(b.token, { type: 'bearer' }).send({ ...body, empresaId: c.id }).expect(422);
   await request(app).post('/users/vincular-gestor').auth(b.token, { type: 'bearer' }).send({ ...body, perfil: 'PORTARIA' }).expect(422);
-  const linked = (await request(app).post('/users/vincular-gestor').auth(b.token, { type: 'bearer' }).send(body).expect(201)).body.data;
+  const linked = (await request(app).post('/users/vincular-gestor').auth(b.token, { type: 'bearer' }).send({ ...body, recebeAvisosViagem: false }).expect(201)).body.data;
+  assert.equal(linked.recebeAvisosViagem, false);
+  assert.equal((await users.get(a.context, original.id)).recebeAvisosViagem, true);
+  await request(app).patch(`/users/${linked.id}`).auth(a.token, { type: 'bearer' }).send({ recebeAvisosViagem: true }).expect(404);
+  const reenabled = (await request(app).patch(`/users/${linked.id}`).auth(b.token, { type: 'bearer' }).send({ recebeAvisosViagem: true }).expect(200)).body.data;
+  assert.equal(reenabled.recebeAvisosViagem, true);
   assert.equal(linked.empresaId, b.id); assert.notEqual(linked.id, original.id); assert.equal(linked.perfil, 'GESTOR');
   await request(app).post('/users/vincular-gestor').auth(b.token, { type: 'bearer' }).send(body).expect(409);
   const selection = (await request(app).post('/auth/acesso').send({ email, senha: '123456' }).expect(200)).body.data;

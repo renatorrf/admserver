@@ -17,6 +17,7 @@ import { createAuthenticate } from '../src/modules/auth/auth.middleware';
 import { TokenService } from '../src/modules/auth/token-service';
 import { RealtimeBus } from '../src/realtime/realtime-bus';
 import { RequisitionAccessService } from '../src/modules/requisicoes/requisition-access';
+import { NotificacaoService } from '../src/modules/notificacoes/notificacao.service';
 
 export async function testRequisitions(pool: Pool,manager: AuthContext,gate: AuthContext,employeeIds: string[],center: string,sector: string,otherCompany: string,driver: AuthContext,vehicle: string,ok: (s: string)=>void) {
   const logger=pino({level:'silent'}); const audit=new AuditRepository(pool);
@@ -28,6 +29,14 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   const rides=new CorridaService(pool,audit,undefined,bus,undefined,undefined,undefined,emails);
   const service=new RequisitionService(pool,audit,rides,emails,bus);
   const supervisor: AuthContext={...manager,usuarioId:randomUUID(),perfil:'GERENTE'};
+  const observer = randomUUID(), optedOut = randomUUID(), inactive = randomUUID(), foreign = randomUUID();
+  for (const [id, company, name, active, receives] of [
+    [observer, manager.empresaId, 'observer', true, true], [optedOut, manager.empresaId, 'opt-out', true, false],
+    [inactive, manager.empresaId, 'inactive', false, true], [foreign, otherCompany, 'foreign', true, true],
+  ] as const) {
+    await pool.query(`INSERT INTO admtaxi.usuarios(id,empresa_id,nome,email,senha_hash,perfil,ativo,recebe_avisos_viagem)
+      VALUES($1,$2,$3,$4,'synthetic','GESTOR',$5,$6)`, [id, company, `Gestor avisos ${name}`, `${name}-travel@example.test`, active, receives]);
+  }
   await pool.query(`INSERT INTO admtaxi.usuarios(id,empresa_id,nome,email,senha_hash,perfil) VALUES($1,$2,'Supervisor requisicoes','supervisor-travel@example.test','synthetic','GERENTE')`,[supervisor.usuarioId,manager.empresaId]);
   await pool.query('INSERT INTO admtaxi.gerente_setores(empresa_id,gerente_usuario_id,setor_id) VALUES($1,$2,$3)',[manager.empresaId,supervisor.usuarioId,sector]);
   await pool.query('INSERT INTO admtaxi.gerente_centros_custo(empresa_id,gerente_usuario_id,centro_custo_id) VALUES($1,$2,$3)',[manager.empresaId,supervisor.usuarioId,center]);
@@ -59,13 +68,34 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   assert.equal(Number((await pool.query('SELECT count(*) FROM admtaxi.corridas WHERE empresa_id=$1',[manager.empresaId])).rows[0].count),before+1);
   assert.equal((await service.get(gate,created.id)).status,'SOLICITADA');
   const queue=await pool.query('SELECT * FROM admtaxi.emails_viagem WHERE requisicao_id=$1',[created.id]);
-  assert.equal(queue.rows.filter(r=>r.evento==='PENDENTE').length,5);
-  assert.equal(queue.rows.filter(r=>r.evento==='AUTORIZADA').length,5);
-  assert.equal(queue.rows.filter(r=>r.evento==='SOLICITADA').length,5);
+  assert.equal(queue.rows.filter(r=>r.evento==='PENDENTE').length,4);
+  assert.equal(queue.rows.filter(r=>r.evento==='AUTORIZADA').length,6);
+  assert.equal(queue.rows.filter(r=>r.evento==='SOLICITADA').length,6);
   const email=(await pool.query(`SELECT COALESCE(NULLIF(trim(f.email::text),''),u.email::text) AS email FROM admtaxi.funcionarios f
     JOIN admtaxi.usuarios u ON u.empresa_id=f.empresa_id AND u.id=f.usuario_id WHERE f.id=$1`,[employeeIds[0]])).rows[0].email.toLowerCase();
   const own=queue.rows.find(r=>r.evento==='SOLICITADA'&&r.destinatario===email);
   assert(own); assert(own.corpo.includes('Origem privada 0')); assert(!own.corpo.includes('Origem privada 1'));
+  const gateEmail = (await pool.query('SELECT email::text FROM admtaxi.usuarios WHERE id=$1',[gate.usuarioId])).rows[0].email;
+  assert(!queue.rows.some(row => row.evento === 'PENDENTE' && row.destinatario === gateEmail));
+  assert(queue.rows.some(row => row.evento === 'AUTORIZADA' && row.destinatario === gateEmail));
+  assert(queue.rows.some(row => row.evento === 'AUTORIZADA' && row.destinatario === 'supervisor-travel@example.test'));
+  assert(!queue.rows.some(row => /^(opt-out|inactive|foreign)-travel@/.test(row.destinatario)));
+  const notices = async (id: string, event: string) => (await pool.query(
+    'SELECT usuario_id,url_abertura,corpo,status FROM admtaxi.notificacoes_push WHERE chave_deduplicacao LIKE $1',
+    [`${manager.empresaId}:${id}:VIAGEM_${event}:%`])).rows;
+  const pending = await notices(created.id, 'PENDENTE');
+  assert.equal(pending.length, 4); assert(pending.some(row => row.usuario_id === observer));
+  assert(!pending.some(row => [gate.usuarioId, supervisor.usuarioId, optedOut, inactive, foreign].includes(row.usuario_id)));
+  const approved = await notices(created.id, 'AUTORIZADA');
+  assert.equal(approved.length, 6);
+  for (const id of [supervisor.usuarioId, gate.usuarioId, observer]) assert(approved.some(row => row.usuario_id === id && row.url_abertura === '/app/requisicoes'));
+  const dispatched = await notices(created.id, 'SOLICITADA');
+  assert.equal(dispatched.length, 6);
+  assert.equal(dispatched.filter(row => row.url_abertura === `/app/corridas/${results[0]!.id}`).length, 2);
+  assert(dispatched.every(row => !row.corpo.includes('Origem privada')));
+  await new NotificacaoService(pool).processTravelPush();
+  assert((await notices(created.id, 'SOLICITADA')).every(row => row.status === 'IGNORADA'));
+  ok('TRAVEL-NOTICES email/app recipients, manager preference, no early gate notification, tenant isolation and inbox without Web Push');
   let ride=await rides.accept(driver,results[0]!.id,{veiculoId:vehicle},{});
   let summary=(await service.list(gate)).find(row=>row.id===created.id)!.corridaResumo!;
   assert.equal(summary.status,'ACEITA');assert(summary.motoristaNome);assert.equal(summary.paradasConcluidas,0);
@@ -93,12 +123,16 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   }
   assert(rideChanges.filter(id=>id===ride.id).length>5);
   ok('REQUISITIONS-LIVE post-commit events, restricted portaria summary, driver acceptance, itinerary progress, completion and tenant isolation');
-  assert.equal((await pool.query("SELECT count(*) FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='FINALIZADA'",[created.id])).rows[0].count,'5');
+  assert.equal((await pool.query("SELECT count(*) FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='FINALIZADA'",[created.id])).rows[0].count,'6');
+  assert.equal((await notices(created.id, 'FINALIZADA')).length,6);
   const auto=await service.create(manager,{...input,chave:randomUUID(),participantes:[participants[0]!]},{ });
   assert.equal(auto.status,'AUTORIZADA');
   await assert.rejects(service.dispatch(gate,auto.id,[{...participants[0]!,origem:{...participants[0]!.origem,descricao:'Alterado indevidamente'}}],{}),{statusCode:409});
   const rejected=await service.create(supervisor,{...input,chave:randomUUID()},{});
   await service.decide(manager,rejected.id,{autorizar:false,motivo:'Sem necessidade operacional'},{});
+  const rejection = await notices(rejected.id, 'REJEITADA');
+  assert.equal(rejection.length,5); assert(rejection.some(row => row.usuario_id === supervisor.usuarioId));
+  assert(!rejection.some(row => row.usuario_id === gate.usuarioId));
   await assert.rejects(service.dispatch(gate,rejected.id,participants,{}),{statusCode:409});
   const failing=new RequisitionService(pool,{record:async()=>{throw Error('audit unavailable');}},rides,emails,bus);
   const eventCount=changes.length;

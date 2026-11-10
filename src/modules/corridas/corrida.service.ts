@@ -201,7 +201,12 @@ export class CorridaService {
       if (checked?.complete) await checked.complete(created.id);
       else await this.scheduledEmails?.enqueue(client, created);
       return created;
-    }), async ride => { if (createdNow) { await this.notifications?.publishRideCreated(ride); this.scheduledEmails?.kick(); this.travelEmails?.kick(); } });
+    }), async ride => {
+      if (!createdNow) return;
+      this.travelEmails?.kick();
+      await this.notifications?.publishRideCreated(ride, !!conference && !!this.travelEmails);
+      this.scheduledEmails?.kick();
+    });
   }
 
   assign(auth: AuthContext, id: string, input: CorridaAssignInput, metadata: AuditMetadata): Promise<CorridaRecord> {
@@ -377,6 +382,7 @@ export class CorridaService {
     auth = await driverRideContext(this.database, auth, id);
     this.requireProvider(auth);
     let changed = true;
+    let requisitionNotified = false;
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
       const provider = await this.requireProviderContext(client, auth, true);
@@ -411,15 +417,20 @@ export class CorridaService {
         'Corrida finalizada.', { valorFinal: input.valorFinal },
       );
       await this.recordAudit(client, auth, metadata, finished, 'FINALIZAR', current, finished);
-      await this.travelEmails?.completed(client, auth.empresaId, id);
+      requisitionNotified = await this.travelEmails?.closed(client, auth.empresaId, id, 'FINALIZADA') ?? false;
       return finished;
-    }), ride => { if (changed) { this.notifications?.publishRideUpdate(ride, 'FINALIZADA'); this.travelEmails?.kick(); } });
+    }), ride => {
+      if (!changed) return;
+      if (!requisitionNotified) this.notifications?.publishRideUpdate(ride, 'FINALIZADA');
+      this.travelEmails?.kick();
+    });
   }
 
   async cancel(auth: AuthContext, id: string, input: CorridaCancelInput, metadata: AuditMetadata): Promise<CorridaRecord> {
     auth = await driverRideContext(this.database, auth, id);
     if (!['GESTOR', 'GERENTE'].includes(auth.perfil)) throw forbidden();
     let changed = true;
+    let requisitionNotified = false;
     return this.withRealtime(withTransaction(this.database, async (client) => {
       const current = await this.requireLockedRide(client, auth, id);
       if (current.status === 'CANCELADA') {
@@ -450,11 +461,13 @@ export class CorridaService {
         'Corrida cancelada.', { motivo: input.motivo },
       );
       await this.recordAudit(client, auth, metadata, cancelled, 'CANCELAR', current, cancelled);
+      requisitionNotified = await this.travelEmails?.closed(client, auth.empresaId, id, 'CANCELADA', input.motivo) ?? false;
       return cancelled;
     }), ride => {
       if (!changed) return;
       this.notifications?.publishProviderRide(ride, 'CANCELADA');
-      this.notifications?.publishRideUpdate(ride, 'CANCELADA');
+      if (!requisitionNotified) this.notifications?.publishRideUpdate(ride, 'CANCELADA');
+      this.travelEmails?.kick();
     });
   }
 

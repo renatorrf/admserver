@@ -98,6 +98,9 @@ async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:Auth
   assert(user && user.perfil==='FUNCIONARIO' && user.deve_alterar_senha);
   assert.equal((await pool.query('SELECT id FROM admtaxi.usuarios WHERE email=$1',[email])).rowCount,1);
   assert.equal((await pool.query("SELECT id FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento LIKE 'PRIMEIRO_ACESSO:%'",[req.id])).rowCount,1);
+  assert.equal((await pool.query("SELECT id FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='SOLICITADA' AND destinatario=$2",[req.id,email])).rowCount,1);
+  assert.equal((await pool.query("SELECT id FROM admtaxi.notificacoes_push WHERE empresa_id=$1 AND corrida_id=$2 AND usuario_id=$3 AND evento='VIAGEM_SOLICITADA'",
+    [manager.empresaId,results[0]!.id,user.id])).rowCount,1);
   const logger=pino({level:'silent'});const config={resetUrl:'https://example.test/redefinir-senha',resetTtlMinutes:30};
   const failureWorker=new TravelEmails(pool,logger,{send:async()=>{throw Error('synthetic SMTP failure');}},config);
   while(await failureWorker.process()) { /* Drain due messages without contacting SMTP. */ }

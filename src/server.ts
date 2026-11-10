@@ -32,6 +32,7 @@ import { ScheduledRideEmails } from './modules/corridas/scheduled-emails';
 import { SmtpScheduledMailer } from './modules/corridas/scheduled-mailer';
 import { TravelEmails } from './modules/requisicoes/travel-emails';
 import { FcmService, createFcmSender } from './modules/notificacoes/fcm.service';
+import { NotificacaoService } from './modules/notificacoes/notificacao.service';
 
 const config = getConfig();
 const logger = createLogger(config);
@@ -48,10 +49,11 @@ const authService = new AuthService(
 const realtime = new RealtimeBus();
 const scheduledEmails = new ScheduledRideEmails(pool, logger, config.mail ? new SmtpScheduledMailer(config.mail) : undefined,
   config.mail?.resetUrl);
-const travelEmails = new TravelEmails(pool,logger,config.mail ? new SmtpScheduledMailer(config.mail) : undefined,config.mail);
+const notifications = new NotificacaoService(pool, config.push, undefined, fcm);
+const travelEmails = new TravelEmails(pool,logger,config.mail ? new SmtpScheduledMailer(config.mail) : undefined,config.mail,notifications);
 const adminRouter = createAdminRouter(pool, tokenService);
 const operationalRouter = createOperationalRouter(
-  pool, tokenService, realtime, config.geoapifyApiKey, config.push, scheduledEmails, travelEmails, fcm, config.mail,
+  pool, tokenService, realtime, config.geoapifyApiKey, config.push, scheduledEmails, travelEmails, fcm, config.mail, notifications,
 );
 const provisioningRouter = config.provisioningSecret
   ? createProvisionamentoRouter(new ProvisionamentoService(pool), config.provisioningSecret)
@@ -79,6 +81,7 @@ const io = attachSocketServer(server, config, tokenService, socketLocationServic
 async function start(): Promise<void> {
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=29')).rowCount) throw new Error('Migration 029_contas_equipe pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=30')).rowCount) throw new Error('Migration 030_motorista_empresa_selecionada pendente. Aplique antes de publicar este backend.');
+  if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=31')).rowCount) throw new Error('Migration 031_gestor_avisos_viagem pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=27')).rowCount) throw new Error('Migration 027_fcm_android pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=26')).rowCount) throw new Error('Migration 026_passageiros_plano pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=25')).rowCount) throw new Error('Migration 025_requisicoes_viagem pendente. Aplique antes de publicar este backend.');

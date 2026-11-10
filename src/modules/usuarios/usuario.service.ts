@@ -78,7 +78,7 @@ export class UsuarioService {
     return result.rows;
   }
 
-  async linkStaffAccount(auth: AuthContext, input: { contaId: string; perfil: 'GESTOR' | 'GERENTE' | 'PORTARIA' }, metadata: AuditMetadata): Promise<UsuarioRecord> {
+  async linkStaffAccount(auth: AuthContext, input: { contaId: string; perfil: 'GESTOR' | 'GERENTE' | 'PORTARIA'; recebeAvisosViagem?: boolean }, metadata: AuditMetadata): Promise<UsuarioRecord> {
     if (auth.perfil !== 'GESTOR') throw forbidden();
     const table = input.perfil === 'GESTOR' ? 'contas_gestor' : 'contas_equipe';
     const column = input.perfil === 'GESTOR' ? 'conta_gestor_id' : 'conta_equipe_id';
@@ -93,17 +93,18 @@ export class UsuarioService {
         throw conflict('Esta conta ja esta vinculada a esta empresa. Edite ou reative o cadastro existente.');
       }
       const inserted = (await client.query<{ id: string }>(
-        `INSERT INTO admtaxi.usuarios(empresa_id,nome,email,telefone,senha_hash,perfil,${column})
-         VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [auth.empresaId, account.nome, account.email, account.telefone, account.senha_hash, input.perfil, account.id])).rows[0]!;
+        `INSERT INTO admtaxi.usuarios(empresa_id,nome,email,telefone,senha_hash,perfil,${column},recebe_avisos_viagem)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [auth.empresaId, account.nome, account.email, account.telefone, account.senha_hash, input.perfil, account.id, input.recebeAvisosViagem ?? true])).rows[0]!;
       const created = (await this.repository.findById(client, auth.empresaId, inserted.id))!;
       await this.audit.record(client, { ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
-        entidade: 'usuario', entidadeId: created.id, acao: 'VINCULAR', dadosNovos: { contaId: account.id, perfil: input.perfil } });
+        entidade: 'usuario', entidadeId: created.id, acao: 'VINCULAR', dadosNovos: { contaId: account.id, perfil: input.perfil, recebeAvisosViagem: created.recebeAvisosViagem } });
       return created;
     });
   }
 
   async create(auth: AuthContext, input: UsuarioCreateInput, metadata: AuditMetadata): Promise<UsuarioRecord> {
+    if (input.recebeAvisosViagem !== undefined && input.perfil !== 'GESTOR') throw invalidReference('Esta preferência é exclusiva do gestor.');
     const senhaHash = await this.passwordHasher.hash(input.senha);
     return withTransaction(this.pool, async (client) => {
       const created = await this.repository.create(client, auth.empresaId, input, senhaHash);
@@ -128,6 +129,8 @@ export class UsuarioService {
     return withTransaction(this.pool, async (client) => {
       const current = await this.repository.findById(client, auth.empresaId, id);
       if (!current) throw notFound('Usuario');
+      if (input.recebeAvisosViagem !== undefined && (input.perfil ?? current.perfil) !== 'GESTOR')
+        throw invalidReference('Esta preferência é exclusiva do gestor.');
       if (current.perfil === 'GESTOR' && current.ativo && input.perfil && input.perfil !== 'GESTOR') {
         await this.ensureAnotherManager(client, auth.empresaId);
       }

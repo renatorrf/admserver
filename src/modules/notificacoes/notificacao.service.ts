@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import webpush from 'web-push';
 
 import type { PushConfig } from '../../config/env';
-import type { Database } from '../../db/pool';
+import type { Database, QueryExecutor } from '../../db/pool';
 import { forbidden, notFound, unavailable } from '../../shared/errors/app-error';
 import type { AuthContext } from '../auth/auth.types';
 import type { CorridaRecord } from '../corridas/corrida.types';
@@ -49,7 +49,7 @@ export interface EmployeeUserResolver {
 }
 
 export interface CorridaNotificationPublisher {
-  publishRideCreated(ride: CorridaRecord): void | Promise<void>;
+  publishRideCreated(ride: CorridaRecord, requisitionNotified?: boolean): void | Promise<void>;
   publishRideUpdate(ride: CorridaRecord, event: RideNotificationEvent): void;
   publishProviderRide(ride: CorridaRecord, event: 'ATRIBUIDA' | 'ALTERADA' | 'REMOVIDA' | 'CANCELADA'): void | Promise<void>;
   publishItineraryUpdate?(ride: CorridaRecord, action?: ItineraryAction): void;
@@ -57,7 +57,49 @@ export interface CorridaNotificationPublisher {
 
 let vapidInitialized = false;
 
+type PushMessage = {
+  empresaId: string; usuarioId: string; corridaId: string | null; event: string;
+  title: string; body: string; destination: string; subscriptionId?: string;
+};
+
+export async function enqueuePush(executor: QueryExecutor, input: PushMessage & { dedupeKey: string }): Promise<string | undefined> {
+  const inserted = await executor.query<{ id: string }>(
+    `INSERT INTO admtaxi.notificacoes_push
+       (empresa_id,usuario_id,corrida_id,evento,titulo,corpo,chave_deduplicacao,url_abertura,tipo_payload)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (chave_deduplicacao) DO NOTHING RETURNING id`,
+    [input.empresaId, input.usuarioId, input.corridaId, input.event, input.title, input.body,
+      input.dedupeKey, input.destination, input.event],
+  );
+  return inserted.rows[0]?.id;
+}
+
 export class NotificacaoService implements CorridaNotificationPublisher {
+  private travelPushRunning?: Promise<void>;
+
+  processTravelPush(): Promise<void> {
+    return this.travelPushRunning ??= this.deliverTravelBatch().finally(() => { this.travelPushRunning = undefined; });
+  }
+
+  private async deliverTravelBatch(): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      // Claim one committed inbox item across instances without holding a lock during network I/O.
+      const result = await this.database.query<PushMessage & { id: string }>(
+        `WITH next AS (
+           SELECT id FROM admtaxi.notificacoes_push
+           WHERE status='PENDENTE' AND left(tipo_payload,7)='VIAGEM_'
+             AND (tentada_em IS NULL OR tentada_em<CURRENT_TIMESTAMP-INTERVAL '2 minutes')
+           ORDER BY criado_em,id LIMIT 1 FOR UPDATE SKIP LOCKED
+         )
+         UPDATE admtaxi.notificacoes_push n SET tentada_em=CURRENT_TIMESTAMP FROM next WHERE n.id=next.id
+         RETURNING n.id,n.empresa_id AS "empresaId",n.usuario_id AS "usuarioId",n.corrida_id AS "corridaId",
+           n.evento AS event,n.titulo AS title,n.corpo AS body,n.url_abertura AS destination`);
+      const item = result.rows[0];
+      if (!item) break;
+      await this.deliver(item.id, item);
+    }
+  }
+
   async listOwn(auth: AuthContext) {
     const result = await this.database.query<{ id: string; titulo: string; corpo: string; criadoEm: Date; corridaId: string | null; urlAbertura: string }>(
       `SELECT n.id,n.titulo,n.corpo,n.criado_em AS "criadoEm",n.corrida_id AS "corridaId",n.url_abertura AS "urlAbertura" FROM admtaxi.notificacoes_push n
@@ -126,8 +168,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   async sendTest(auth: AuthContext): Promise<void> {
     await this.sendRecipient({
       empresaId: auth.empresaId, usuarioId: auth.usuarioId, corridaId: null,
-      event: 'TESTE', title: 'Notificacao de teste',
-      body: 'As notificacoes deste dispositivo estao funcionando.',
+      event: 'TESTE', title: 'Notificação de teste',
+      body: 'As notificações deste dispositivo estão funcionando.',
       destination: this.pushConfig?.defaultOpenUrl ?? '/app/perfil',
       dedupeKey: `${auth.empresaId}:TESTE:${auth.usuarioId}:${randomUUID()}`,
     });
@@ -174,7 +216,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     if (!userId) throw notFound('Inscricao Web Push');
     await this.sendRecipient({
       empresaId: auth.empresaId, usuarioId: userId, corridaId: null,
-      event: 'DIAGNOSTICO', title: 'Teste de notificacao ADM-Taxi',
+      event: 'DIAGNOSTICO', title: 'Notificação de teste',
       body: 'O dispositivo recebeu o teste enviado pelo gestor.',
       destination: this.pushConfig?.defaultOpenUrl ?? '/app',
       dedupeKey: `${auth.empresaId}:DIAGNOSTICO:${subscriptionId}:${randomUUID()}`,
@@ -182,8 +224,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     });
   }
 
-  async publishRideCreated(ride: CorridaRecord): Promise<void> {
-    await Promise.all([this.sendAvailableRide(ride), this.sendEmployeeRide(ride, 'SOLICITADA')]).catch(() => undefined);
+  async publishRideCreated(ride: CorridaRecord, requisitionNotified = false): Promise<void> {
+    await Promise.all([this.sendAvailableRide(ride), ...(!requisitionNotified ? [this.sendEmployeeRide(ride, 'SOLICITADA')] : [])]).catch(() => undefined);
   }
 
   publishRideUpdate(ride: CorridaRecord, event: RideNotificationEvent): void {
@@ -228,8 +270,8 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     );
     await Promise.all(recipients.rows.map((recipient) => this.sendRecipient({
       empresaId: ride.empresaId, usuarioId: recipient.usuario_id, corridaId: ride.id,
-      event: 'CORRIDA_OFERTADA', title: 'Nova corrida disponivel',
-      body: 'Existe uma nova corrida na sua regiao.', destination: this.rideUrl(ride.id),
+      event: 'CORRIDA_OFERTADA', title: 'Nova corrida disponível',
+      body: 'Abra o aplicativo para consultar a corrida.', destination: this.rideUrl(ride.id),
       dedupeKey: `${ride.empresaId}:${ride.id}:CORRIDA_OFERTADA:${recipient.usuario_id}`,
     })));
   }
@@ -237,7 +279,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   private async sendRequesterRide(ride: CorridaRecord, event: RideNotificationEvent): Promise<void> {
     const authorized = await this.database.query<{ id: string; perfil: string }>(
       `SELECT u.id,u.perfil FROM admtaxi.usuarios u WHERE u.empresa_id=$1 AND u.id=$2 AND u.ativo=TRUE AND (
-        u.perfil IN ('GESTOR','PORTARIA') OR (u.perfil='GERENTE' AND EXISTS (
+        (u.perfil='GESTOR' AND u.recebe_avisos_viagem) OR u.perfil='PORTARIA' OR (u.perfil='GERENTE' AND EXISTS (
           SELECT 1 FROM admtaxi.gerente_centros_custo gcc
           JOIN admtaxi.centros_custo cc ON cc.empresa_id=gcc.empresa_id AND cc.id=gcc.centro_custo_id AND cc.ativo=TRUE
           JOIN admtaxi.setores s ON s.empresa_id=cc.empresa_id AND s.id=cc.setor_id AND s.ativo=TRUE
@@ -254,7 +296,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   private async sendGestorsRide(ride: CorridaRecord, event: RideNotificationEvent): Promise<void> {
     const users = await this.database.query<UserRow>(
       `SELECT id AS usuario_id FROM admtaxi.usuarios
-        WHERE empresa_id=$1 AND perfil='GESTOR' AND ativo=TRUE AND id<>$2`,
+        WHERE empresa_id=$1 AND perfil='GESTOR' AND ativo=TRUE AND recebe_avisos_viagem AND id<>$2`,
       [ride.empresaId, ride.solicitanteUsuarioId],
     );
     await Promise.all(users.rows.map((user) => this.sendRideMessage(ride, user.usuario_id, `GESTOR_${event}`, event)));
@@ -277,7 +319,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
       )).rows;
     if (!recipients.length) return;
     const message = event === 'SOLICITADA'
-      ? { title: 'Nova corrida solicitada', body: 'Uma nova corrida foi solicitada para voce.' }
+      ? { title: 'Nova corrida solicitada', body: 'Uma nova corrida foi solicitada para você.' }
       : this.rideMessage(event);
     await Promise.all(recipients.filter(p => !!p.usuario_id).map((recipient) => {
       const userId = recipient.usuario_id!;
@@ -304,10 +346,10 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     const userId = recipient.rows[0]?.usuario_id;
     if (!userId) return;
     const title = event === 'CANCELADA' ? 'Corrida cancelada'
-      : event === 'REMOVIDA' ? 'Atribuicao de corrida alterada'
-        : event === 'ALTERADA' ? 'Corrida atualizada' : 'Nova corrida atribuida';
-    const body = event === 'CANCELADA' ? 'A corrida atribuida a voce foi cancelada.'
-      : event === 'REMOVIDA' ? 'Esta corrida nao esta mais atribuida a voce.'
+      : event === 'REMOVIDA' ? 'Atribuição de corrida alterada'
+        : event === 'ALTERADA' ? 'Corrida atualizada' : 'Nova corrida atribuída';
+    const body = event === 'CANCELADA' ? 'A corrida atribuída a você foi cancelada.'
+      : event === 'REMOVIDA' ? 'Esta corrida não está mais atribuída a você.'
         : 'Abra o aplicativo para consultar os detalhes da corrida.';
     await this.sendRecipient({
       empresaId: ride.empresaId, usuarioId: userId, corridaId: ride.id, event, title, body,
@@ -325,23 +367,16 @@ export class NotificacaoService implements CorridaNotificationPublisher {
     });
   }
 
-  private async sendRecipient(input: {
-    empresaId: string; usuarioId: string; corridaId: string | null; event: string;
-    title: string; body: string; destination: string; dedupeKey: string; subscriptionId?: string;
-  }): Promise<void> {
+  private async sendRecipient(input: PushMessage & { dedupeKey: string }): Promise<void> {
     const destination = this.safeOpenUrl(input.destination);
-    const inserted = await this.database.query<{ id: string }>(
-      `INSERT INTO admtaxi.notificacoes_push
-         (empresa_id,usuario_id,corrida_id,evento,titulo,corpo,chave_deduplicacao,url_abertura,tipo_payload)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       ON CONFLICT (chave_deduplicacao) DO NOTHING RETURNING id`,
-      [input.empresaId, input.usuarioId, input.corridaId, input.event, input.title, input.body,
-        input.dedupeKey, destination, input.event],
-    );
-    const notificationId = inserted.rows[0]?.id;
+    const notificationId = await enqueuePush(this.database, { ...input, destination });
     if (!notificationId) return;
     // The trigger persisted native jobs atomically with this notification.
     await this.fcm?.process().catch(() => this.fcm?.kick());
+    await this.deliver(notificationId, { ...input, destination });
+  }
+
+  private async deliver(notificationId: string, input: PushMessage): Promise<void> {
     const values: unknown[] = [input.empresaId, input.usuarioId];
     const idFilter = input.subscriptionId ? ' AND id=$3' : '';
     if (input.subscriptionId) values.push(input.subscriptionId);
@@ -359,7 +394,7 @@ export class NotificacaoService implements CorridaNotificationPublisher {
       title: input.title, body: input.body,
       icon: this.pushConfig.notificationIconUrl, badge: this.pushConfig.notificationBadgeUrl,
       tag: `adm-${notificationId}`, renotify: false,
-      data: { notificationId, type: input.event, corridaId: input.corridaId, openUrl: destination },
+      data: { notificationId, type: input.event, corridaId: input.corridaId, openUrl: input.destination },
     });
     const results = await Promise.all(subscriptions.rows.map((subscription) =>
       this.sendSubscription(input.empresaId, notificationId, subscription, payload)));
@@ -443,13 +478,13 @@ export class NotificacaoService implements CorridaNotificationPublisher {
   private rideMessage(event: RideNotificationEvent): { title: string; body: string } {
     return {
       ACEITA: { title: 'Corrida aceita', body: 'O prestador aceitou a corrida.' },
-      DESLOCAMENTO_INICIADO: { title: 'Prestador a caminho', body: 'O prestador esta a caminho do embarque.' },
-      CHEGADA_AO_EMBARQUE: { title: 'Prestador no embarque', body: 'O prestador chegou ao local de embarque.' },
+      DESLOCAMENTO_INICIADO: { title: 'Motorista a caminho', body: 'O motorista está a caminho do embarque.' },
+      CHEGADA_AO_EMBARQUE: { title: 'Motorista no embarque', body: 'O motorista chegou ao local de embarque.' },
       CORRIDA_INICIADA: { title: 'Corrida iniciada', body: 'A corrida foi iniciada.' },
       FINALIZADA: { title: 'Corrida finalizada', body: 'A corrida foi finalizada.' },
       CANCELADA: { title: 'Corrida cancelada', body: 'A corrida foi cancelada.' },
-      ATRIBUICAO_ALTERADA: { title: 'Corrida atualizada', body: 'O prestador ou veiculo foi alterado.' },
-      ITINERARIO_ALTERADO: { title: 'Itinerario atualizado', body: 'Confira os pontos da sua viagem no aplicativo.' },
+      ATRIBUICAO_ALTERADA: { title: 'Corrida atualizada', body: 'O motorista ou o veículo foi alterado.' },
+      ITINERARIO_ALTERADO: { title: 'Itinerário atualizado', body: 'Confira as paradas da viagem no aplicativo.' },
       ETAPA_ATUALIZADA: { title: 'Etapa da viagem atualizada', body: 'Abra a corrida para consultar o atendimento do seu trajeto.' },
     }[event];
   }

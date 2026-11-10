@@ -11,6 +11,7 @@ const fields = {
   telefone: optionalText(20),
   senha: passwordSchema,
   perfil: z.enum(['PRESTADOR', 'GERENTE', 'GESTOR', 'PORTARIA']),
+  recebeAvisosViagem: z.boolean().optional(),
 };
 
 export const usuarioCreateSchema = z.object(fields).strict();
@@ -20,6 +21,7 @@ export const usuarioUpdateSchema = z.object({
   telefone: fields.telefone,
   senha: fields.senha.optional(),
   perfil: fields.perfil.optional(),
+  recebeAvisosViagem: fields.recebeAvisosViagem,
 }).strict().refine((value) => Object.values(value).some((item) => item !== undefined), {
   message: 'Informe ao menos um campo para atualizar.',
 });
