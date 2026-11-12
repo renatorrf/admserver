@@ -5,11 +5,12 @@ import type { AuditMetadata } from '../auditoria/audit.types';
 import type { CorridaAuditWriter, CorridaService } from '../corridas/corrida.service';
 import { commandHash } from '../corridas/itinerary.repository';
 import { centerAllowed, OperationalScopeService } from '../escopo/operational-scope.service';
-import { conferenceData, parcelRideInput, requisicaoSchema, toRideInput, type RequisitionInput, type RequisitionRow } from './requisicao.schemas';
+import { conferenceData, parcelRideInput, passengerKey, requisicaoSchema, toRideInput, type RequisitionInput, type RequisitionRow } from './requisicao.schemas';
 import type { TravelEmails } from './travel-emails';
 import { resolveGuests } from './guest-passengers';
 import type { RequisitionRealtimePublisher } from '../../realtime/realtime-bus';
 import type { RequisitionRideSummary } from './requisicao.schemas';
+import type { WhatsAppDelivery } from './whatsapp-delivery';
 
 const parcelCenterLabel = `(SELECT cc.codigo || ' · ' || cc.nome FROM admtaxi.centros_custo cc
   WHERE cc.empresa_id=r.empresa_id AND cc.id=(r.dados->'encomenda'->>'centroCustoId')::uuid) AS "encomendaCentroCusto"`;
@@ -17,7 +18,8 @@ const parcelCenterLabel = `(SELECT cc.codigo || ' · ' || cc.nome FROM admtaxi.c
 export class RequisitionService {
   constructor(private readonly database: Database, private readonly audit: CorridaAuditWriter,
     private readonly rides: CorridaService, private readonly emails: TravelEmails,
-    private readonly realtime?: RequisitionRealtimePublisher) {}
+    private readonly realtime?: RequisitionRealtimePublisher,
+    private readonly whatsapp?: WhatsAppDelivery) {}
   async list(auth: AuthContext, offset = 0): Promise<RequisitionRow[]> {
     this.authorize(auth);
     const result = await this.database.query<RequisitionRow>(`SELECT r.*,u.nome AS solicitante,${parcelCenterLabel},
@@ -82,7 +84,8 @@ export class RequisitionService {
     });
     this.publish(result); await this.emails.kick(); return result;
   }
-  async dispatch(auth: AuthContext,id: string,participants: RequisitionInput['participantes'],metadata: AuditMetadata,valorEncomenda?: string) {
+  async dispatch(auth: AuthContext,id: string,participants: RequisitionInput['participantes'],metadata: AuditMetadata,
+    valorEncomenda?: string, autorizacoesWhatsapp: string[] = []) {
     if (auth.perfil!=='PORTARIA') throw forbidden('Somente a portaria pode solicitar a corrida apos conferencia.');
     let request: RequisitionRow | undefined;
     // The hook runs inside the ride transaction and locks the request through creation and linking.
@@ -111,10 +114,17 @@ export class RequisitionService {
         [auth.empresaId,id,JSON.stringify(data),corridaId,auth.usuarioId]);
         await this.record(client,auth,updated.rows[0]!,'SOLICITAR',metadata);
         await this.emails.enqueue(client,updated.rows[0]!,'SOLICITADA');
+        if (this.whatsapp && !data.encomenda && autorizacoesWhatsapp.length) {
+          const allowed = new Set(autorizacoesWhatsapp);
+          const employeeIds = data.participantes.filter(person => allowed.has(passengerKey(person)))
+            .map(person => resolved.get(passengerKey(person)) ?? person.funcionarioId!);
+          await this.whatsapp.enqueue(client,auth,id,corridaId,employeeIds);
+        }
       } };
     });
     if (request) this.publish(request);
     await this.emails.kick();
+    await this.whatsapp?.kick();
     return ride;
   }
   private publish(row: RequisitionRow): void {

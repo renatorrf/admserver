@@ -13,6 +13,7 @@ import { passengerControl } from '../src/modules/usuarios/passenger-control';
 import { PasswordService } from '../src/modules/auth/password.service';
 import { RequisitionAccessService } from '../src/modules/requisicoes/requisition-access';
 import { hashResetToken } from '../src/modules/auth/password.service';
+import { WhatsAppDelivery } from '../src/modules/requisicoes/whatsapp-delivery';
 
 export async function testGuestPassengers(pool:Pool,manager:AuthContext,gate:AuthContext,center:string,driver:AuthContext,vehicle:string,ok:(s:string)=>void) {
   const audit=new AuditRepository(pool);const emails=new TravelEmails(pool,pino({level:'silent'}));
@@ -92,19 +93,35 @@ async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:Auth
   await assert.rejects(failed.dispatch(gate,req.id,complete,{}),/synthetic audit failure/);
   assert.equal((await pool.query('SELECT id FROM admtaxi.usuarios WHERE email=$1',[email])).rowCount,0);
   assert.equal((await pool.query('SELECT id FROM admtaxi.emails_viagem WHERE destinatario=$1',[email])).rowCount,0);
-  const results=await Promise.all([service.dispatch(gate,req.id,complete,{}),service.dispatch(gate,req.id,complete,{})]);
+  const logger=pino({level:'silent'});const config={resetUrl:'https://example.test/redefinir-senha',resetTtlMinutes:30};
+  const audit=new AuditRepository(pool);
+  const access=new RequisitionAccessService(pool,audit,config);
+  const outgoing: Array<{to:string; template:{name:string;components:Array<{parameters:Array<{text:string}>}>}}> = [];
+  const delivery=new WhatsAppDelivery(pool,logger,{version:'v99.0',phoneNumberId:'123456',accessToken:'test',
+    rideTemplate:'corrida',firstAccessTemplate:'primeiro_acesso',language:'pt_BR',appUrl:'https://example.test/'},access,async (_url,init)=>{
+    outgoing.push(JSON.parse(String(init?.body)));
+    return Response.json({messages:[{id:`wamid.guest.${outgoing.length}`}]});
+  });
+  const automated=new RequisitionService(pool,audit,rides,new TravelEmails(pool,logger),undefined,delivery);
+  const consent=[complete[0]!.avulso.id];
+  const results=await Promise.all([automated.dispatch(gate,req.id,complete,{},undefined,consent),
+    automated.dispatch(gate,req.id,complete,{},undefined,consent)]);
   assert.equal(results[0]!.id,results[1]!.id);
+  assert.deepEqual(outgoing.map(message=>message.template.name),['corrida','primeiro_acesso']);
+  assert(outgoing.every(message=>message.to==='5534998882222'));
+  const automaticToken=outgoing[1]!.template.components[0]!.parameters[1]!.text.match(/#token=([a-f0-9]{64})$/)![1]!;
   const user=(await pool.query('SELECT * FROM admtaxi.usuarios_autenticacao WHERE email=$1',[email])).rows[0];
   assert(user && user.perfil==='FUNCIONARIO' && user.deve_alterar_senha);
+  assert.equal((await pool.query('SELECT token_hash FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1',[user.id])).rows[0].token_hash,
+    hashResetToken(automaticToken));
   assert.equal((await pool.query('SELECT id FROM admtaxi.usuarios WHERE email=$1',[email])).rowCount,1);
   assert.equal((await pool.query("SELECT id FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento LIKE 'PRIMEIRO_ACESSO:%'",[req.id])).rowCount,1);
   assert.equal((await pool.query("SELECT id FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='SOLICITADA' AND destinatario=$2",[req.id,email])).rowCount,1);
   assert.equal((await pool.query("SELECT id FROM admtaxi.notificacoes_push WHERE empresa_id=$1 AND corrida_id=$2 AND usuario_id=$3 AND evento='VIAGEM_SOLICITADA'",
     [manager.empresaId,results[0]!.id,user.id])).rowCount,1);
-  const logger=pino({level:'silent'});const config={resetUrl:'https://example.test/redefinir-senha',resetTtlMinutes:30};
   const failureWorker=new TravelEmails(pool,logger,{send:async()=>{throw Error('synthetic SMTP failure');}},config);
   while(await failureWorker.process()) { /* Drain due messages without contacting SMTP. */ }
-  assert.equal((await pool.query('SELECT count(*) FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1 AND usado_em IS NULL',[user.id])).rows[0].count,'0');
+  assert.equal((await pool.query('SELECT count(*) FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1 AND usado_em IS NULL',[user.id])).rows[0].count,'1');
   await pool.query("UPDATE admtaxi.emails_viagem SET proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='PENDENTE'");
   const messages:{to:string;text:string;subject:string}[]=[];
   const worker=new TravelEmails(pool,logger,{send:async message=>{messages.push(message);}},config);
@@ -115,7 +132,6 @@ async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:Auth
   assert(!messages.some(m=>m.to!==email && m.text.includes(token)));
   assert(!(await pool.query('SELECT corpo FROM admtaxi.emails_viagem WHERE destinatario=$1',[email])).rows.some(r=>r.corpo.includes(token)));
   const passwords=new PasswordService(pool,logger);
-  const access=new RequisitionAccessService(pool,new AuditRepository(pool),config);
   const employeeId=results[0]!.funcionarioId!;
   await assert.rejects(access.list(manager,req.id),{statusCode:403});
   await assert.rejects(access.list({...gate,empresaId:randomUUID()},req.id),{statusCode:404});
@@ -139,6 +155,7 @@ async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:Auth
   await passwords.reset({token:whatsappToken,novaSenha:'NovaSenha123'});
   await assert.rejects(passwords.reset({token:whatsappToken,novaSenha:'OutraSenha123'}),{statusCode:400});
   await assert.rejects(passwords.reset({token,novaSenha:'OutraSenha123'}),{statusCode:400});
+  await assert.rejects(passwords.reset({token:automaticToken,novaSenha:'OutraSenha123'}),{statusCode:400});
   const existing=await access.prepare(gate,req.id,employeeId,{});
   assert.equal(existing.expiraEm,null);assert(!existing.mensagem.includes('#token='));assert(existing.mensagem.includes('senha atual'));
   ok('WHATSAPP gate-only tenant/participant scope, hashed one-use token, atomic rollback, concurrent limit, email coexistence, existing password preserved');

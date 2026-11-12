@@ -67,6 +67,16 @@ const envSchema = z.object({
   PUSH_NOTIFICATION_BADGE_URL: optionalEnvironmentValue(z.string().url()),
   PUSH_DEFAULT_OPEN_URL: optionalEnvironmentValue(z.string().trim().startsWith('/')),
   PUSH_RIDE_OPEN_URL: optionalEnvironmentValue(z.string().trim().startsWith('/')),
+  WHATSAPP_ENABLED: z.enum(['true', 'false']).default('false'),
+  WHATSAPP_GRAPH_API_VERSION: optionalEnvironmentValue(z.string().regex(/^v\d+\.\d+$/)),
+  WHATSAPP_PHONE_NUMBER_ID: optionalEnvironmentValue(z.string().regex(/^\d{5,32}$/)),
+  WHATSAPP_ACCESS_TOKEN: optionalEnvironmentValue(z.string().trim().min(1)),
+  WHATSAPP_RIDE_TEMPLATE: optionalEnvironmentValue(z.string().regex(/^[a-z0-9_]{1,512}$/)),
+  WHATSAPP_FIRST_ACCESS_TEMPLATE: optionalEnvironmentValue(z.string().regex(/^[a-z0-9_]{1,512}$/)),
+  WHATSAPP_TEMPLATE_LANGUAGE: z.string().regex(/^[a-z]{2,3}(?:_[A-Z]{2})?$/).default('pt_BR'),
+  WHATSAPP_APP_URL: z.url({ protocol: /^https$/ }).default('https://admbrasil-taxi.web.app/'),
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: optionalEnvironmentValue(z.string().regex(/^[A-Za-z0-9_-]{32,256}$/)),
+  WHATSAPP_APP_SECRET: optionalEnvironmentValue(z.string().trim().min(16)),
 });
 
 export type AppConfig = {
@@ -87,6 +97,13 @@ export type AppConfig = {
   push?: PushConfig;
   fcmProjectId?: string;
   mail?: MailConfig;
+  whatsapp?: WhatsAppConfig;
+  whatsappWebhook?: { verifyToken?: string; appSecret?: string; phoneNumberId?: string };
+};
+
+export type WhatsAppConfig = {
+  version: string; phoneNumberId: string; accessToken: string; rideTemplate: string;
+  firstAccessTemplate: string; language: string; appUrl: string;
 };
 
 export type MailConfig = {
@@ -157,6 +174,12 @@ export function getConfig(): AppConfig {
       throw new Error('PASSWORD_RESET_URL e MASTER_PASSWORD_RESET_URL devem ser URLs HTTPS sem credenciais, query ou fragmento.');
     }
   }
+  const w = parsed.data;
+  if (w.WHATSAPP_ENABLED === 'true' && ![w.WHATSAPP_GRAPH_API_VERSION, w.WHATSAPP_PHONE_NUMBER_ID,
+    w.WHATSAPP_ACCESS_TOKEN, w.WHATSAPP_RIDE_TEMPLATE, w.WHATSAPP_FIRST_ACCESS_TEMPLATE,
+    w.WHATSAPP_WEBHOOK_VERIFY_TOKEN, w.WHATSAPP_APP_SECRET, w.PASSWORD_RESET_URL].every(Boolean)) {
+    throw new Error('Configuracao WhatsApp incompleta: informe o remetente, credenciais, modelos, segredos do webhook e PASSWORD_RESET_URL.');
+  }
 
   cachedConfig = {
     nodeEnv: parsed.data.NODE_ENV,
@@ -179,6 +202,14 @@ export function getConfig(): AppConfig {
     masterBootstrapPasswordHash: parsed.data.MASTER_BOOTSTRAP_PASSWORD_HASH,
     geoapifyApiKey: parsed.data.GEOAPIFY_API_KEY,
     fcmProjectId: parsed.data.FCM_PROJECT_ID,
+    whatsappWebhook: {
+      verifyToken: w.WHATSAPP_WEBHOOK_VERIFY_TOKEN, appSecret: w.WHATSAPP_APP_SECRET, phoneNumberId: w.WHATSAPP_PHONE_NUMBER_ID,
+    },
+    whatsapp: w.WHATSAPP_ENABLED === 'true' ? {
+      version: w.WHATSAPP_GRAPH_API_VERSION!, phoneNumberId: w.WHATSAPP_PHONE_NUMBER_ID!,
+      accessToken: w.WHATSAPP_ACCESS_TOKEN!, rideTemplate: w.WHATSAPP_RIDE_TEMPLATE!,
+      firstAccessTemplate: w.WHATSAPP_FIRST_ACCESS_TEMPLATE!, language: w.WHATSAPP_TEMPLATE_LANGUAGE, appUrl: w.WHATSAPP_APP_URL,
+    } : undefined,
     mail: parsed.data.SMTP_HOST ? {
       host: parsed.data.SMTP_HOST, port: parsed.data.SMTP_PORT ?? 587,
       secure: parsed.data.SMTP_SECURE === 'true' || (parsed.data.SMTP_SECURE === undefined && parsed.data.SMTP_PORT === 465),

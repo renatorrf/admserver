@@ -76,6 +76,7 @@ export class RequisitionAccessService {
       if (updatedReason) throw conflict(updatedReason);
       let activation = 'Utilize seu e-mail e sua senha atual. Sua senha nao foi alterada.';
       let expiresAt: string | null = null;
+      let activationUrl: string | null = null;
       if (row.primeiroAcesso) {
         const attempts = (await client.query<{ total: string }>(`SELECT COUNT(*)::text AS total
           FROM admtaxi.recuperacoes_senha WHERE criado_em > CURRENT_TIMESTAMP - INTERVAL '1 hour'
@@ -88,6 +89,7 @@ export class RequisitionAccessService {
         [hashResetToken(token), auth.empresaId, row.usuarioId, this.config.resetTtlMinutes]);
         expiresAt = new Date(issued.rows[0]!.expira_em).toISOString();
         const url = new URL(this.config.resetUrl); url.hash = `token=${token}`;
+        activationUrl = url.toString();
         activation = `Para ativar sua conta e definir sua senha: ${url.toString()}\n`
           + `Link pessoal de uso unico, valido por ${this.config.resetTtlMinutes} minutos. Nao compartilhe.\n`
           + 'Se expirar, use Esqueci minha senha na tela de login.';
@@ -97,7 +99,7 @@ export class RequisitionAccessService {
       await this.audit.record(client, { ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
         entidade: 'requisicoes_viagem', entidadeId: id, acao: 'PREPARAR_ACESSO_WHATSAPP',
         dadosAnteriores: null, dadosNovos: { funcionarioId: employeeId, primeiroAcesso: row.primeiroAcesso } });
-      return { nome: row.nome, telefone: whatsappPhone(row.telefone)!, mensagem: message, expiraEm: expiresAt };
+      return { nome: row.nome, telefone: whatsappPhone(row.telefone)!, mensagem: message, expiraEm: expiresAt, activationUrl };
     });
   }
 }

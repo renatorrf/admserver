@@ -23,6 +23,7 @@ import type { ManagerLoginService } from './modules/auth/manager-login.service';
 import type { EmployeeLoginService } from './modules/auth/employee-login.service';
 import type { DriverLoginService } from './modules/auth/driver-login.service';
 import type { TenantLoginService } from './modules/auth/tenant-login.service';
+import { whatsappWebhook, whatsappWebhookPath } from './modules/requisicoes/whatsapp-webhook';
 
 export type AppDependencies = {
   config: AppConfig;
@@ -53,6 +54,12 @@ export function createApp(dependencies: AppDependencies): Express {
   app.use(pinoHttp({
     logger,
     genReqId: (request) => request.headers['x-request-id']?.toString() ?? randomUUID(),
+    serializers: { req: (request) => {
+      if (typeof request.url !== 'string' || request.url.split('?')[0]?.replace(/\/$/,'').toLowerCase() !== whatsappWebhookPath) return request;
+      const safe = { ...request, url: whatsappWebhookPath };
+      delete safe.query;
+      return safe;
+    } },
   }));
   app.use(helmet());
   app.use(cors({
@@ -65,7 +72,6 @@ export function createApp(dependencies: AppDependencies): Express {
     },
     credentials: true,
   }));
-  app.use(express.json({ limit: '100kb' }));
   app.use(rateLimit({
     windowMs: 60_000,
     limit: 200,
@@ -78,6 +84,8 @@ export function createApp(dependencies: AppDependencies): Express {
     response.setHeader('Cache-Control', 'no-store');
     next();
   });
+  if (config.whatsappWebhook) app.use(whatsappWebhookPath, whatsappWebhook(config.whatsappWebhook,pool));
+  app.use(express.json({ limit: '100kb' }));
 
   app.get('/api/v1/health', (_request, response) => {
     response.status(200).json({ data: { status: 'ok' } });

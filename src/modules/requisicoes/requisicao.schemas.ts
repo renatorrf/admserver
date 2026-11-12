@@ -58,6 +58,7 @@ export const decisionSchema = z.object({ autorizar: z.boolean(), motivo: z.strin
   .refine(v => v.autorizar || (v.motivo?.length ?? 0) >= 5, { path: ['motivo'], message: 'Informe o motivo da recusa (minimo 5 caracteres).' });
 export const conferenceSchema = z.object({
   participantes: requisicaoSchema.shape.participantes, valorEncomenda: passengerMoney.optional(),
+  autorizacoesWhatsapp: z.array(z.string().uuid()).max(16).optional(),
 }).strict();
 
 // Conference may complete missing information, but never replace the approved employees or known addresses.

@@ -43,6 +43,7 @@ import { requisitionRouter } from '../requisicoes/requisicao.routes';
 import { passengerControlRouter } from '../usuarios/passenger-control';
 import type { FcmService } from '../notificacoes/fcm.service';
 import { RequisitionAccessService } from '../requisicoes/requisition-access';
+import type { WhatsAppDelivery } from '../requisicoes/whatsapp-delivery';
 
 export function createOperationalRouter(
   pool: Pool, tokens: TokenService, realtime?: RealtimeBus, geoapifyApiKey?: string, pushConfig?: PushConfig,
@@ -51,13 +52,14 @@ export function createOperationalRouter(
   fcm?: FcmService,
   accessMail?: Pick<MailConfig,'resetUrl'|'resetTtlMinutes'>,
   notifications = new NotificacaoService(pool, pushConfig, undefined, fcm),
+  whatsapp?: WhatsAppDelivery,
 ): Router {
   const router = Router();
   router.use('/passageiros/controle',createAuthenticate(tokens),passengerControlRouter(pool));
   const emails = travelEmails ?? new TravelEmails(pool, { warn: () => undefined, error: () => undefined }, undefined, accessMail, notifications);
   const service = new CorridaService(pool, new AuditRepository(pool), undefined, realtime, notifications, undefined, scheduledEmails, emails);
-  router.use('/requisicoes', createAuthenticate(tokens), requisitionRouter(new RequisitionService(pool,new AuditRepository(pool),service,emails,realtime),
-    new RequisitionAccessService(pool,new AuditRepository(pool),accessMail)));
+  router.use('/requisicoes', createAuthenticate(tokens), requisitionRouter(new RequisitionService(pool,new AuditRepository(pool),service,emails,realtime,whatsapp),
+    new RequisitionAccessService(pool,new AuditRepository(pool),accessMail),!!whatsapp));
   const locations = new LocalizacaoService(pool, service, realtime);
   router.use('/dashboard', createAuthenticate(tokens), createDashboardRouter(new DashboardService(new DashboardRepository(pool))));
   router.use('/paineis', createAuthenticate(tokens), createPainelParticipanteRouter(

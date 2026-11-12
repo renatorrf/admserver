@@ -495,7 +495,8 @@ Depois de concluir o pre-cadastro e solicitar a corrida, a Portaria pode selecio
 ao reabrir uma requisicao ja solicitada. A previa mostra o destinatario, login,
 instrucoes de instalacao Android/iPhone e, quando elegivel, o link de primeiro acesso.
 **Abrir WhatsApp** apenas abre a conversa; o operador confirma o envio manualmente.
-Nao ha API WhatsApp, envio automatico nem confirmacao de entrega pelo sistema.
+Este modo manual nao usa a API e nao confirma a entrega. Quando o modo
+automatico estiver ativo, o botao manual nao fica disponivel.
 
 - `GET /api/v1/requisicoes/:id/acessos`: contatos dos participantes da corrida.
 - `POST /api/v1/requisicoes/:id/acessos/:funcionarioId/whatsapp`: corpo `{}`;
@@ -514,3 +515,54 @@ Nao ha API WhatsApp, envio automatico nem confirmacao de entrega pelo sistema.
 
 Validado com banco PostgreSQL temporario local e mailer simulado. O teste de interface
 inspeciona o link `wa.me` sem abrir conversas ou enviar mensagens reais.
+
+### WhatsApp Business Cloud API
+
+O envio automatico fica desativado por padrao (`WHATSAPP_ENABLED=false`).
+Para ativar, aplique a migration 035, publique API e frontend, configure as
+variaveis abaixo no backend e, depois do teste com a Meta, use `WHATSAPP_ENABLED=true`.
+
+- `WHATSAPP_GRAPH_API_VERSION`: versao da Graph API usada no painel da Meta, no formato `vNN.N`.
+- `WHATSAPP_PHONE_NUMBER_ID`: ID do numero remetente no painel da Meta (nao e o telefone).
+- `WHATSAPP_ACCESS_TOKEN`: credencial de envio; manter apenas no backend, em segredo no Cloud Run.
+- `WHATSAPP_RIDE_TEMPLATE`: nome exato do modelo aprovado para os dados da corrida.
+- `WHATSAPP_FIRST_ACCESS_TEMPLATE`: nome exato do modelo aprovado para as instrucoes e o link de primeiro acesso.
+- `WHATSAPP_TEMPLATE_LANGUAGE`: idioma cadastrado nos modelos, por padrao `pt_BR`.
+- `WHATSAPP_APP_URL`: endereco publico do ADM Taxi. Nao substitui `PASSWORD_RESET_URL`,
+  usado no fluxo existente para definir a senha com um link de validade limitada.
+- `WHATSAPP_WEBHOOK_VERIFY_TOKEN`: valor aleatorio definido por voce, com pelo
+  menos 32 caracteres alfanumericos, hifens ou underscores. Use o mesmo valor no
+  campo Token de verificacao da Meta. Nao use o access token nesse campo.
+- `WHATSAPP_APP_SECRET`: segredo do aplicativo em configuracoes da Meta,
+  usado para validar a assinatura dos eventos. Guarde-o no backend.
+
+**Callback:** `https://admserver-641243490987.southamerica-east1.run.app/api/v1/webhooks/whatsapp`.
+Cadastre a URL e o token de verificacao no painel e assine o campo `messages`.
+E possivel validar o GET com o envio desabilitado. O POST aceita apenas eventos
+com assinatura valida e atualiza os status do remetente configurado.
+Proteja tambem os logs de infraestrutura: a verificacao envia o token na query.
+
+Crie modelos em portugues do Brasil com variaveis posicionais no corpo:
+
+- Corrida: `{{1}}` nome, `{{2}}` horario, `{{3}}` origem, `{{4}}` destino,
+  `{{5}}` URL do app. No texto fixo, oriente a abrir o link no navegador.
+- Primeiro acesso: `{{1}}` nome, `{{2}}` link individual para definir a senha.
+  No texto fixo, indique que o link e pessoal e, se expirar, a pessoa pode
+  usar a recuperacao de senha pelo site.
+
+O disparo ocorre somente apos a Portaria confirmar a solicitacao e a corrida
+ser criada. A portaria marca a autorizacao de cada passageiro na conferencia;
+isso nao e inferido a partir do cadastro de um telefone.
+
+- Se houver registro autenticado de uso do APK ou do PWA em modo instalado,
+  nao enviar WhatsApp. A notificacao no app segue o fluxo existente.
+- Sem registro de uso instalado, enviar a confirmacao ao telefone cadastrado,
+  se houver autorizacao para receber WhatsApp. Incluir orientacoes para acessar
+  o app. Enviar o link de primeiro acesso apenas quando elegivel, sem incluir senha.
+- Acesso pelo navegador comum nao conta como instalacao. Permissao de push
+  negada, por si so, nao significa que o app nao esta instalado.
+- A fila deduplica por requisicao, funcionario e tipo de mensagem. Respostas
+  ambiguas ficam em `INCERTO` e aguardam o webhook, sem reenvio automatico.
+- O backend tenta o envio ao confirmar e revisita a fila a cada 30 segundos
+  enquanto a instancia estiver executando. O Cloud Run pode suspender o
+  processamento ocioso; nao ha agendador externo nesta configuracao.

@@ -33,6 +33,8 @@ import { SmtpScheduledMailer } from './modules/corridas/scheduled-mailer';
 import { TravelEmails } from './modules/requisicoes/travel-emails';
 import { FcmService, createFcmSender } from './modules/notificacoes/fcm.service';
 import { NotificacaoService } from './modules/notificacoes/notificacao.service';
+import { WhatsAppDelivery } from './modules/requisicoes/whatsapp-delivery';
+import { RequisitionAccessService } from './modules/requisicoes/requisition-access';
 
 const config = getConfig();
 const logger = createLogger(config);
@@ -51,9 +53,12 @@ const scheduledEmails = new ScheduledRideEmails(pool, logger, config.mail ? new 
   config.mail?.resetUrl);
 const notifications = new NotificacaoService(pool, config.push, undefined, fcm);
 const travelEmails = new TravelEmails(pool,logger,config.mail ? new SmtpScheduledMailer(config.mail) : undefined,config.mail,notifications);
+const whatsapp = config.whatsapp
+  ? new WhatsAppDelivery(pool,logger,config.whatsapp,new RequisitionAccessService(pool,new AuditRepository(pool),config.mail))
+  : undefined;
 const adminRouter = createAdminRouter(pool, tokenService);
 const operationalRouter = createOperationalRouter(
-  pool, tokenService, realtime, config.geoapifyApiKey, config.push, scheduledEmails, travelEmails, fcm, config.mail, notifications,
+  pool, tokenService, realtime, config.geoapifyApiKey, config.push, scheduledEmails, travelEmails, fcm, config.mail, notifications, whatsapp,
 );
 const provisioningRouter = config.provisioningSecret
   ? createProvisionamentoRouter(new ProvisionamentoService(pool), config.provisioningSecret)
@@ -79,6 +84,9 @@ const socketLocationService = new LocalizacaoService(pool, socketRideService, re
 const io = attachSocketServer(server, config, tokenService, socketLocationService, realtime, logger, pool);
 
 async function start(): Promise<void> {
+  if ((whatsapp || config.whatsappWebhook?.appSecret) && !(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=35')).rowCount) {
+    throw new Error('Migration 035_whatsapp_viagem pendente. Aplique antes de ativar o WhatsApp.');
+  }
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=29')).rowCount) throw new Error('Migration 029_contas_equipe pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=30')).rowCount) throw new Error('Migration 030_motorista_empresa_selecionada pendente. Aplique antes de publicar este backend.');
   if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=31')).rowCount) throw new Error('Migration 031_gestor_avisos_viagem pendente. Aplique antes de publicar este backend.');
@@ -106,6 +114,7 @@ async function start(): Promise<void> {
     scheduledEmails.start();
     travelEmails.start();
     fcm.start();
+    whatsapp?.start();
     logger.info({ port: config.port, environment: config.nodeEnv }, 'API ADM Taxi iniciada');
   });
 }
@@ -123,6 +132,7 @@ async function shutdown(signal: string): Promise<void> {
     await scheduledEmails.stop();
     await travelEmails.stop();
     await fcm.stop();
+    await whatsapp?.stop();
     await pool.end();
     if (error) {
       logger.error({ err: error }, 'Erro ao encerrar servidor');

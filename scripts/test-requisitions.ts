@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import express from 'express';
 import request from 'supertest';
@@ -17,6 +17,8 @@ import { createAuthenticate } from '../src/modules/auth/auth.middleware';
 import { TokenService } from '../src/modules/auth/token-service';
 import { RealtimeBus } from '../src/realtime/realtime-bus';
 import { RequisitionAccessService } from '../src/modules/requisicoes/requisition-access';
+import { WhatsAppDelivery } from '../src/modules/requisicoes/whatsapp-delivery';
+import { whatsappWebhook } from '../src/modules/requisicoes/whatsapp-webhook';
 import { NotificacaoService } from '../src/modules/notificacoes/notificacao.service';
 import { MonthlyBillingService, monthlyAllocation } from '../src/modules/faturamentos/monthly-billing.service';
 
@@ -28,7 +30,14 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   const rideChanges:string[]=[];
   bus.onRequisition(event=>changes.push(event));bus.onRide(ride=>rideChanges.push(ride.id));
   const rides=new CorridaService(pool,audit,undefined,bus,undefined,undefined,undefined,emails);
-  const service=new RequisitionService(pool,audit,rides,emails,bus);
+  const access=new RequisitionAccessService(pool,audit,{resetUrl:'https://example.test/redefinir-senha',resetTtlMinutes:30});
+  const sent: Array<{ to:string; biz_opaque_callback_data:string; template:{components:Array<{parameters:Array<{text:string}>}>} }> = [];
+  const whatsapp=new WhatsAppDelivery(pool,logger,{version:'v99.0',phoneNumberId:'123456',accessToken:'test',
+    rideTemplate:'corrida',firstAccessTemplate:'primeiro_acesso',language:'pt_BR',appUrl:'https://example.test/'},access,async (_url,init)=>{
+    sent.push(JSON.parse(String(init?.body)));
+    return Response.json({messages:[{id:`wamid.test.${sent.length}`}]});
+  });
+  const service=new RequisitionService(pool,audit,rides,emails,bus,whatsapp);
   const supervisor: AuthContext={...manager,usuarioId:randomUUID(),perfil:'GERENTE'};
   const observer = randomUUID(), optedOut = randomUUID(), inactive = randomUUID(), foreign = randomUUID();
   for (const [id, company, name, active, receives] of [
@@ -63,8 +72,33 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   await assert.rejects(service.dispatch(manager,created.id,input.participantes,{}),{statusCode:403});
   await assert.rejects(service.dispatch(gate,created.id,input.participantes,{}),{statusCode:422});
   const participants=input.participantes.map((p,i)=>({...p,origem:{descricao:`Origem privada ${i}`,latitude:-18.9-i/100,longitude:-48.2},destino:{descricao:`Destino privado ${i}`,latitude:-18.8,longitude:-48.3}}));
-  const results=await Promise.all([service.dispatch(gate,created.id,participants,{}),service.dispatch(gate,created.id,participants,{})]);
+  const testPhones=['34997650001','34997650002'];
+  for (const [index,phone] of testPhones.entries()) await pool.query('UPDATE admtaxi.funcionarios SET telefone=$2 WHERE id=$1',[employeeIds[index],phone]);
+  await pool.query(`INSERT INTO admtaxi.dispositivos_usuario(empresa_id,usuario_id,chave_dispositivo,plataforma,nome_dispositivo,navegador,modo_acesso,notificacoes_status)
+    SELECT empresa_id,usuario_id,gen_random_uuid(),'ANDROID','Test','Android WebView (APK)','NAVEGADOR','BLOQUEADA'
+    FROM admtaxi.funcionarios WHERE id=$1`,[employeeIds[1]]);
+  const results=await Promise.all([service.dispatch(gate,created.id,participants,{},undefined,employeeIds.slice(0,2)),
+    service.dispatch(gate,created.id,participants,{},undefined,employeeIds.slice(0,2))]);
   assert.equal(results[0]!.id,results[1]!.id);
+  assert.equal(sent.length,1);
+  assert.equal(sent[0]!.to,'55'+testPhones[0]);
+  assert.deepEqual(sent[0]!.template.components[0]!.parameters.slice(2).map(p=>p.text),['Origem privada 0','Destino privado 0','https://example.test/']);
+  const callback=express(), appSecret=randomUUID(), verifyToken=randomUUID();
+  callback.use('/webhook',whatsappWebhook({verifyToken,appSecret,phoneNumberId:'123456'},pool));
+  await request(callback).get('/webhook').query({'hub.mode':'subscribe','hub.verify_token':verifyToken,'hub.challenge':'9876'}).expect(200,'9876');
+  await request(callback).get('/webhook').query({'hub.mode':'subscribe','hub.verify_token':'wrong','hub.challenge':'9876'}).expect(403);
+  const statusBody=(status:string,phone='123456')=>JSON.stringify({object:'whatsapp_business_account',entry:[{changes:[{
+    field:'messages',value:{metadata:{phone_number_id:phone},statuses:[{id:'wamid.test.1',status,
+      biz_opaque_callback_data:sent[0]!.biz_opaque_callback_data}]},
+  }]}]});
+  const callbackPost=(body:string,signature:string)=>request(callback).post('/webhook').type('json').set('x-hub-signature-256',signature).send(body);
+  const signed=(body:string)=>'sha256='+createHmac('sha256',appSecret).update(body).digest('hex');
+  await callbackPost(statusBody('read'),'sha256=invalid').expect(403);
+  await callbackPost(statusBody('read','99999'),signed(statusBody('read','99999'))).expect(200);
+  assert.equal((await pool.query('SELECT status FROM admtaxi.whatsapp_viagem WHERE requisicao_id=$1',[created.id])).rows[0].status,'ACEITO');
+  for (const state of ['read','sent','delivered','read']) await callbackPost(statusBody(state),signed(statusBody(state))).expect(200);
+  assert.equal((await pool.query('SELECT status FROM admtaxi.whatsapp_viagem WHERE requisicao_id=$1',[created.id])).rows[0].status,'LIDO');
+  ok('WHATSAPP conference dedupe, installed APK without push excluded, own passenger addresses, webhook verification and monotonic statuses');
   assert.equal(results[0]!.itinerario?.participantes.length,2);
   assert.equal(Number((await pool.query('SELECT count(*) FROM admtaxi.corridas WHERE empresa_id=$1',[manager.empresaId])).rows[0].count),before+1);
   assert.equal((await service.get(gate,created.id)).status,'SOLICITADA');
@@ -72,8 +106,8 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   assert.equal(queue.rows.filter(r=>r.evento==='PENDENTE').length,4);
   assert.equal(queue.rows.filter(r=>r.evento==='AUTORIZADA').length,6);
   assert.equal(queue.rows.filter(r=>r.evento==='SOLICITADA').length,6);
-  const email=(await pool.query(`SELECT COALESCE(NULLIF(trim(f.email::text),''),u.email::text) AS email FROM admtaxi.funcionarios f
-    JOIN admtaxi.usuarios u ON u.empresa_id=f.empresa_id AND u.id=f.usuario_id WHERE f.id=$1`,[employeeIds[0]])).rows[0].email.toLowerCase();
+  const email=(await pool.query(`SELECT u.email::text AS email FROM admtaxi.funcionarios f
+    JOIN admtaxi.usuarios_autenticacao u ON u.empresa_id=f.empresa_id AND u.id=f.usuario_id WHERE f.id=$1`,[employeeIds[0]])).rows[0].email.toLowerCase();
   const own=queue.rows.find(r=>r.evento==='SOLICITADA'&&r.destinatario===email);
   assert(own); assert(own.corpo.includes('Origem privada 0')); assert(!own.corpo.includes('Origem privada 1'));
   const gateEmail = (await pool.query('SELECT email::text FROM admtaxi.usuarios WHERE id=$1',[gate.usuarioId])).rows[0].email;
@@ -142,7 +176,6 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   ok('REQUISITIONS optional addresses, supervisor scope, approval, rejection, manager auto-authorization, conference-only release and atomic idempotency');
 
   const tokens=new TokenService({jwtAccessSecret:randomUUID()+randomUUID(),jwtRefreshSecret:randomUUID()+randomUUID(),jwtAccessExpiresInSeconds:900,jwtRefreshExpiresInSeconds:3600});
-  const access=new RequisitionAccessService(pool,audit,{resetUrl:'https://example.test/redefinir-senha',resetTtlMinutes:30});
   const app=express();app.use(express.json());app.use('/requisicoes',createAuthenticate(tokens),requisitionRouter(service,access));app.use('/corridas',createAuthenticate(tokens),createCorridaRouter(rides));app.use(createErrorHandler(logger));
   const bearer=(auth:AuthContext)=>`Bearer ${tokens.issueTokens(auth).accessToken}`;
   for(const auth of [manager,supervisor,driver]) {
@@ -272,10 +305,10 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   await failingWorker.process();
   assert(Number((await pool.query("SELECT count(*) FROM admtaxi.emails_viagem WHERE tentativas=1 AND status='PENDENTE' AND ultimo_erro='FALHA_SMTP'")).rows[0].count)>0);
   await pool.query("UPDATE admtaxi.emails_viagem SET proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='PENDENTE'");
-  const sent:string[]=[];
-  const worker=new TravelEmails(pool,logger,{send:async message=>{sent.push(message.id);}});
+  const sentEmails:string[]=[];
+  const worker=new TravelEmails(pool,logger,{send:async message=>{sentEmails.push(message.id);}});
   for(let n=0;n<5;n++) if(await worker.process()<20)break;
-  assert.equal(new Set(sent).size,sent.length);assert(sent.length>0);
+  assert.equal(new Set(sentEmails).size,sentEmails.length);assert(sentEmails.length>0);
   assert.equal((await pool.query("SELECT count(*) FROM admtaxi.emails_viagem WHERE status<>'ENVIADO'")).rows[0].count,'0');
   ok('TRAVEL-EMAIL recipient privacy, all four stages, unique notifications, SMTP retry, missing SMTP retention and successful retry');
 }
