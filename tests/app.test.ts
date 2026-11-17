@@ -41,6 +41,21 @@ function createAuthMock(): AuthApplication {
 }
 
 describe('API HTTP', () => {
+  it('limita imagens do mapa sem consumir o limite das demais operacoes', async () => {
+    const app = createApp({
+      config,
+      logger: pino({ level: 'silent' }),
+      pool: { query: vi.fn().mockResolvedValue({ rows: [] }) },
+      auth: createAuthMock(),
+      tokens,
+    });
+    for (let i = 0; i < 200; i++) {
+      expect((await request(app).get('/api/v1/public/mapa/0/0/0.png')).status).toBe(503);
+    }
+    expect((await request(app).get('/api/v1/public/mapa/0/0/0.png')).status).toBe(429);
+    expect((await request(app).get('/api/v1/health')).status).toBe(200);
+  });
+
   it('nao permite cache condicional nas respostas dinamicas da API', async () => {
     const app = createApp({
       config,

@@ -25,6 +25,7 @@ import type { DriverLoginService } from './modules/auth/driver-login.service';
 import type { TenantLoginService } from './modules/auth/tenant-login.service';
 import { whatsappWebhook, whatsappWebhookPath } from './modules/requisicoes/whatsapp-webhook';
 import { publicTrackingRouter } from './modules/requisicoes/public-tracking';
+import { createMapTileRouter } from './modules/enderecos/map-tiles';
 
 export type AppDependencies = {
   config: AppConfig;
@@ -73,6 +74,13 @@ export function createApp(dependencies: AppDependencies): Express {
     },
     credentials: true,
   }));
+  app.use('/api/v1/public/mapa', rateLimit({
+    windowMs: 60_000,
+    limit: 200,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { erro: { codigo: 'LIMITE_EXCEDIDO', mensagem: 'Aguarde um minuto para carregar o mapa novamente.' } },
+  }), createMapTileRouter(config.geoapifyApiKey));
   app.use(rateLimit({
     windowMs: 60_000,
     limit: 200,
