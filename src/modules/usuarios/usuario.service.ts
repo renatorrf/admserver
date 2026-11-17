@@ -3,6 +3,7 @@ import type { Database, QueryExecutor } from '../../db/pool';
 import { withTransaction } from '../../db/pool';
 import { conflict, forbidden, invalidReference, notFound } from '../../shared/errors/app-error';
 import { INITIAL_ACCOUNT_PASSWORD } from '../../shared/validation/password';
+import { enqueueAccountWhatsApp } from '../requisicoes/whatsapp-account';
 import type { PaginatedResult } from '../../shared/pagination/pagination';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditEntry, AuditMetadata } from '../auditoria/audit.types';
@@ -51,6 +52,7 @@ export class UsuarioService {
     private readonly audit: UsuarioAuditWriter,
     private readonly passwordHasher: PasswordHasher = defaultPasswordHasher,
     repository?: UsuarioStore,
+    private readonly afterCreate?: () => Promise<void>,
   ) {
     this.repository = repository ?? new UsuarioRepository(pool);
   }
@@ -107,14 +109,17 @@ export class UsuarioService {
   async create(auth: AuthContext, input: UsuarioCreateInput, metadata: AuditMetadata): Promise<UsuarioRecord> {
     if (input.recebeAvisosViagem !== undefined && input.perfil !== 'GESTOR') throw invalidReference('Esta preferência é exclusiva do gestor.');
     const senhaHash = await this.passwordHasher.hash(INITIAL_ACCOUNT_PASSWORD);
-    return withTransaction(this.pool, async (client) => {
+    const result = await withTransaction(this.pool, async (client) => {
       const created = await this.repository.create(client, auth.empresaId, input, senhaHash);
+      await enqueueAccountWhatsApp(client,auth,created.id,input.autorizaWhatsapp);
       await this.audit.record(client, {
         ...metadata, empresaId: auth.empresaId, usuarioId: auth.usuarioId,
         entidade: 'usuario', entidadeId: created.id, acao: 'CRIAR', dadosNovos: created,
       });
       return created;
     });
+    if (input.autorizaWhatsapp) await this.afterCreate?.();
+    return result;
   }
 
   async update(

@@ -43,10 +43,7 @@ export function requisitionRouter(service: RequisitionService, access?: Requisit
   const accessParams = z.object({id:z.string().uuid(),funcionarioId:z.string().uuid()}).strict();
   router.post('/:id/acessos/:funcionarioId/whatsapp',authorize('PORTARIA'),validateParams(accessParams),
     validateBody(z.object({}).strict()),asyncHandler(async (req,res) => {
-      if (!access || automaticWhatsApp) throw unavailable('O envio manual pelo WhatsApp nao esta disponivel.');
-      const params=getValidatedParams<z.infer<typeof accessParams>>(req);
-      res.setHeader('Cache-Control','no-store');
-      res.json({data:await access.prepare(requireAuthContext(req),params.id,params.funcionarioId,auditMetadataFromRequest(req))});
+      res.status(410).json({erro:{codigo:'ENVIO_MANUAL_REMOVIDO',mensagem:'O envio pelo WhatsApp e realizado automaticamente.'}});
     }));
   return router;
 }

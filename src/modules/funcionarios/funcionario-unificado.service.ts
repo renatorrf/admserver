@@ -4,6 +4,7 @@ import type { QueryResultRow } from 'pg';
 import { queryOne, type Database, type QueryExecutor, withTransaction } from '../../db/pool';
 import { conflict, forbidden, invalidReference, notFound } from '../../shared/errors/app-error';
 import { INITIAL_ACCOUNT_PASSWORD } from '../../shared/validation/password';
+import { enqueueAccountWhatsApp } from '../requisicoes/whatsapp-account';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditMetadata } from '../auditoria/audit.types';
 import type { AuditRepository } from '../auditoria/audit.repository';
@@ -24,11 +25,12 @@ export class FuncionarioUnificadoService {
     private readonly database: Database,
     private readonly audit: AuditRepository,
     private readonly hashPassword: PasswordHasher = (password) => argon2.hash(password),
+    private readonly afterCreate?: () => Promise<void>,
   ) {}
 
   async create(auth: AuthContext, input: FuncionarioUnificadoCreateInput, metadata: AuditMetadata) {
     const passwordHash = 'contaId' in input.acesso ? null : await this.hashPassword(INITIAL_ACCOUNT_PASSWORD);
-    return withTransaction(this.database, async (client) => {
+    const result = await withTransaction(this.database, async (client) => {
       await funcionarioDefinition.validateReferences?.(client, auth.empresaId, input.funcionario);
       let accountId: string | null = null;
       let hash = passwordHash;
@@ -55,6 +57,7 @@ export class FuncionarioUnificadoService {
       );
       const userId = user.rows[0]?.id;
       if (!userId) throw new Error('Falha ao criar usuario do funcionario.');
+      if (!accountId) await enqueueAccountWhatsApp(client,auth,userId,input.autorizaWhatsapp);
       const employee = input.funcionario;
       const created = await client.query<{ id: string }>(
         `INSERT INTO admtaxi.funcionarios
@@ -74,6 +77,8 @@ export class FuncionarioUnificadoService {
       });
       return this.getFrom(client, auth.empresaId, employeeId);
     });
+    if (input.autorizaWhatsapp) await this.afterCreate?.();
+    return result;
   }
 
   async update(auth: AuthContext, id: string, input: FuncionarioUnificadoUpdateInput, metadata: AuditMetadata) {

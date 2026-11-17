@@ -49,7 +49,7 @@ export function whatsappWebhook(config: NonNullable<AppConfig['whatsappWebhook']
         const result = status.safeParse(item);
         if (!result.success) continue;
         const message = result.data;
-        await db.query(`UPDATE admtaxi.whatsapp_viagem SET status=$3,mensagem_id=$1,atualizado_em=CURRENT_TIMESTAMP
+        for (const table of ['whatsapp_viagem','whatsapp_cadastros']) await db.query(`UPDATE admtaxi.${table} SET status=$3,mensagem_id=$1,atualizado_em=CURRENT_TIMESTAMP
           WHERE (mensagem_id=$1 OR (id=$2 AND mensagem_id IS NULL))
             AND (status IN ('ENVIANDO','INCERTO','ACEITO')
               OR (status='ENVIADO' AND $3 IN ('ENTREGUE','LIDO','FALHOU'))

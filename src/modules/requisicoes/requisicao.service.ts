@@ -114,7 +114,7 @@ export class RequisitionService {
         [auth.empresaId,id,JSON.stringify(data),corridaId,auth.usuarioId]);
         await this.record(client,auth,updated.rows[0]!,'SOLICITAR',metadata);
         await this.emails.enqueue(client,updated.rows[0]!,'SOLICITADA');
-        if (this.whatsapp && !data.encomenda && autorizacoesWhatsapp.length) {
+        if (this.whatsapp && !data.encomenda) {
           const allowed = new Set(autorizacoesWhatsapp);
           const employeeIds = data.participantes.filter(person => allowed.has(passengerKey(person)))
             .map(person => resolved.get(passengerKey(person)) ?? person.funcionarioId!);

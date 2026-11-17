@@ -29,7 +29,7 @@ import { requireAuthContext } from '../auth/auth.middleware';
 import { asyncHandler } from '../../shared/http/async-handler';
 import { veiculoCreateSchema, veiculoDefinition, veiculoListSchema, veiculoUpdateSchema } from '../veiculos/veiculo.catalog';
 
-export function createAdminRouter(pool: Pool, tokens: TokenService): Router {
+export function createAdminRouter(pool: Pool, tokens: TokenService, afterCreate?: () => Promise<void>): Router {
   const router = Router();
   const audit = new AuditRepository(pool);
 
@@ -41,9 +41,9 @@ export function createAdminRouter(pool: Pool, tokens: TokenService): Router {
   router.get('/usuarios/controle', validateQuery(usuarioControleSchema), asyncHandler(async (request, response) => {
     response.json(await userControl.list(requireAuthContext(request), getValidatedQuery<UsuarioControleQuery>(request)));
   }));
-  router.use('/usuarios', createUsuarioRouter(new UsuarioService(pool, audit)));
-  router.use('/cadastros-unificados', createPrestadorUnificadoRouter(new PrestadorUnificadoService(pool, audit)));
-  router.use('/cadastros-unificados/funcionarios', createFuncionarioUnificadoRouter(new FuncionarioUnificadoService(pool, audit)));
+  router.use('/usuarios', createUsuarioRouter(new UsuarioService(pool, audit,undefined,undefined,afterCreate)));
+  router.use('/cadastros-unificados', createPrestadorUnificadoRouter(new PrestadorUnificadoService(pool, audit,afterCreate)));
+  router.use('/cadastros-unificados/funcionarios', createFuncionarioUnificadoRouter(new FuncionarioUnificadoService(pool, audit,undefined,afterCreate)));
   router.use('/prestadores', createCatalogRouter(
     new CatalogService(pool, audit, prestadorDefinition),
     { create: prestadorCreateSchema, update: prestadorUpdateSchema, list: prestadorListSchema },

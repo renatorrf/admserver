@@ -26,6 +26,7 @@ export class UsuarioControleService {
     const result = await this.database.query<QueryResultRow>(
       `WITH base AS (
          SELECT u.id,u.nome,u.email::text,u.perfil::text,u.ativo,u.ultimo_acesso_em AS "ultimoAcessoEm",
+           u.app_instalado_em AS "appInstaladoEm",
            COALESCE(rt.quantidade,0)::int AS "sessoesValidas",
            COALESCE(d.quantidade,0)::int AS dispositivos,
            d.ultimo_uso AS "ultimaAtividadeEm",

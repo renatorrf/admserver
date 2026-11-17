@@ -526,7 +526,7 @@ variaveis abaixo no backend e, depois do teste com a Meta, use `WHATSAPP_ENABLED
 - `WHATSAPP_PHONE_NUMBER_ID`: ID do numero remetente no painel da Meta (nao e o telefone).
 - `WHATSAPP_ACCESS_TOKEN`: credencial de envio; manter apenas no backend, em segredo no Cloud Run.
 - `WHATSAPP_RIDE_TEMPLATE`: nome exato do modelo aprovado para os dados da corrida.
-- `WHATSAPP_FIRST_ACCESS_TEMPLATE`: nome exato do modelo aprovado para as instrucoes e o link de primeiro acesso.
+- `WHATSAPP_FIRST_ACCESS_TEMPLATE`: nome exato do modelo aprovado para o aviso de cadastro concluido, por exemplo `adm_taxi_cadastro_concluido`.
 - `WHATSAPP_TEMPLATE_LANGUAGE`: idioma cadastrado nos modelos, por padrao `pt_BR`.
 - `WHATSAPP_APP_URL`: endereco publico do ADM Taxi. Nao substitui `PASSWORD_RESET_URL`,
   usado no fluxo existente para definir a senha com um link de validade limitada.
@@ -544,11 +544,15 @@ Proteja tambem os logs de infraestrutura: a verificacao envia o token na query.
 
 Crie modelos em portugues do Brasil com variaveis posicionais no corpo:
 
-- Corrida: `{{1}}` nome, `{{2}}` horario, `{{3}}` origem, `{{4}}` destino,
-  `{{5}}` URL do app. No texto fixo, oriente a abrir o link no navegador.
-- Primeiro acesso: `{{1}}` nome, `{{2}}` link individual para definir a senha.
-  No texto fixo, indique que o link e pessoal e, se expirar, a pessoa pode
-  usar a recuperacao de senha pelo site.
+- Corrida (`adm_taxi_corrida_confirmada`): `{{1}}` nome, `{{2}}` horario,
+  `{{3}}` origem, `{{4}}` destino, `{{5}}` link privado de acompanhamento.
+  O modelo aprovado em 17/11/2026 diz "entre com sua conta", mas o novo
+  acompanhamento por link nao exige login. Recomenda-se ajustar o texto na Meta.
+- Cadastro concluido: apenas `{{1}}` (nome). Corpo sugerido: "Ola, {{1}}.
+  Seu cadastro no ADM Taxi foi concluido. Acesse https://admbrasil-taxi.web.app/
+  para entrar na sua conta, adicionar o app a tela inicial no iPhone ou baixar
+  o APK no Android."
+  Nao incluir senha, codigo ou link de ativacao. O link pessoal vai somente por e-mail.
 
 O disparo ocorre somente apos a Portaria confirmar a solicitacao e a corrida
 ser criada. A portaria marca a autorizacao de cada passageiro na conferencia;
@@ -558,7 +562,8 @@ isso nao e inferido a partir do cadastro de um telefone.
   nao enviar WhatsApp. A notificacao no app segue o fluxo existente.
 - Sem registro de uso instalado, enviar a confirmacao ao telefone cadastrado,
   se houver autorizacao para receber WhatsApp. Incluir orientacoes para acessar
-  o app. Enviar o link de primeiro acesso apenas quando elegivel, sem incluir senha.
+  o app. Para o cadastro novo, o WhatsApp informa a conclusao; a definicao de senha
+  continua no fluxo por e-mail.
 - Acesso pelo navegador comum nao conta como instalacao. Permissao de push
   negada, por si so, nao significa que o app nao esta instalado.
 - A fila deduplica por requisicao, funcionario e tipo de mensagem. Respostas
@@ -566,3 +571,54 @@ isso nao e inferido a partir do cadastro de um telefone.
 - O backend tenta o envio ao confirmar e revisita a fila a cada 30 segundos
   enquanto a instancia estiver executando. O Cloud Run pode suspender o
   processamento ocioso; nao ha agendador externo nesta configuracao.
+
+### Cadastro pelo gestor e instalacao registrada
+
+Aplicar migrations 035 e 036 antes de publicar esta versao. Em novos cadastros
+de usuario, funcionario unificado ou prestador unificado, `autorizaWhatsapp: true`
+registra a autorizacao e agenda um aviso `adm_taxi_cadastro_concluido`.
+O telefone deve conter DDD. Uma conta existente vinculada a outra unidade
+nao recebe novamente o aviso de criacao. A fila so e processada com
+`WHATSAPP_ENABLED=true`; tentativas ambiguas nao sao repetidas automaticamente.
+O formulario do gestor permite registrar essa autorizacao sem presumir
+consentimento a partir de um telefone preenchido.
+
+`usuarios.app_instalado_em` guarda a primeira sincronizacao autenticada de um APK
+ou PWA instalado, independentemente da permissao push. O historico existente e
+preenchido pela migration. Nao e possivel detectar remotamente uma desinstalacao:
+o campo representa uso registrado, nao uma garantia de instalacao atual.
+A tela Usuarios e acessos mostra esse indicador. A supressao de avisos de corrida
+considera tambem instalacoes registradas em outros vinculos da mesma conta
+de funcionario, sem expor dados dessas unidades.
+
+O botao manual da portaria foi removido. O antigo endpoint de preparo manual
+responde 410; os eventos automaticos continuam respeitando a autorizacao.
+
+### Acompanhamento publico do embarque
+
+O fluxo segue o padrao de token privado do RastreiaAPP, adaptado para passageiros:
+
+- Link `/rastrear#token=...`, com 32 bytes aleatorios; apenas SHA-256 no banco.
+- O token e enviado em `X-Tracking-Token` para `GET /api/v1/public/rastreio`;
+  nao vai no caminho ou query dos logs da API, e o header e removido dos logs.
+- Sem login, sem cookies, sem credenciais da conta. Quem possui o link pode
+  consultar os dados limitados enquanto ele estiver valido; nao encaminhar.
+- Nome abreviado do motorista, endereco do proprio embarque e GPS recente.
+  Nunca inclui outros passageiros, destinos ou o itinerario completo.
+- A posicao so e revelada quando o embarque desse funcionario e a proxima parada.
+  Antes disso informa outra etapa, sem revelar o percurso alheio.
+- Atualizacao a cada 5 segundos enquanto a pagina estiver visivel, com timeout,
+  reconexao automatica e descarte de coordenadas antigas em caso de falha.
+- GPS com mais de 2 minutos ou precisao acima de 200 m nao e exibido.
+- Link limitado a 24 horas apos a previsao da viagem, no maximo 30 dias.
+  Finalizacao, cancelamento, ausencia, desembarque, revogacao e expiracao
+  encerram a consulta. O acesso requer empresa e funcionario ativos.
+
+Teste com os modelos aprovados sem envio:
+`node scripts/test-whatsapp-live.mjs --waba ID_DA_CONTA`.
+Um envio real exige autorizacao do destinatario e a opcao
+`--send --to 55DDDNUMERO`. O teste de corrida usa enderecos ficticios
+e o site publico, nao simula uma corrida real nem um link ainda nao publicado.
+O script registra IDs de mensagem em `.artifacts/whatsapp-live-test.json`,
+sem token de acesso. O aceite da API nao confirma entrega ou leitura.
+Os dois modelos consultados em 17/11/2026 estavam aprovados como MARKETING.

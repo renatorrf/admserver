@@ -6,6 +6,7 @@ import { funcionarioCreateSchema, funcionarioUpdateSchema } from './funcionario.
 const senha = passwordSchema;
 
 export const funcionarioUnificadoCreateSchema = z.object({
+  autorizaWhatsapp: z.boolean().optional(),
   acesso: z.union([
     z.object({ senha: senha.optional(), ativo: z.boolean().default(true) }).strict(),
     z.object({ contaId: z.string().uuid(), ativo: z.boolean().default(true) }).strict(),

@@ -24,6 +24,7 @@ import type { EmployeeLoginService } from './modules/auth/employee-login.service
 import type { DriverLoginService } from './modules/auth/driver-login.service';
 import type { TenantLoginService } from './modules/auth/tenant-login.service';
 import { whatsappWebhook, whatsappWebhookPath } from './modules/requisicoes/whatsapp-webhook';
+import { publicTrackingRouter } from './modules/requisicoes/public-tracking';
 
 export type AppDependencies = {
   config: AppConfig;
@@ -85,6 +86,7 @@ export function createApp(dependencies: AppDependencies): Express {
     next();
   });
   if (config.whatsappWebhook) app.use(whatsappWebhookPath, whatsappWebhook(config.whatsappWebhook,pool));
+  app.use('/api/v1/public/rastreio',publicTrackingRouter(pool));
   app.use(express.json({ limit: '100kb' }));
 
   app.get('/api/v1/health', (_request, response) => {

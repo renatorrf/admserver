@@ -18,6 +18,7 @@ export function createLogger(config: Pick<AppConfig, 'logLevel' | 'nodeEnv'>): p
       paths: [
         'req.headers.authorization',
         'req.headers.cookie',
+        'req.headers.x-tracking-token',
         'req.headers.x-provisioning-secret',
         'res.headers.set-cookie',
         'password',

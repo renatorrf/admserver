@@ -34,7 +34,6 @@ import { TravelEmails } from './modules/requisicoes/travel-emails';
 import { FcmService, createFcmSender } from './modules/notificacoes/fcm.service';
 import { NotificacaoService } from './modules/notificacoes/notificacao.service';
 import { WhatsAppDelivery } from './modules/requisicoes/whatsapp-delivery';
-import { RequisitionAccessService } from './modules/requisicoes/requisition-access';
 
 const config = getConfig();
 const logger = createLogger(config);
@@ -54,9 +53,9 @@ const scheduledEmails = new ScheduledRideEmails(pool, logger, config.mail ? new 
 const notifications = new NotificacaoService(pool, config.push, undefined, fcm);
 const travelEmails = new TravelEmails(pool,logger,config.mail ? new SmtpScheduledMailer(config.mail) : undefined,config.mail,notifications);
 const whatsapp = config.whatsapp
-  ? new WhatsAppDelivery(pool,logger,config.whatsapp,new RequisitionAccessService(pool,new AuditRepository(pool),config.mail))
+  ? new WhatsAppDelivery(pool,logger,config.whatsapp)
   : undefined;
-const adminRouter = createAdminRouter(pool, tokenService);
+const adminRouter = createAdminRouter(pool, tokenService,whatsapp ? ()=>whatsapp.kick() : undefined);
 const operationalRouter = createOperationalRouter(
   pool, tokenService, realtime, config.geoapifyApiKey, config.push, scheduledEmails, travelEmails, fcm, config.mail, notifications, whatsapp,
 );
@@ -84,6 +83,9 @@ const socketLocationService = new LocalizacaoService(pool, socketRideService, re
 const io = attachSocketServer(server, config, tokenService, socketLocationService, realtime, logger, pool);
 
 async function start(): Promise<void> {
+  if (!(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=36')).rowCount) {
+    throw new Error('Migration 036_whatsapp_cadastro_rastreio pendente.');
+  }
   if ((whatsapp || config.whatsappWebhook?.appSecret) && !(await pool.query('SELECT 1 FROM admtaxi.schema_migrations WHERE versao=35')).rowCount) {
     throw new Error('Migration 035_whatsapp_viagem pendente. Aplique antes de ativar o WhatsApp.');
   }

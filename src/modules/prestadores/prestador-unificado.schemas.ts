@@ -42,6 +42,7 @@ const existingVehicle = z.object({ modo: z.literal('EXISTENTE'), veiculoId: z.st
 const laterVehicle = z.object({ modo: z.literal('DEPOIS') }).strict();
 
 export const prestadorUnificadoCreateSchema = z.object({
+  autorizaWhatsapp: z.boolean().optional(),
   acesso: z.object({ ...accessFields, senha: accessFields.senha.optional() }).strict(),
   prestador: z.object(providerFields).strict(),
   veiculo: z.discriminatedUnion('modo', [newVehicle, existingVehicle, laterVehicle]),

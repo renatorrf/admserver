@@ -98,7 +98,7 @@ async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:Auth
   const access=new RequisitionAccessService(pool,audit,config);
   const outgoing: Array<{to:string; template:{name:string;components:Array<{parameters:Array<{text:string}>}>}}> = [];
   const delivery=new WhatsAppDelivery(pool,logger,{version:'v99.0',phoneNumberId:'123456',accessToken:'test',
-    rideTemplate:'corrida',firstAccessTemplate:'primeiro_acesso',language:'pt_BR',appUrl:'https://example.test/'},access,async (_url,init)=>{
+    rideTemplate:'corrida',firstAccessTemplate:'primeiro_acesso',language:'pt_BR',appUrl:'https://example.test/'},async (_url,init)=>{
     outgoing.push(JSON.parse(String(init?.body)));
     return Response.json({messages:[{id:`wamid.guest.${outgoing.length}`}]});
   });
@@ -109,11 +109,10 @@ async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:Auth
   assert.equal(results[0]!.id,results[1]!.id);
   assert.deepEqual(outgoing.map(message=>message.template.name),['corrida','primeiro_acesso']);
   assert(outgoing.every(message=>message.to==='5534998882222'));
-  const automaticToken=outgoing[1]!.template.components[0]!.parameters[1]!.text.match(/#token=([a-f0-9]{64})$/)![1]!;
+  assert.deepEqual(outgoing[1]!.template.components[0]!.parameters,[{type:'text',text:input.participantes[0]!.avulso!.nome}]);
   const user=(await pool.query('SELECT * FROM admtaxi.usuarios_autenticacao WHERE email=$1',[email])).rows[0];
   assert(user && user.perfil==='FUNCIONARIO' && user.deve_alterar_senha);
-  assert.equal((await pool.query('SELECT token_hash FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1',[user.id])).rows[0].token_hash,
-    hashResetToken(automaticToken));
+  assert.equal((await pool.query('SELECT token_hash FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1',[user.id])).rowCount,0);
   assert.equal((await pool.query('SELECT id FROM admtaxi.usuarios WHERE email=$1',[email])).rowCount,1);
   assert.equal((await pool.query("SELECT id FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento LIKE 'PRIMEIRO_ACESSO:%'",[req.id])).rowCount,1);
   assert.equal((await pool.query("SELECT id FROM admtaxi.emails_viagem WHERE requisicao_id=$1 AND evento='SOLICITADA' AND destinatario=$2",[req.id,email])).rowCount,1);
@@ -121,7 +120,7 @@ async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:Auth
     [manager.empresaId,results[0]!.id,user.id])).rowCount,1);
   const failureWorker=new TravelEmails(pool,logger,{send:async()=>{throw Error('synthetic SMTP failure');}},config);
   while(await failureWorker.process()) { /* Drain due messages without contacting SMTP. */ }
-  assert.equal((await pool.query('SELECT count(*) FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1 AND usado_em IS NULL',[user.id])).rows[0].count,'1');
+  assert.equal((await pool.query('SELECT count(*) FROM admtaxi.recuperacoes_senha WHERE usuario_id=$1 AND usado_em IS NULL',[user.id])).rows[0].count,'0');
   await pool.query("UPDATE admtaxi.emails_viagem SET proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='PENDENTE'");
   const messages:{to:string;text:string;subject:string}[]=[];
   const worker=new TravelEmails(pool,logger,{send:async message=>{messages.push(message);}},config);
@@ -155,7 +154,6 @@ async function testPreRegistrationAccess(pool:Pool,manager:AuthContext,gate:Auth
   await passwords.reset({token:whatsappToken,novaSenha:'NovaSenha123'});
   await assert.rejects(passwords.reset({token:whatsappToken,novaSenha:'OutraSenha123'}),{statusCode:400});
   await assert.rejects(passwords.reset({token,novaSenha:'OutraSenha123'}),{statusCode:400});
-  await assert.rejects(passwords.reset({token:automaticToken,novaSenha:'OutraSenha123'}),{statusCode:400});
   const existing=await access.prepare(gate,req.id,employeeId,{});
   assert.equal(existing.expiraEm,null);assert(!existing.mensagem.includes('#token='));assert(existing.mensagem.includes('senha atual'));
   ok('WHATSAPP gate-only tenant/participant scope, hashed one-use token, atomic rollback, concurrent limit, email coexistence, existing password preserved');

@@ -19,6 +19,8 @@ import { RealtimeBus } from '../src/realtime/realtime-bus';
 import { RequisitionAccessService } from '../src/modules/requisicoes/requisition-access';
 import { WhatsAppDelivery } from '../src/modules/requisicoes/whatsapp-delivery';
 import { whatsappWebhook } from '../src/modules/requisicoes/whatsapp-webhook';
+import { issuePassengerTracking, PublicTrackingService, trackingHash } from '../src/modules/requisicoes/public-tracking';
+import { UsuarioService } from '../src/modules/usuarios/usuario.service';
 import { NotificacaoService } from '../src/modules/notificacoes/notificacao.service';
 import { MonthlyBillingService, monthlyAllocation } from '../src/modules/faturamentos/monthly-billing.service';
 
@@ -33,7 +35,7 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   const access=new RequisitionAccessService(pool,audit,{resetUrl:'https://example.test/redefinir-senha',resetTtlMinutes:30});
   const sent: Array<{ to:string; biz_opaque_callback_data:string; template:{components:Array<{parameters:Array<{text:string}>}>} }> = [];
   const whatsapp=new WhatsAppDelivery(pool,logger,{version:'v99.0',phoneNumberId:'123456',accessToken:'test',
-    rideTemplate:'corrida',firstAccessTemplate:'primeiro_acesso',language:'pt_BR',appUrl:'https://example.test/'},access,async (_url,init)=>{
+    rideTemplate:'corrida',firstAccessTemplate:'primeiro_acesso',language:'pt_BR',appUrl:'https://example.test/'},async (_url,init)=>{
     sent.push(JSON.parse(String(init?.body)));
     return Response.json({messages:[{id:`wamid.test.${sent.length}`}]});
   });
@@ -82,7 +84,24 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   assert.equal(results[0]!.id,results[1]!.id);
   assert.equal(sent.length,1);
   assert.equal(sent[0]!.to,'55'+testPhones[0]);
-  assert.deepEqual(sent[0]!.template.components[0]!.parameters.slice(2).map(p=>p.text),['Origem privada 0','Destino privado 0','https://example.test/']);
+  assert.deepEqual(sent[0]!.template.components[0]!.parameters.slice(2,4).map(p=>p.text),['Origem privada 0','Destino privado 0']);
+  const trackingUrl = new URL(sent[0]!.template.components[0]!.parameters[4]!.text);
+  assert.equal(trackingUrl.origin,'https://example.test');
+  assert.equal(trackingUrl.pathname,'/rastrear');
+  const publicToken = new URLSearchParams(trackingUrl.hash.slice(1)).get('token')!;
+  const tracking = new PublicTrackingService(pool);
+  const initialView = await tracking.get(publicToken);
+  assert.equal(initialView.embarque.descricao,'Origem privada 0');
+  assert.equal(initialView.localizacao,null);
+  assert(!JSON.stringify(initialView).includes('Origem privada 1'));
+  assert.equal((await pool.query('SELECT token_hash FROM admtaxi.rastreios_passageiro WHERE token_hash=$1',[trackingHash(publicToken)])).rowCount,1);
+  assert((await pool.query(`SELECT u.app_instalado_em FROM admtaxi.usuarios u JOIN admtaxi.funcionarios f
+    ON f.empresa_id=u.empresa_id AND f.usuario_id=u.id WHERE f.id=$1`,[employeeIds[1]])).rows[0].app_instalado_em);
+  await assert.rejects(tracking.get(randomUUID()),{statusCode:404});
+  const expiringUrl = new URL(await issuePassengerTracking(pool,manager.empresaId,created.id,employeeIds[0]!,'https://example.test'));
+  const expiredToken = new URLSearchParams(expiringUrl.hash.slice(1)).get('token')!;
+  await pool.query('UPDATE admtaxi.rastreios_passageiro SET revogado_em=CURRENT_TIMESTAMP WHERE token_hash=$1',[trackingHash(expiredToken)]);
+  await assert.rejects(tracking.get(expiredToken),{statusCode:404});
   const callback=express(), appSecret=randomUUID(), verifyToken=randomUUID();
   callback.use('/webhook',whatsappWebhook({verifyToken,appSecret,phoneNumberId:'123456'},pool));
   await request(callback).get('/webhook').query({'hub.mode':'subscribe','hub.verify_token':verifyToken,'hub.challenge':'9876'}).expect(200,'9876');
@@ -132,6 +151,12 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   assert((await notices(created.id, 'SOLICITADA')).every(row => row.status === 'IGNORADA'));
   ok('TRAVEL-NOTICES email/app recipients, manager preference, no early gate notification, tenant isolation and inbox without Web Push');
   let ride=await rides.accept(driver,results[0]!.id,{veiculoId:vehicle},{});
+  await pool.query(`INSERT INTO admtaxi.corrida_localizacoes(empresa_id,corrida_id,prestador_id,latitude,longitude,precisao_metros)
+    SELECT empresa_id,id,prestador_id,-18.9,-48.2,10 FROM admtaxi.corridas WHERE empresa_id=$1 AND id=$2`,[manager.empresaId,ride.id]);
+  assert((await tracking.get(publicToken)).localizacao);
+  await pool.query(`UPDATE admtaxi.corrida_localizacoes SET registrado_em=CURRENT_TIMESTAMP-INTERVAL '3 minutes'
+    WHERE empresa_id=$1 AND corrida_id=$2`,[manager.empresaId,ride.id]);
+  assert.equal((await tracking.get(publicToken)).localizacao,null);
   let summary=(await service.list(gate)).find(row=>row.id===created.id)!.corridaResumo!;
   assert.equal(summary.status,'ACEITA');assert(summary.motoristaNome);assert.equal(summary.paradasConcluidas,0);
   assert.deepEqual(Object.keys(summary).sort(),['motoristaNome','paradasConcluidas','paradasTotal','passageirosAusentes','status'].sort());
@@ -150,6 +175,7 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
     assert.equal(summary.paradasConcluidas,ride.itinerario!.paradas.filter(stop=>stop.estado==='CONCLUIDA').length);
   }
   await rides.finish(driver,ride.id,{valorFinal:'20.00'},{}); await rides.finish(driver,ride.id,{valorFinal:'20.00'},{});
+  await assert.rejects(tracking.get(publicToken),{statusCode:404});
   summary=(await service.get(gate,created.id)).corridaResumo!;
   assert.equal(summary.status,'FINALIZADA');assert.equal(summary.paradasConcluidas,summary.paradasTotal);
   for(const auth of [supervisor,manager,gate]) {
@@ -192,6 +218,7 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   await request(app).post(`/requisicoes/${auto.id}/solicitar`).set('Authorization',bearer(manager)).send({participantes:participants}).expect(403);
   await request(app).get('/requisicoes').set('Authorization',bearer({...manager,perfil:'PRESTADOR'})).expect(403);
   const gateList=await request(app).get('/requisicoes').set('Authorization',bearer(gate)).expect(200);
+  await request(app).post(`/requisicoes/${created.id}/acessos/${employeeIds[0]}/whatsapp`).set('Authorization',bearer(gate)).send({}).expect(410);
   assert.equal(gateList.body.data.find((row:{id:string})=>row.id===created.id).corridaResumo.status,'FINALIZADA');
   await request(app).get(`/corridas/${ride.id}`).set('Authorization',bearer(gate)).expect(403);
   await request(app).post('/requisicoes').set('Authorization',bearer(supervisor)).send({...input,chave:randomUUID(),empresaId:otherCompany}).expect(422);
@@ -299,6 +326,22 @@ export async function testRequisitions(pool: Pool,manager: AuthContext,gate: Aut
   await pool.query('UPDATE admtaxi.empresas SET exige_aprovacao_gestor=TRUE WHERE id=$1',[manager.empresaId]);
   assert.equal((await service.create(supervisor,{...input,chave:randomUUID()},{})).status,'PENDENTE');
   ok('APPROVAL-POLICY new supervisor travel/parcel requests skip manager when disabled; gate remains mandatory and old requests stay pending');
+
+  const accountUsers=new UsuarioService(pool,audit);
+  const accountUser=await accountUsers.create(manager,{nome:'Novo WhatsApp teste',email:'novo-whatsapp@example.test',
+    telefone:'34997650003',perfil:'PORTARIA',autorizaWhatsapp:true},{});
+  const noConsent=await accountUsers.create(manager,{nome:'Sem WhatsApp teste',email:'sem-whatsapp@example.test',
+    telefone:'34997650004',perfil:'PORTARIA'},{});
+  assert.equal((await pool.query('SELECT id FROM admtaxi.whatsapp_cadastros WHERE usuario_id=$1',[noConsent.id])).rowCount,0);
+  const beforeWelcome=sent.length;
+  await Promise.all([whatsapp.kick(),whatsapp.kick()]);
+  assert.equal(sent.length,beforeWelcome+1);
+  assert.equal(sent.at(-1)!.to,'5534997650003');
+  assert.equal(sent.at(-1)!.template.components[0]!.parameters.length,1);
+  assert.equal((await pool.query('SELECT status FROM admtaxi.whatsapp_cadastros WHERE usuario_id=$1',[accountUser.id])).rows[0].status,'ACEITO');
+  await whatsapp.kick();
+  assert.equal(sent.length,beforeWelcome+1);
+  ok('WHATSAPP-ACCOUNT explicit consent, no send without consent, one name parameter and deduplicated automatic onboarding');
 
   assert.equal(await emails.process(),0);
   const failingWorker=new TravelEmails(pool,logger,{send:async()=>{throw Error('SMTP unavailable');}});

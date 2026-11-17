@@ -5,6 +5,7 @@ import type { QueryResultRow } from 'pg';
 import { queryOne, type Database, type QueryExecutor, withTransaction } from '../../db/pool';
 import { conflict, invalidReference, notFound } from '../../shared/errors/app-error';
 import { INITIAL_ACCOUNT_PASSWORD } from '../../shared/validation/password';
+import { enqueueAccountWhatsApp } from '../requisicoes/whatsapp-account';
 import { paginate, type PaginatedResult } from '../../shared/pagination/pagination';
 import type { AuthContext } from '../auth/auth.types';
 import type { AuditMetadata } from '../auditoria/audit.types';
@@ -27,12 +28,14 @@ export type VeiculoVinculoRecord = {
 };
 
 export class PrestadorUnificadoService {
-  constructor(private readonly database: Database, private readonly audit: AuditRepository) {}
+  constructor(private readonly database: Database, private readonly audit: AuditRepository,
+    private readonly afterCreate?: () => Promise<void>) {}
 
   async create(auth: AuthContext, input: PrestadorUnificadoCreateInput, metadata: AuditMetadata) {
     const passwordHash = await argon2.hash(INITIAL_ACCOUNT_PASSWORD);
-    return withTransaction(this.database, async (client) => {
+    const result = await withTransaction(this.database, async (client) => {
       const user = await this.createUser(client, auth, input, passwordHash);
+      await enqueueAccountWhatsApp(client,auth,user.id,input.autorizaWhatsapp);
       const providerData = this.providerData(input);
       const effectiveActive = input.acesso.ativo && input.prestador.ativo;
       const providerResult = await client.query<EntityRow>(
@@ -53,6 +56,8 @@ export class PrestadorUnificadoService {
       });
       return this.getFrom(client, auth.empresaId, providerId);
     });
+    if (input.autorizaWhatsapp) await this.afterCreate?.();
+    return result;
   }
 
   async get(auth: AuthContext, id: string) {
