@@ -21,13 +21,24 @@ Nao devem acessar diretamente os servidores comunitarios de imagens do OSM.
 ## Uso e falhas
 
 O uso das imagens consome a cota da chave Geoapify existente. Monitorar a cota
-no provedor. Nao ha cache persistente: a resposta do provedor testada exige
-revalidacao/nao armazenamento; downloads simultaneos iguais sao compartilhados.
-Nao existe fallback para servidores OSM bloqueados.
+no provedor. Imagens com permissao explicita `public` e validade positiva em
+`Cache-Control` sao reutilizadas por ate 10 minutos, descontando o header `Age`.
+O cache LRU em memoria e limitado a 256 imagens e 16 MiB por instancia; o navegador
+recebe a validade restante e ETag para revalidacao. Respostas `private`, `no-store`,
+`no-cache`, expiradas ou sem permissao explicita nao sao armazenadas.
+Downloads simultaneos iguais sao compartilhados. Nao existe fallback para
+servidores OSM bloqueados e o cache nunca armazena localizacoes de pessoas.
 
-O mapa mantem a atribuicao OpenStreetMap e Geoapify. Falhas de rede, limite ou
-configuracao mostram um aviso com nova tentativa, preservando marcadores e
-trajetos. O `no-referrer` do app e preservado para os links privados.
+O mapa mantem a atribuicao OpenStreetMap e Geoapify. Uma imagem que falhar recebe
+uma unica nova tentativa automatica; a tentativa manual afeta apenas imagens
+com erro, sem refazer as que ja carregaram. A atualizacao de indicadores nao
+destroi o mapa do dashboard. Falhas preservam marcadores e trajetos. O
+`no-referrer` do app e preservado para os links privados.
+
+O header `X-Map-Cache` indica `HIT`, `MISS` ou `SHARED` para diagnostico. Erros do
+provedor geram logs com motivo e status HTTP, sem gravar a chave ou URL secreta.
+Publicar o backend atualizado para ativar o cache em producao; publicar apenas
+o frontend aplica as melhorias visuais e de novas tentativas, mas nao o cache da API.
 
 ## Validacao local
 

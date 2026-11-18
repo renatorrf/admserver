@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { createMapTileRouter } from '../src/modules/enderecos/map-tiles';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
-const tileResponse = () => new Response(png, { headers: { 'Content-Type': 'image/png' } });
+const tileResponse = (cacheControl?: string, age?: string) => new Response(png, { headers: {
+  'Content-Type': 'image/png', ...(cacheControl ? { 'Cache-Control': cacheControl } : {}), ...(age ? { Age: age } : {}),
+} });
 
 function appWith(fetcher: typeof fetch, key: string | undefined = 'test-secret') {
   return express().use(helmet()).use('/api/v1/public/mapa', createMapTileRouter(key, fetcher));
@@ -87,5 +89,59 @@ describe('Mapa Geoapify', () => {
     ]);
     expect(started).toHaveLength(2);
     expect(started[1]! - started[0]!).toBeGreaterThanOrEqual(90);
+  });
+
+  it('reutiliza imagem publica e permite cache no navegador sem expor credenciais', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(tileResponse('public, max-age=86400'));
+    const app = appWith(fetcher);
+    const first = await request(app).get('/api/v1/public/mapa/0/0/0.png');
+    const second = await request(app).get('/api/v1/public/mapa/0/0/0.png');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(first.headers['x-map-cache']).toBe('MISS');
+    expect(second.headers['x-map-cache']).toBe('HIT');
+    expect(second.body).toEqual(png);
+    expect(Number(second.headers['cache-control'].split('=')[1])).toBeGreaterThan(590);
+    expect(Number(second.headers['cache-control'].split('=')[1])).toBeLessThanOrEqual(600);
+    expect(first.headers.etag).toBe(second.headers.etag);
+    const conditional = await request(app).get('/api/v1/public/mapa/0/0/0.png').set('If-None-Match', first.headers.etag as string);
+    expect(conditional.status).toBe(304);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['private, max-age=86400', 'public, no-cache, max-age=600', 'public, no-store, max-age=600', 'public, max-age=600, s-maxage=0', 'public, max-age=invalid'])('respeita restricao do provedor: %s', async policy => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => tileResponse(policy));
+    const app = appWith(fetcher);
+    await request(app).get('/api/v1/public/mapa/0/0/0.png');
+    const second = await request(app).get('/api/v1/public/mapa/0/0/0.png');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(second.headers['cache-control']).toBe('no-store');
+  });
+
+  it('desconta Age e renova imagens expiradas', async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => tileResponse('public, max-age=120', '110'));
+      const app = appWith(fetcher);
+      const first = await request(app).get('/api/v1/public/mapa/0/0/0.png');
+      expect(first.headers['cache-control']).toBe('public, max-age=10');
+      now += 11_000;
+      const second = await request(app).get('/api/v1/public/mapa/0/0/0.png');
+      expect(second.headers['x-map-cache']).toBe('MISS');
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('limita o cache a 256 imagens usando descarte LRU', async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => { now += 100; return now; });
+    try {
+      const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => tileResponse('public, max-age=86400'));
+      const app = appWith(fetcher);
+      for (let x = 0; x < 257; x++) await request(app).get(`/api/v1/public/mapa/9/${x}/0.png`);
+      expect((await request(app).get('/api/v1/public/mapa/9/256/0.png')).headers['x-map-cache']).toBe('HIT');
+      expect((await request(app).get('/api/v1/public/mapa/9/0/0.png')).headers['x-map-cache']).toBe('MISS');
+      expect(fetcher).toHaveBeenCalledTimes(258);
+    } finally { clock.mockRestore(); }
   });
 });
